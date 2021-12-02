@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "experiment"
+version = "0.0.1"
+description = ""
+authors = ["Jacopo Tissino <jacopo@tissino.it>"]
+
+[tool.poetry.dependencies]
+python = ">=3.7,<3.11"
+numpy = "^1.21.4"
+tqdm = "^4.62.3"
+optuna = "^2.10.0"
+scikit-learn = "^1.0.1"
+PyCBC = "^1.18.3"
+
+[tool.poetry.dev-dependencies]
+pytest = "^6.1.2"
+tox = "^3.20.1"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
