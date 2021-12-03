@@ -2,7 +2,13 @@
 name = "mlgw_bns"
 version = "0.0.1"
 description = "Accelerating gravitational wave template generation with machine learning."
+license = "GNU GPL3"
 authors = ["Jacopo Tissino <jacopo@tissino.it>"]
+keywords = ["python", "gravitational-waves", "scientific"]
+readme = "README.md"
+homepage = "https://github.com/jacopok/mlgw_bns"
+repository = "https://github.com/jacopok/mlgw_bns"
+
 
 [tool.poetry.dependencies]
 python = ">=3.7,<3.11"
