@@ -39,3 +39,5 @@ In several of these steps data-driven optimizations are performed:
     instead, a greedy downsampling algorithm determines them
 - the PCA is trained on a separate downsampled dataset, which is then thrown out
 - the hyperparameters for the neural network are optimized according to both
+    the time taken for the training and the estimated reconstruction error
+
