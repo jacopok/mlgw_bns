@@ -25,6 +25,7 @@ black = "^21.11b1"
 tox-poetry-installer = {extras = ["poetry"], version = "^0.8.2"}
 tox-gh-actions = "^2.8.1"
 pre-commit = "^2.16.0"
+mypy = "^0.910"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
