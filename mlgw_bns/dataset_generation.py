@@ -1,5 +1,3 @@
-#%%
-
 from abc import ABC, abstractmethod
 
 
@@ -8,10 +6,6 @@ class Dataset:
 
 
 class SlowWaveformGenerator(ABC):
-
-    # abstract:
-    # PN waveform
-    # EOB waveform
     @abstractmethod
     def post_newtonian_waveform(self):
         pass
@@ -27,6 +21,3 @@ class TEOBResumSGenerator(SlowWaveformGenerator):
 
     def effective_one_body_waveform(self):
         pass
-
-
-# %%
