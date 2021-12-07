@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 import numpy as np
 import h5py
 
+# this is a comment line going on for a very long time, such that the linter (black) should complain and break it up over several lines
+
 
 class Dataset:
     # saving to file to be managed with https://docs.h5py.org/en/stable/quick.html
