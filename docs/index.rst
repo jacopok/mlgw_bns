@@ -18,6 +18,7 @@ Welcome to ``mlgw_bns``'s documentation!
    contact
    
    model
+   dataset_generation
    
 Indices and tables
 ==================
