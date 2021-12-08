@@ -29,6 +29,8 @@ pre-commit = "^2.16.0"
 mypy = "^0.910"
 virtualenv = "^20.10.0"
 ipython = "^7.30.1"
+Sphinx = "^4.3.1"
+sphinx-rtd-theme = "^1.0.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
