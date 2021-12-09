@@ -3,6 +3,15 @@ from .dataset_generation import SlowWaveformGenerator, TEOBResumSGenerator
 
 
 class Model(ABC):
+    """Generic ``mlgw_bns`` model.
+
+    Functionality:
+
+    * neural network training
+    * fast surrogate waveform generation
+
+    """
+
     @property
     @abstractmethod
     def waveform_generator(self) -> SlowWaveformGenerator:
