@@ -18,7 +18,7 @@ optuna = "^2.10.0"
 scikit-learn = "^1.0.1"
 PyCBC = "^1.18.3"
 h5py = "^3.6.0"
-TEOBResumSPy = {path='../teobresums/Python', develop=true}
+TEOBResumSPy = {path='teobresums/Python', develop=true}
 numba = "^0.54.1"
 
 [tool.poetry.dev-dependencies]
