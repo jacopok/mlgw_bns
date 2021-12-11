@@ -15,7 +15,7 @@ jobs:
 
     steps:
     - name: Clone and install TEOBResumS repo
-    - run: |
+      run: |
         git clone https://bitbucket.org/eob_ihes/teobresums/
         cd teobresums/Python
         mv TEOBResumSWrap_setup.py setup.py
