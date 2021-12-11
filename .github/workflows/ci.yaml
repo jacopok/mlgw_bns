@@ -16,11 +16,13 @@ jobs:
     steps:
     - name: Clone and install TEOBResumS repo
       run: |
+        cd ..
         git clone https://bitbucket.org/eob_ihes/teobresums/
         cd teobresums/Python
         mv TEOBResumSWrap_setup.py setup.py
         echo "[build-system]\nrequires = ["numpy>=1.17", "setuptools"]" >> pyproject.toml
         cd ../..
+        ls -la
     - uses: actions/checkout@v1
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v2
