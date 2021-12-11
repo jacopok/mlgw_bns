@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from .dataset_generation import SlowWaveformGenerator, TEOBResumSGenerator
 
+from numba import njit  # type: ignore
+
 
 class Model(ABC):
     """Generic ``mlgw_bns`` model.
