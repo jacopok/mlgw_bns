@@ -21,7 +21,7 @@ jobs:
         cd teobresums/Python
         mv TEOBResumSWrap_setup.py setup.py
         echo "[build-system]" >> pyproject.toml
-        echo "requires = [\"numpy>=1.17\", \"setuptools\"]"" >> pyproject.toml
+        echo "requires = [\"numpy>=1.17\", \"setuptools\"]" >> pyproject.toml
         cd ../..
         ls -la
     - uses: actions/checkout@v1
