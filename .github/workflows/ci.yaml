@@ -45,7 +45,7 @@ jobs:
         path: pytest.xml
 
   publish-test-results:
-    name: "Publish Unit Tests Results"
+    name: "Publish Tests Results"
     needs: build
     runs-on: ubuntu-latest
     if: always()
