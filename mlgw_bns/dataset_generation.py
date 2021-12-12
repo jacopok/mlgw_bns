@@ -72,7 +72,8 @@ class TEOBResumSGenerator(SlowWaveformGenerator):
         True
         """
 
-        return EOBRun_module.EOBRunPy(
+        return tuple(
+            # return EOBRun_module.EOBRunPy(
             {
                 "M": 2.8,
                 "distance": 1.0,
