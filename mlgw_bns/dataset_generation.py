@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 import h5py
 
-import TEOBResumsPy
+import EOBRun_module  # type: ignore
 
 
 class Dataset:
@@ -63,8 +63,8 @@ class TEOBResumSGenerator(SlowWaveformGenerator):
         pass
 
     def effective_one_body_waveform(self):
-        """ Generate an EOB waveform with TEOB.
-        
+        """Generate an EOB waveform with TEOB.
+
         Examples:
         >>> tg = TEOBResumSGenerator()
         >>> res = tg.effective_one_body_waveform()
@@ -72,26 +72,18 @@ class TEOBResumSGenerator(SlowWaveformGenerator):
         True
         """
 
-        return TEOBResumsPy.EOBRunPy(
+        return EOBRun_module.EOBRunPy(
             {
                 "M": 2.8,
                 "distance": 1.0,
-                "initial_frequency": 20,
-                "use_geometric_units": 0,
+                "initial_frequency": 40,
+                "use_geometric_units": 1,
                 "interp_uniform_grid": 0,
                 "domain": 1,
                 "srate_interp": 4096.0,
                 "df": 1 / 2 ** 8,
                 "interp_FD_waveform": 1,
                 "inclination": 0.0,
-                "output_hpc": 0,
-                "output_dynamics": 0,
                 "time_shift_FD": 1,
             }
         )
-
-
-if __name__ == "__main__":
-    import doctest
-
-    doctest.testmod()
