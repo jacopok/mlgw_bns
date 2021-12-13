@@ -16,9 +16,9 @@ class Dataset:
     * amplitude and phase residuals for all modes
 
     The amplitude residuals are defined as
-    :math:`\log(A _{\\text{EOB}} / A_{\\text{PN}})`,
+    :math:`\log(A _{\text{EOB}} / A_{\text{PN}})`,
     while the phase residuals are defined as
-    :math:`\phi _{\\text{EOB}} - \phi_{\\text{PN}}`.
+    :math:`\phi _{\text{EOB}} - \phi_{\text{PN}}`.
 
     """
 
