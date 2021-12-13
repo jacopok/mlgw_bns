@@ -24,3 +24,10 @@ def test_teobresums_model_creation():
     tm = TEOBResumSModel()
 
     assert isinstance(tm.waveform_generator, TEOBResumSGenerator)
+
+
+def test_teob_model_generator(benchmark):
+
+    tm = TEOBResumSModel()
+
+    benchmark(tm.waveform_generator.post_newtonian_waveform)
