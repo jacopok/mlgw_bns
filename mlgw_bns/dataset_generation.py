@@ -7,13 +7,18 @@ import EOBRun_module  # type: ignore
 
 
 class Dataset:
-    """A dataset of data generated with some model.
+    r"""A dataset of data generated with some model.
 
     Includes:
 
     * frequencies at which the data are sampled
     * frequency indices
     * amplitude and phase residuals for all modes
+
+    The amplitude residuals are defined as
+    :math:`\log(A _{\\text{EOB}} / A_{\\text{PN}})`,
+    while the phase residuals are defined as
+    :math:`\phi _{\\text{EOB}} - \phi_{\\text{PN}}`.
 
     """
 
@@ -22,8 +27,6 @@ class Dataset:
     def __init__(self, filename: str):
         r"""
         Initialize dataset.
-
-        It runs in :math:`\mathcal{O}(1)` time.
 
         Parameters
         ----------
@@ -63,28 +66,11 @@ class TEOBResumSGenerator(SlowWaveformGenerator):
         pass
 
     def effective_one_body_waveform(self):
-        """Generate an EOB waveform with TEOB.
+        r"""Generate an EOB waveform with TEOB.
 
         Examples:
         >>> tg = TEOBResumSGenerator()
         >>> res = tg.effective_one_body_waveform()
-        >>> print(isinstance(res, tuple))
-        True
         """
 
-        return tuple(
-            # return EOBRun_module.EOBRunPy(
-            {
-                "M": 2.8,
-                "distance": 1.0,
-                "initial_frequency": 40,
-                "use_geometric_units": 1,
-                "interp_uniform_grid": 0,
-                "domain": 1,
-                "srate_interp": 4096.0,
-                "df": 1 / 2 ** 8,
-                "interp_FD_waveform": 1,
-                "inclination": 0.0,
-                "time_shift_FD": 1,
-            }
-        )
+        pass
