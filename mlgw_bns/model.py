@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from .dataset_generation import SlowWaveformGenerator, TEOBResumSGenerator
+from .dataset_generation import WaveformGenerator, TEOBResumSGenerator
 
 from numba import njit  # type: ignore
 
@@ -16,7 +16,7 @@ class Model(ABC):
 
     @property
     @abstractmethod
-    def waveform_generator(self) -> SlowWaveformGenerator:
+    def waveform_generator(self) -> WaveformGenerator:
         pass
 
 

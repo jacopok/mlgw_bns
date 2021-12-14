@@ -2,7 +2,7 @@ from abc import ABC
 from typing import Type
 
 from .model import Model, TEOBResumSModel
-from .dataset_generation import SlowWaveformGenerator, TEOBResumSGenerator
+from .dataset_generation import WaveformGenerator, TEOBResumSGenerator
 
 
 class ValidatingModel(Model):
@@ -15,7 +15,7 @@ class ValidatingModel(Model):
     """
 
     def __init__(
-        self, waveform_generator: Type[SlowWaveformGenerator] = TEOBResumSGenerator
+        self, waveform_generator: Type[WaveformGenerator] = TEOBResumSGenerator
     ):
         self._waveform_generator = TEOBResumSGenerator()
 
