@@ -6,6 +6,7 @@ from mlgw_bns.dataset_generation import (
     WaveformGenerator,
     Dataset,
     WaveformParameters,
+    UniformParameterGenerator,
 )
 
 
@@ -16,6 +17,8 @@ def test_teobresums_generator_creation():
 
 
 def test_waveform_prefactors(dataset):
+
+    # TODO
 
     prefactor = 3.668693487138444e-19
     # check with the astropy code:
@@ -44,3 +47,10 @@ def test_waveform_parameters_teobresums_output(parameters):
         "output_dynamics": 0,
         "time_shift_FD": 1,
     }
+
+
+def test_random_parameter_generation(dataset):
+
+    u = UniformParameterGenerator(dataset)
+
+    next(u)
