@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from .dataset_generation import WaveformGenerator, TEOBResumSGenerator
 
 from numba import njit  # type: ignore
+
+from .dataset_generation import TEOBResumSGenerator, WaveformGenerator
 
 
 class Model(ABC):

@@ -1,9 +1,9 @@
 import pytest
 
 from mlgw_bns import TEOBResumSModel
+from mlgw_bns.dataset_generation import TEOBResumSGenerator
 from mlgw_bns.model import Model
 from mlgw_bns.model_validation import ValidatingModel
-from mlgw_bns.dataset_generation import TEOBResumSGenerator
 
 
 def test_model_creation_fails():

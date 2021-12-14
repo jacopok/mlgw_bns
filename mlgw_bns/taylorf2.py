@@ -407,10 +407,10 @@ def Phif3hPN(
     )
     phis_3PN = np.pi * (3760.0 * SL + 1490.0 * dSigmaL) / 3.0 + pn_ss3
     phis_35PN = (
-        (-8980424995.0 / 762048.0 + 6586595.0 * eta / 756.0 - 305.0 * eta2 / 36.0) * SL
-        - (170978035.0 / 48384.0 - 2876425.0 * eta / 672.0 - 4735.0 * eta2 / 144.0)
-        * dSigmaL
-    )
+        -8980424995.0 / 762048.0 + 6586595.0 * eta / 756.0 - 305.0 * eta2 / 36.0
+    ) * SL - (
+        170978035.0 / 48384.0 - 2876425.0 * eta / 672.0 - 4735.0 * eta2 / 144.0
+    ) * dSigmaL
 
     # Point mass
     LO = 3.0 / 128.0 / eta / v5
@@ -845,25 +845,17 @@ def TaylorF2(
     # Note Lam = 0 = dLam in the following calls
     if phaseorder == 7:
         Phi = Phif3hPN(f, M, eta, s1x, s1y, s1z, s2x, s2y, s2z)
-    elif phaseorder == 11:
-        Phi = Phif5hPN(f, M, eta, s1x, s1y, s1z, s2x, s2y, s2z)
     else:
-        # default: 5.5PN
         Phi = Phif5hPN(f, M, eta, s1x, s1y, s1z, s2x, s2y, s2z)
-
     # Tidal and QM contributions
     PhiT = 0.0
     if Lam1 != 0.0 or Lam2 != 0.0:
         # Tidal terms
-        if tidalorder == 12:
-            PhiT = PhifT6PN(f, M, eta, Lam1, Lam2)
-        elif tidalorder == 15:
-            if usenewtides == 1:
-                PhiT = PhifT7hPNComplete(f, M, eta, Lam1, Lam2)
-            else:
-                PhiT = PhifT7hPN(f, M, eta, Lam1, Lam2)
+        if tidalorder != 12 and tidalorder == 15 and usenewtides == 1:
+            PhiT = PhifT7hPNComplete(f, M, eta, Lam1, Lam2)
+        elif tidalorder != 12 and tidalorder == 15:
+            PhiT = PhifT7hPN(f, M, eta, Lam1, Lam2)
         else:
-            # default: 6PN #TODO: set 7.5PN when checked
             PhiT = PhifT6PN(f, M, eta, Lam1, Lam2)
         # Quadrupole-monopole term
         # [https://arxiv.org/abs/gr-qc/9709032]
