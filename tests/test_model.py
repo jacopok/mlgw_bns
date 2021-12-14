@@ -26,8 +26,22 @@ def test_teobresums_model_creation():
     assert isinstance(tm.waveform_generator, TEOBResumSGenerator)
 
 
-def test_teob_model_generator(benchmark):
+def test_teob_model_generator(benchmark, parameters):
 
     tm = TEOBResumSModel()
 
-    benchmark(tm.waveform_generator.post_newtonian_waveform)
+    benchmark(tm.waveform_generator.effective_one_body_waveform, params=parameters)
+
+
+def test_tf2_amp_model_generator(benchmark, parameters, frequencies):
+
+    tm = TEOBResumSModel()
+
+    benchmark(tm.waveform_generator.post_newtonian_amplitude, parameters, frequencies)
+
+
+def test_tf2_phi_model_generator(benchmark, parameters, frequencies):
+
+    tm = TEOBResumSModel()
+
+    benchmark(tm.waveform_generator.post_newtonian_phase, parameters, frequencies)
