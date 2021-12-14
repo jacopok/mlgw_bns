@@ -1,5 +1,5 @@
-import pytest
 import numpy as np
+import pytest
 
 from mlgw_bns.dataset_generation import Dataset, WaveformParameters
 

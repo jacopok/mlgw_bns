@@ -1,12 +1,12 @@
-import pytest
 import numpy as np
+import pytest
 
 from mlgw_bns.dataset_generation import (
-    TEOBResumSGenerator,
-    WaveformGenerator,
     Dataset,
-    WaveformParameters,
+    TEOBResumSGenerator,
     UniformParameterGenerator,
+    WaveformGenerator,
+    WaveformParameters,
 )
 
 

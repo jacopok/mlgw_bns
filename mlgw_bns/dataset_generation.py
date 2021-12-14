@@ -1,22 +1,20 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Dict, Union, Optional
 from collections.abc import Iterator
-
-import numpy as np
-import h5py
-
-from numpy.random import SeedSequence, default_rng
+from dataclasses import dataclass
+from typing import Dict, Optional, Union
 
 import EOBRun_module  # type: ignore
+import h5py
+import numpy as np
+from numpy.random import SeedSequence, default_rng
 
 from .taylorf2 import (
-    compute_delta_lambda,
-    compute_lambda_tilde,
     Af3hPN,
     Phif5hPN,
     PhifQM3hPN,
     PhifT7hPNComplete,
+    compute_delta_lambda,
+    compute_lambda_tilde,
 )
 
 SUN_MASS_SECONDS: float = 4.92549095e-06  # M_sun * G / c**3
@@ -328,20 +326,23 @@ class TEOBResumSGenerator(WaveformGenerator):
     ) -> np.ndarray:
         par_dict = params.taylor_f2(frequencies)
 
-        return Af3hPN(
-            par_dict["f"],
-            par_dict["mtot"],
-            params.eta,
-            par_dict["s1x"],
-            par_dict["s1y"],
-            par_dict["s1z"],
-            par_dict["s2x"],
-            par_dict["s2y"],
-            par_dict["s2z"],
-            Lam=params.lambdatilde,
-            dLam=params.dlambda,
-            Deff=par_dict["Deff"],
-        ) * params.dataset.taylor_f2_prefactor(params.eta)
+        return (
+            Af3hPN(
+                par_dict["f"],
+                par_dict["mtot"],
+                params.eta,
+                par_dict["s1x"],
+                par_dict["s1y"],
+                par_dict["s1z"],
+                par_dict["s2x"],
+                par_dict["s2y"],
+                par_dict["s2z"],
+                Lam=params.lambdatilde,
+                dLam=params.dlambda,
+                Deff=par_dict["Deff"],
+            )
+            * params.dataset.taylor_f2_prefactor(params.eta)
+        )
 
     def post_newtonian_phase(
         self, params: WaveformParameters, frequencies: np.ndarray

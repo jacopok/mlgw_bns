@@ -1,8 +1,8 @@
 from abc import ABC
 from typing import Type
 
+from .dataset_generation import TEOBResumSGenerator, WaveformGenerator
 from .model import Model, TEOBResumSModel
-from .dataset_generation import WaveformGenerator, TEOBResumSGenerator
 
 
 class ValidatingModel(Model):
