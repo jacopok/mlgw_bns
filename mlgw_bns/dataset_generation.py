@@ -1,9 +1,12 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Union
+from typing import Dict, Union, Optional
+from collections.abc import Iterator
 
 import numpy as np
 import h5py
+
+from numpy.random import SeedSequence, default_rng
 
 import EOBRun_module  # type: ignore
 
@@ -44,12 +47,19 @@ class Dataset:
     total_mass: float = 2.8
     mass_sum_seconds: float = total_mass * SUN_MASS_SECONDS
 
+    q_range = (1.0, 2.0)
+    lambda1_range = (5.0, 5000.0)
+    lambda2_range = (5.0, 5000.0)
+    chi1_range = (-0.5, 0.5)
+    chi2_range = (-0.5, 0.5)
+
     def __init__(
         self,
         filename: str,
         initial_frequency_hz: float,
         delta_f_hz: float,
         srate_hz: float,
+        seed: int = 42,
     ):
         r"""
         Initialize dataset.
@@ -69,6 +79,10 @@ class Dataset:
                 The maximum frequency of the generated time-domain waveforms will be
                 half of this value (see
                 `Nyquist frequency <https://en.wikipedia.org/wiki/Nyquist_frequency>`_).
+        seed : int
+                Seed for the random number generator used when generating
+                waveforms for the training.
+                Defaults to 42.
 
         Examples
         --------
@@ -81,6 +95,8 @@ class Dataset:
         self.initial_frequency_hz = initial_frequency_hz
         self.delta_f_hz = delta_f_hz
         self.srate_hz = srate_hz
+
+        self.seed_sequence = SeedSequence(seed)
 
     def save(self) -> None:
         pass
@@ -127,7 +143,7 @@ class WaveformParameters:
             Tidal polarizability of the larger star.
             In papers it is typically denoted as :math:`\Lambda_1`;
             for a definition see for example section D of
-            `This paper <http://arxiv.org/abs/1805.11579>`_.
+            `this paper <http://arxiv.org/abs/1805.11579>`_.
     l2 : float
             Tidal polarizability of the smaller star.
     chi1 : float
@@ -168,18 +184,26 @@ class WaveformParameters:
 
     @property
     def m1(self):
+        """Mass of the heavier star in the system, in solar masses."""
         return self.dataset.total_mass / (1 + 1 / self.q)
 
     @property
     def m2(self):
+        """Mass of the lighter star in the system, in solar masses."""
         return self.dataset.total_mass / (1 + self.q)
 
     @property
     def lambdatilde(self):
+        r"""Symmetrized tidal deformability parameter :math:`\widetilde\Lambda`,
+        which gives the largest contribution to the waveform phase.
+        For the precise definition see equation 5 of `this paper <http://arxiv.org/abs/1805.11579>`_."""
         return compute_lambda_tilde(self.m1, self.m2, self.l1, self.l2)
 
     @property
     def dlambda(self):
+        r"""Antisymmetrized tidal deformability parameter :math:`\delta \widetilde\Lambda`,
+        which gives the next-to-largest contribution to the waveform phase.
+        For the precise definition see equation 27 of `this paper <http://arxiv.org/abs/2102.00017>`_."""
         return compute_delta_lambda(self.m1, self.m2, self.l1, self.l2)
 
     @property
@@ -249,6 +273,35 @@ class WaveformParameters:
             "timeShift": 0.0,
             "iota": 0.0,
         }
+
+
+class ParameterGenerator(ABC, Iterator):
+    def __init__(self, dataset: Dataset, seed: Optional[int] = None):
+
+        self.dataset = dataset
+
+        if seed is None:
+            self.rng = default_rng(self.dataset.seed_sequence.generate_state(1)[0])
+        else:
+            self.rng = default_rng(seed)
+
+    def __iter__(self):
+        return self
+
+    @abstractmethod
+    def __next__(self) -> WaveformParameters:
+        pass
+
+
+class UniformParameterGenerator(ParameterGenerator):
+    def __next__(self) -> WaveformParameters:
+        q = self.rng.uniform(*self.dataset.q_range)
+        lambda_1 = self.rng.uniform(*self.dataset.lambda1_range)
+        lambda_2 = self.rng.uniform(*self.dataset.lambda2_range)
+        chi_1 = self.rng.uniform(*self.dataset.chi1_range)
+        chi_2 = self.rng.uniform(*self.dataset.chi2_range)
+
+        return WaveformParameters(q, lambda_1, lambda_2, chi_1, chi_2, self.dataset)
 
 
 class WaveformGenerator(ABC):
@@ -342,14 +395,23 @@ class TEOBResumSGenerator(WaveformGenerator):
         Examples:
         >>> tg = TEOBResumSGenerator()
         >>> p = WaveformParameters(1, 300, 300, .3, -.3, Dataset('test', 20., 1./256., 4096.))
-        >>> res = tg.effective_one_body_waveform(p)
+        >>> f, waveform = tg.effective_one_body_waveform(p)
+        >>> print(len(waveform))
+        519169
+        >>> print(waveform.dtype)
+        complex128
         """
 
         par_dict = params.teobresums
 
         N = 256
 
-        # tweak initial frequency by ~256 samples
+        # tweak initial frequency backward by a few samples
+        # this is needed because of a bug in TEOBResumS
+        # causing the phase evolution not to behave properly
+        # at the beginning of integration
+        # TODO remove this once the TEOB bug is fixed
+
         f0 = par_dict["initial_frequency"]
         df = par_dict["df"]
         new_f0 = f0 - df * N
