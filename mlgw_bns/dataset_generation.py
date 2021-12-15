@@ -1,7 +1,10 @@
+"""Functionality for the generation of a training dataset.
+"""
+
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Tuple, Union
 
 import EOBRun_module  # type: ignore
 import h5py
@@ -9,6 +12,7 @@ import numpy as np
 from numpy.random import SeedSequence, default_rng
 
 from .taylorf2 import (
+    SUN_MASS_SECONDS,
     Af3hPN,
     Phif5hPN,
     PhifQM3hPN,
@@ -17,7 +21,6 @@ from .taylorf2 import (
     compute_lambda_tilde,
 )
 
-SUN_MASS_SECONDS: float = 4.92549095e-06  # M_sun * G / c**3
 TF2_BASE: float = 3.668693487138444e-19
 # ( Msun * G / c**3)**(5/6) * Hz**(-7/6) * c / Mpc / s
 AMP_SI_BASE: float = 4.2425873413901263e24
@@ -37,19 +40,19 @@ class Dataset:
     :math:`\log(A _{\text{EOB}} / A_{\text{PN}})`,
     while the phase residuals are defined as
     :math:`\phi _{\text{EOB}} - \phi_{\text{PN}}`.
-
     """
 
+    # TODO
     # saving to file to be managed with https://docs.h5py.org/en/stable/quick.html
 
+    # total mass of the binary, in solar masses
     total_mass: float = 2.8
-    mass_sum_seconds: float = total_mass * SUN_MASS_SECONDS
 
-    q_range = (1.0, 2.0)
-    lambda1_range = (5.0, 5000.0)
-    lambda2_range = (5.0, 5000.0)
-    chi1_range = (-0.5, 0.5)
-    chi2_range = (-0.5, 0.5)
+    q_range: Tuple[float, float] = (1.0, 2.0)
+    lambda1_range: Tuple[float, float] = (5.0, 5000.0)
+    lambda2_range: Tuple[float, float] = (5.0, 5000.0)
+    chi1_range: Tuple[float, float] = (-0.5, 0.5)
+    chi2_range: Tuple[float, float] = (-0.5, 0.5)
 
     def __init__(
         self,
@@ -96,6 +99,20 @@ class Dataset:
 
         self.seed_sequence = SeedSequence(seed)
 
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"filename={self.filename}, "
+            f"initial_frequency_hz={self.initial_frequency_hz}, "
+            f"delta_f_hz={self.delta_f_hz}, "
+            f"srate_hz={self.srate_hz}"
+            ")"
+        )
+
+    @property
+    def mass_sum_seconds(self) -> float:
+        return self.total_mass * SUN_MASS_SECONDS
+
     def save(self) -> None:
         pass
 
@@ -134,17 +151,17 @@ class WaveformParameters:
     Parameters
     ----------
 
-    q : float
+    mass_ratio : float
             Mass ratio of the system, :math:`q = m_1 / m_2`,
             where :math:`m_1 \geq m_2`, so :math:`q \geq 1`.
-    l1 : float
+    lambda_1 : float
             Tidal polarizability of the larger star.
             In papers it is typically denoted as :math:`\Lambda_1`;
             for a definition see for example section D of
             `this paper <http://arxiv.org/abs/1805.11579>`_.
-    l2 : float
+    lambda_2 : float
             Tidal polarizability of the smaller star.
-    chi1 : float
+    chi_1 : float
             Aligned dimensionless spin component of the larger star.
             The dimensionless spin is defined as
             :math:`\chi_i = S_i / m_i^2` in
@@ -153,16 +170,27 @@ class WaveformParameters:
             of the dimensionful spin vector.
             The :math:`z` axis is defined as the one which is
             parallel to the orbital angular momentum of the binary.
-    chi2 : float
+    chi_2 : float
             Aligned spin component of the smaller star.
     """
 
-    q: float
-    l1: float
-    l2: float
-    chi1: float
-    chi2: float
+    mass_ratio: float
+    lambda_1: float
+    lambda_2: float
+    chi_1: float
+    chi_2: float
     dataset: Dataset
+
+    def __eq__(self, other: object):
+        """Check for equality with another set of parameters,
+        accounting for imprecise floats.
+        """
+        if not isinstance(other, WaveformParameters):
+            return NotImplemented
+        return self.dataset is other.dataset and all(
+            np.isclose(getattr(self, param), getattr(other, param), atol=0.0, rtol=1e-6)
+            for param in ["mass_ratio", "lambda_1", "lambda_2", "chi_1", "chi_1"]
+        )
 
     @property
     def eta(self):
@@ -177,32 +205,34 @@ class WaveformParameters:
         where :math:`q = m_1 / m_2` is the mass ratio.
 
         It is also sometimes denoted as :math:`\nu`.
+        It goes from 0 in the test-mass limit (one mass vanishing)
+        to :math:`1/4` in the equal-mass limit.
         """
-        return self.q / (1.0 + self.q) ** 2
+        return self.mass_ratio / (1.0 + self.mass_ratio) ** 2
 
     @property
-    def m1(self):
+    def m_1(self):
         """Mass of the heavier star in the system, in solar masses."""
-        return self.dataset.total_mass / (1 + 1 / self.q)
+        return self.dataset.total_mass / (1 + 1 / self.mass_ratio)
 
     @property
-    def m2(self):
+    def m_2(self):
         """Mass of the lighter star in the system, in solar masses."""
-        return self.dataset.total_mass / (1 + self.q)
+        return self.dataset.total_mass / (1 + self.mass_ratio)
 
     @property
     def lambdatilde(self):
         r"""Symmetrized tidal deformability parameter :math:`\widetilde\Lambda`,
         which gives the largest contribution to the waveform phase.
-        For the precise definition see equation 5 of `this paper <http://arxiv.org/abs/1805.11579>`_."""
-        return compute_lambda_tilde(self.m1, self.m2, self.l1, self.l2)
+        For the precise definition see equation 5 of `this paper <http://arxiv.org/abs/1805.11579>`__."""
+        return compute_lambda_tilde(self.m_1, self.m_2, self.lambda_1, self.lambda_2)
 
     @property
     def dlambda(self):
         r"""Antisymmetrized tidal deformability parameter :math:`\delta \widetilde\Lambda`,
         which gives the next-to-largest contribution to the waveform phase.
-        For the precise definition see equation 27 of `this paper <http://arxiv.org/abs/2102.00017>`_."""
-        return compute_delta_lambda(self.m1, self.m2, self.l1, self.l2)
+        For the precise definition see equation 27 of `this paper <http://arxiv.org/abs/2102.00017>`__."""
+        return compute_delta_lambda(self.m_1, self.m_2, self.lambda_1, self.lambda_2)
 
     @property
     def teobresums(self) -> Dict[str, Union[float, int]]:
@@ -212,11 +242,11 @@ class WaveformParameters:
         The parameters are all converted to natural units.
         """
         return {
-            "q": self.q,
-            "Lambda1": self.l1,
-            "Lambda2": self.l2,
-            "chi1": self.chi1,
-            "chi2": self.chi2,
+            "q": self.mass_ratio,
+            "Lambda1": self.lambda_1,
+            "Lambda2": self.lambda_2,
+            "chi1": self.chi_1,
+            "chi2": self.chi_2,
             "M": self.dataset.total_mass,
             "distance": 1.0,
             "initial_frequency": self.dataset.initial_frequency_hz
@@ -233,28 +263,30 @@ class WaveformParameters:
             "time_shift_FD": 1,
         }
 
-    def taylor_f2(self, f: np.ndarray) -> Dict[str, Union[float, int, np.ndarray]]:
+    def taylor_f2(
+        self, frequencies: np.ndarray
+    ) -> Dict[str, Union[float, int, np.ndarray]]:
         """Parameter dictionary in a format compatible with
         the custom implemnentation of TaylorF2 implemented within `mlgw_bns`.
 
         Parameters
         ----------
-        f : np.ndarray
+        frequencies : np.ndarray
                 The frequencies where to compute the
                 waveform, to be given in natural units
         """
 
         return {
-            "f": f / self.dataset.mass_sum_seconds,
-            "q": self.q,
+            "f": frequencies / self.dataset.mass_sum_seconds,
+            "q": self.mass_ratio,
             "s1x": 0,
             "s1y": 0,
-            "s1z": self.chi1,
+            "s1z": self.chi_1,
             "s2y": 0,
             "s2x": 0,
-            "s2z": self.chi2,
-            "lambda1": self.l1,
-            "lambda2": self.l2,
+            "s2z": self.chi_2,
+            "lambda1": self.lambda_1,
+            "lambda2": self.lambda_2,
             "f_min": self.dataset.initial_frequency_hz,
             "phi_ref": 0,
             "phaseorder": 11,
@@ -274,6 +306,10 @@ class WaveformParameters:
 
 
 class ParameterGenerator(ABC, Iterator):
+    """Generic generator of parameters for new waveforms
+    to be used for training.
+    """
+
     def __init__(self, dataset: Dataset, seed: Optional[int] = None):
 
         self.dataset = dataset
@@ -292,14 +328,20 @@ class ParameterGenerator(ABC, Iterator):
 
 
 class UniformParameterGenerator(ParameterGenerator):
+    """Generator of parameters according to a uniform distribution
+    over their allowed ranges.s
+    """
+
     def __next__(self) -> WaveformParameters:
-        q = self.rng.uniform(*self.dataset.q_range)
+        mass_ratio = self.rng.uniform(*self.dataset.q_range)
         lambda_1 = self.rng.uniform(*self.dataset.lambda1_range)
         lambda_2 = self.rng.uniform(*self.dataset.lambda2_range)
         chi_1 = self.rng.uniform(*self.dataset.chi1_range)
         chi_2 = self.rng.uniform(*self.dataset.chi2_range)
 
-        return WaveformParameters(q, lambda_1, lambda_2, chi_1, chi_2, self.dataset)
+        return WaveformParameters(
+            mass_ratio, lambda_1, lambda_2, chi_1, chi_2, self.dataset
+        )
 
 
 class WaveformGenerator(ABC):
@@ -393,19 +435,20 @@ class TEOBResumSGenerator(WaveformGenerator):
     def effective_one_body_waveform(self, params: WaveformParameters):
         r"""Generate an EOB waveform with TEOB.
 
-        Examples:
+        Examples
+        --------
         >>> tg = TEOBResumSGenerator()
         >>> p = WaveformParameters(1, 300, 300, .3, -.3, Dataset('test', 20., 1./256., 4096.))
         >>> f, waveform = tg.effective_one_body_waveform(p)
         >>> print(len(waveform))
         519169
-        >>> print(waveform.dtype)
-        complex128
+        >>> print(waveform[0])
+        (4679.915419630735+3758.8458103665052j)
         """
 
         par_dict = params.teobresums
 
-        N = 256
+        n_additional = 256
 
         # tweak initial frequency backward by a few samples
         # this is needed because of a bug in TEOBResumS
@@ -413,17 +456,15 @@ class TEOBResumSGenerator(WaveformGenerator):
         # at the beginning of integration
         # TODO remove this once the TEOB bug is fixed
 
-        f0 = par_dict["initial_frequency"]
-        df = par_dict["df"]
-        new_f0 = f0 - df * N
+        f_0 = par_dict["initial_frequency"]
+        delta_f = par_dict["df"]
+        new_f0 = f_0 - delta_f * n_additional
         par_dict["initial_frequency"] = new_f0
 
-        f_spa, rhpf, ihpf, rhcf, ihcf = EOBRun_module.EOBRunPy(par_dict)
+        f_spa, rhpf, ihpf, _, _ = EOBRun_module.EOBRunPy(par_dict)
 
-        f_spa = f_spa[N:]
+        f_spa = f_spa[n_additional:]
 
-        waveform = (rhpf - 1j * ihpf)[N:]
-
-        # + 1j * (rhcf -1j * ihcf)
+        waveform = (rhpf - 1j * ihpf)[n_additional:]
 
         return (f_spa, waveform)
