@@ -1,10 +1,15 @@
 import numpy as np
 from numba import njit  # type: ignore
 
+SUN_MASS_SECONDS: float = 4.92549094830932e-6  # M_sun * G / c**3
+EULER_GAMMA = 0.57721566490153286060
+
 
 @njit(cache=True)
 def compute_quadrupole_yy(lam: float) -> float:
-    # Compute quadrupole coefficient from Lambda using the chi precessing spin parameter (for given 3-dim spin vectors)
+    """Compute quadrupole coefficient from Lambda
+    using the chi precessing spin parameter (for given 3-dim spin vectors)"""
+
     if lam <= 0.0:
         return 1.0
     loglam = np.log(lam)
@@ -57,10 +62,6 @@ def compute_delta_lambda(m1: float, m2: float, l1: float, l2: float):
     return comb1 + comb2
 
 
-gt = 4.92549094830932e-6
-EulerGamma = 0.57721566490153286060
-
-
 @njit(cache=True)
 def PhifT6PN(
     f: np.ndarray, M: float, eta: float, Lam1: float, Lam2: float
@@ -80,7 +81,7 @@ def PhifT6PN(
     Lam1 = primary tidal parameter ell=2 [dimensionless]
     Lam2 = secondary tidal parameter ell=2 [dimensionless]
     """
-    v = np.power(np.abs(np.pi * M * f * gt), 1.0 / 3.0)
+    v = np.power(np.abs(np.pi * M * f * SUN_MASS_SECONDS), 1.0 / 3.0)
     v2 = v * v
     v5 = v ** 5
     v10 = v ** 10
@@ -103,7 +104,7 @@ def PhifT7hPN(
     """Compute 7.5PN tidal phase correction
     Appendix B [https://arxiv.org/abs/1203.4352]
     """
-    v = np.power(np.abs(np.pi * M * f * gt), 1.0 / 3.0)
+    v = np.power(np.abs(np.pi * M * f * SUN_MASS_SECONDS), 1.0 / 3.0)
     delta = np.sqrt(1.0 - 4.0 * eta)
     Xa = 0.5 * (1.0 + delta)
     Xb = 0.5 * (1.0 - delta)
@@ -194,7 +195,7 @@ def PhifT7hPNComplete(
     """Compute 7.5PN tidal phase correction
     https://arxiv.org/abs/2005.13367
     """
-    v = np.power(np.abs(np.pi * M * f * gt), 1.0 / 3.0)
+    v = np.power(np.abs(np.pi * M * f * SUN_MASS_SECONDS), 1.0 / 3.0)
     delta = np.sqrt(1.0 - 4.0 * eta)
     Xa = 0.5 * (1.0 + delta)
     Xb = 0.5 * (1.0 - delta)
@@ -297,7 +298,7 @@ def PhifQM3hPN(
     # TODO: this implementation needs a check
     # -> in MLGW_BNS L1=L2=0 will not happen
     # if Lam1 == 0. and Lam2 == 0. :  return 0.
-    v = np.power(np.abs(np.pi * M * f * gt), 1.0 / 3.0)
+    v = np.power(np.abs(np.pi * M * f * SUN_MASS_SECONDS), 1.0 / 3.0)
     v2 = v * v
     delta = np.sqrt(1.0 - 4.0 * eta)
     X1 = 0.5 * (1.0 + delta)
@@ -356,7 +357,7 @@ def Phif3hPN(
     """
     vlso = 1.0 / np.sqrt(6.0)
     delta = np.sqrt(1.0 - 4.0 * eta)
-    v = np.abs(np.pi * M * f * gt) ** (1.0 / 3.0)
+    v = np.abs(np.pi * M * f * SUN_MASS_SECONDS) ** (1.0 / 3.0)
     v2 = v * v
     v3 = v2 * v
     v4 = v2 * v2
@@ -428,7 +429,7 @@ def Phif3hPN(
         + (
             11583231236531.0 / 4694215680.0
             - 640.0 / 3.0 * np.pi ** 2
-            - 6848.0 / 21.0 * (EulerGamma + np.log(4.0 * v))
+            - 6848.0 / 21.0 * (EULER_GAMMA + np.log(4.0 * v))
             + (-15737765635.0 / 3048192.0 + 2255.0 * np.pi ** 2 / 12.0) * eta
             + 76055.0 / 1728.0 * eta2
             - 127825.0 / 1296.0 * eta3
@@ -493,7 +494,7 @@ def Phif5hPN(
 
     vlso = 1.0 / np.sqrt(6.0)
     delta = np.sqrt(1.0 - 4.0 * eta)
-    v = (np.pi * M * f * gt) ** (1.0 / 3.0)
+    v = (np.pi * M * f * SUN_MASS_SECONDS) ** (1.0 / 3.0)
     v2 = v * v
     v3 = v2 * v
     v4 = v2 * v2
@@ -527,14 +528,14 @@ def Phif5hPN(
         * eta
         + (
             -567987228950352.7 / 128152088064.0
-            - 532292.8 / 396.9 * EulerGamma
+            - 532292.8 / 396.9 * EULER_GAMMA
             + 930221.5 / 5443.2 * np.pi * np.pi
             - 142068.8 / 44.1 * log2
             + 2632.5 / 4.9 * log3
         )
         * eta
         - 9049.0 / 56.7 * np.pi * np.pi
-        - 3681.2 / 18.9 * EulerGamma
+        - 3681.2 / 18.9 * EULER_GAMMA
         + 255071384399888515.3 / 83042553065472.0
         - 2632.5 / 19.6 * log3
         - 101102.0 / 396.9 * log2
@@ -550,14 +551,14 @@ def Phif5hPN(
         * eta
         + (
             -567987228950352.7 / 128152088064.0
-            - 532292.8 / 396.9 * EulerGamma
+            - 532292.8 / 396.9 * EULER_GAMMA
             + 930221.5 / 5443.2 * np.pi * np.pi
             - 142068.8 / 44.1 * log2
             + 2632.5 / 4.9 * log3
         )
         * eta
         - 9049.0 / 56.7 * np.pi * np.pi
-        - 3681.2 / 18.9 * EulerGamma
+        - 3681.2 / 18.9 * EULER_GAMMA
         + 255071384399888515.3 / 83042553065472.0
         - 2632.5 / 19.6 * log3
         - 101102.0 / 396.9 * log2
@@ -570,7 +571,7 @@ def Phif5hPN(
         + 4529333.5 / 12700.8 * eta * eta
         + (2255.0 / 6.0 * np.pi * np.pi - 149291726073.5 / 13412044.8) * eta
         - 640.0 / 3.0 * np.pi * np.pi
-        - 1369.6 / 2.1 * EulerGamma
+        - 1369.6 / 2.1 * EULER_GAMMA
         + 10534427947316.3 / 1877686272.0
         - 2739.2 / 2.1 * log2
     )
@@ -614,7 +615,7 @@ def Phif5hPN(
             * eta
             + (
                 -85710407655931086054085.1 / 3428930819264670720.0
-                - 614779314.2 / 152806.5 * EulerGamma
+                - 614779314.2 / 152806.5 * EULER_GAMMA
                 - 46051.9 / 153.6 * np.pi * np.pi
                 - 4311179766.8 / 152806.5 * log2
                 + 127939.5 / 9.8 * log3
@@ -624,7 +625,7 @@ def Phif5hPN(
             * eta
             + (
                 -1873639936380505730110521.7 / 36575262072156487680.0
-                - (9923919211.9 / 458419.5) * EulerGamma
+                - (9923919211.9 / 458419.5) * EULER_GAMMA
                 + 41579551.7 / 90316.8 * np.pi * np.pi
                 - 11734037971.3 / 458419.5 * log2
                 - 5833093.5 / 548.8 * log3
@@ -633,14 +634,14 @@ def Phif5hPN(
             * eta
             + (
                 56993518125966874478111.3 / 1083711468804636672.0
-                + 6378740752.7 / 916839.0 * EulerGamma
+                + 6378740752.7 / 916839.0 * EULER_GAMMA
                 - 545142954.7 / 812851.2 * np.pi * np.pi
                 + 15994339707.7 / 1833678.0 * log2
                 + (892417.5 / 313.6) * log3
             )
             * eta
             + (57822311.5 / 304819.2) * np.pi * np.pi
-            + (647058264.7 / 2750517.0) * EulerGamma
+            + (647058264.7 / 2750517.0) * EULER_GAMMA
             - 143300652329540712655.9 / 12630669799587840.0
             - 551245.5 / 2195.2 * log3
             + 5399283943.1 / 5501034.0 * log2
@@ -668,13 +669,13 @@ def Phif5hPN(
         * np.pi
         * np.pi
         + (
-            -134666.2 / 56.7 * EulerGamma
+            -134666.2 / 56.7 * EULER_GAMMA
             - 43038370739839704.7 / 3460106377728.0
             + 2632.5 / 4.9 * log3
             - 2100962.6 / 396.9 * log2
         )
         * eta
-        - 355801.1 / 793.8 * EulerGamma
+        - 355801.1 / 793.8 * EULER_GAMMA
         + 185754140723659441.1 / 27680851021824.0
         - 2632.5 / 19.6 * log3
         - 86254.9 / 113.4 * log2
@@ -725,7 +726,7 @@ def Af3hPN(
 
     Mchirp = M * np.power(np.abs(eta), 3.0 / 5.0)
     delta = np.sqrt(1.0 - 4.0 * eta)
-    v = np.power(np.abs(np.pi * M * f * gt), 1.0 / 3.0)
+    v = np.power(np.abs(np.pi * M * f * SUN_MASS_SECONDS), 1.0 / 3.0)
     v2 = v * v
     v3 = v2 * v
     v4 = v2 * v2
@@ -771,7 +772,7 @@ def Af3hPN(
         + v5 * (57.0 / 16.0 * np.pi * eta - 4757.0 * np.pi / 1344.0 + eps)
         + v6
         * (
-            856.0 / 105.0 * EulerGamma
+            856.0 / 105.0 * EULER_GAMMA
             + 67999.0 / 82944.0 * eta3
             - 1041557.0 / 258048.0 * eta2
             - 451.0 / 96.0 * np.pi ** 2 * eta
