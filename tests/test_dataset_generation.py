@@ -76,16 +76,27 @@ def test_generated_waveform_length(variable_parameters):
     )
 
 
+@pytest.mark.benchmark(group="waveform-generation", min_rounds=3)
 def test_teob_generation_time(benchmark, parameters, teob_generator):
-
     benchmark(teob_generator.effective_one_body_waveform, params=parameters)
 
 
+@pytest.mark.benchmark(group="waveform-generation", min_rounds=3)
 def test_tf2_amp_generation_time(benchmark, parameters, frequencies, teob_generator):
-
     benchmark(teob_generator.post_newtonian_amplitude, parameters, frequencies)
 
 
+@pytest.mark.benchmark(group="waveform-generation", min_rounds=3)
 def test_tf2_phi_generation_time(benchmark, parameters, frequencies, teob_generator):
-
     benchmark(teob_generator.post_newtonian_phase, parameters, frequencies)
+
+
+@pytest.mark.benchmark(group="residual-generation", min_rounds=3)
+def test_dataset_generation_size_1(benchmark, variable_dataset):
+    f, amp, phi = benchmark(variable_dataset.generate_residuals, size=1)
+
+    assert np.isclose(
+        min(f),
+        variable_dataset.hz_to_natural_units(variable_dataset.initial_frequency_hz),
+    )
+    assert len(f) == amp.shape[-1] == phi.shape[-1] == variable_dataset.waveform_length
