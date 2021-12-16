@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from pytest_cases import fixture, fixture_union, parametrize
+from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
 
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
 
