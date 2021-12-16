@@ -470,6 +470,9 @@ class Dataset:
     def mass_sum_seconds(self) -> float:
         return self.total_mass * SUN_MASS_SECONDS
 
+    def hz_to_natural_units(self, frequency_hz: Union[float, np.ndarray]):
+        return frequency_hz * self.mass_sum_seconds
+
     def save(self) -> None:
         pass
 
