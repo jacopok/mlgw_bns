@@ -1,8 +1,12 @@
+"""This module defines the `fixtures <https://docs.pytest.org/en/6.2.x/fixture.html>`__ 
+which all other testing files can then use."""
+
 import numpy as np
 import pytest
 from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
 
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
+from mlgw_bns.downsampling_interpolation import DownsamplingTrainingDataset
 
 
 @fixture(name="variable_dataset")
@@ -62,6 +66,18 @@ def frequencies(dataset):
 def teob_generator():
     """Waveform generator based in TEOBResumS."""
     return TEOBResumSGenerator()
+
+
+@pytest.fixture()
+def downsampling_dataset():
+    return DownsamplingTrainingDataset(
+        degree=3,
+        tol=1e-6,
+        filename="data",
+        initial_frequency_hz=20.0,
+        delta_f_hz=1.0 / 256.0,
+        srate_hz=4096.0,
+    )
 
 
 fixture_union("all", ["variable_dataset", "variable_parameters"])
