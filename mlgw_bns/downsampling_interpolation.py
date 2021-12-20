@@ -10,17 +10,18 @@ from sortedcontainers import SortedList  # type: ignore
 from .dataset_generation import Dataset
 
 
-class DownsamplingTrainingDataset(Dataset):
-    """Training dataset for the selection of the downsampling indices.
-    #TODO write more here.
-    """
+class DownsamplingTraining:
+    """Selection of the downsampling indices with a greedy algorithm."""
 
-    def __init__(self, degree: int = 3, tol: float = 1e-6, *args, **kwargs):
+    def __init__(self, dataset: Dataset, degree: int = 3, tol: float = 1e-6):
         """Manager for a dataset of waveforms
         to be used when training for downsampling.
 
         Parameters
         ----------
+        dataset : Dataset
+            dataset to which to refer for the generation
+            of training waveforms for the downsampling.
         degree : int
             degree for the interpolation.
             Defaults to 3.
@@ -29,9 +30,9 @@ class DownsamplingTrainingDataset(Dataset):
             Defaults to ``1e-6``.
         """
 
+        self.dataset = dataset
         self.tol = tol
         self.degree = degree
-        super().__init__(*args, **kwargs)
 
     def _indices_error(
         self, ytrue: np.ndarray, ypred: np.ndarray, current_indices: SortedList
@@ -194,7 +195,7 @@ class DownsamplingTrainingDataset(Dataset):
                 Indices for amplitude and phase, respectively.
         """
 
-        frequencies, amp_residuals, phi_residuals = self.generate_residuals(
+        frequencies, amp_residuals, phi_residuals = self.dataset.generate_residuals(
             size=training_dataset_size
         )
 
@@ -210,10 +211,27 @@ class DownsamplingTrainingDataset(Dataset):
     def validate_downsampling(
         self, training_dataset_size: int, validating_dataset_size: int
     ) -> tuple[list[float], list[float]]:
+        """Check that the downsampling is working by looking at the
+        reconstruction error on a fresh dataset.
+
+        Parameters
+        ----------
+        training_dataset_size : int
+            How many waveforms to train the downsampling on.
+        validating_dataset_size : int
+            How many waveforms to validate on.
+
+        Returns
+        -------
+        tuple[list[float], list[float]]
+            Amplitude and phase validation errors;
+            these are reported as :math:`L_\infty` errors:
+            the absolute maximum of the difference.
+        """
 
         amp_indices, phi_indices = self.calculate_downsampling(training_dataset_size)
 
-        frequencies, amp_residuals, phi_residuals = self.generate_residuals(
+        frequencies, amp_residuals, phi_residuals = self.dataset.generate_residuals(
             size=validating_dataset_size
         )
         amp_validation = self.validate_indices(
