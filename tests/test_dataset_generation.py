@@ -93,10 +93,15 @@ def test_tf2_phi_generation_time(benchmark, parameters, frequencies, teob_genera
 
 @pytest.mark.benchmark(group="residual-generation", min_rounds=3)
 def test_dataset_generation_size_1(benchmark, variable_dataset):
-    f, amp, phi = benchmark(variable_dataset.generate_residuals, size=1)
+    frequencies, amp, phi = benchmark(variable_dataset.generate_residuals, size=1)
 
     assert np.isclose(
-        min(f),
+        min(frequencies),
         variable_dataset.hz_to_natural_units(variable_dataset.initial_frequency_hz),
     )
-    assert len(f) == amp.shape[-1] == phi.shape[-1] == variable_dataset.waveform_length
+    assert (
+        len(frequencies)
+        == amp.shape[-1]
+        == phi.shape[-1]
+        == variable_dataset.waveform_length
+    )
