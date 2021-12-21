@@ -1,8 +1,8 @@
 from abc import ABC
 from typing import Type
 
-from .dataset_generation import TEOBResumSGenerator, WaveformGenerator
-from .model import Model, TEOBResumSModel
+from .dataset_generation import WaveformGenerator
+from .model import Model
 
 
 class ValidatingModel(Model):
@@ -13,15 +13,6 @@ class ValidatingModel(Model):
     - noise psd management
     - computation of reconstruction residuals
     """
-
-    def __init__(
-        self, waveform_generator: Type[WaveformGenerator] = TEOBResumSGenerator
-    ):
-        self._waveform_generator = TEOBResumSGenerator()
-
-    @property
-    def waveform_generator(self):
-        return self._waveform_generator
 
     def compute_mismatch(self):
         pass
