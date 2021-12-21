@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Optional, Type, Union
+from typing import Any, Optional, Type, Union
 
 import EOBRun_module  # type: ignore
 import h5py
@@ -38,17 +38,116 @@ class WaveformGenerator(ABC):
     def post_newtonian_amplitude(
         self, params: "WaveformParameters", frequencies: np.ndarray
     ) -> np.ndarray:
-        pass
+        r"""Amplitude of the Fourier transform of the waveform computed
+        at arbitrary frequencies.
+        This should be implemented in some fast, closed-form way.
+        The speed of the overall model relies on the evaluation
+        of this not taking too long.
+
+        Parameters
+        ----------
+        params : WaveformParameters
+                Parameters of the binary system for which to generate the waveform.
+        frequencies : np.ndarray
+                Array of frequencies at which to compute the amplitude.
+                Should be given in mass-rescaled natural units; they will be
+                passed to :func:`WaveformParameters.taylor_f2`.
+
+        Returns
+        -------
+        amplitude : np.ndarray
+                Amplitude of the Fourier transform of the waveform,
+                given with the natural-units convention
+                :math:`|\widetilde{h}_+(f)| r \eta / M^2`,
+                where we are using :math:`c=  G = 1` natural units,
+                :math:`r` is the distance to the binary,
+                :math:`\eta` is the symmetric mass ratio,
+                :math:`M` is the total mass of the binary.
+        """
 
     @abstractmethod
     def post_newtonian_phase(
         self, params: "WaveformParameters", frequencies: np.ndarray
     ) -> np.ndarray:
-        pass
+        r"""Phase of the Fourier transform of the waveform computed
+        at arbitrary frequencies.
+        This should be implemented in some fast, closed-form way.
+        The speed of the overall model relies on the evaluation
+        of this not taking too long.
+
+        Parameters
+        ----------
+        params : WaveformParameters
+                Parameters of the binary system for which to generate the waveform.
+        frequencies : np.ndarray
+                Array of frequencies at which to compute the phase.
+                Should be given in mass-rescaled natural units; they will be
+                passed to :func:`WaveformParameters.taylor_f2`.
+
+        Returns
+        -------
+        phase : np.ndarray
+                Phase of the Fourier transform of the waveform,
+                specifically the phase of the plus polarization in radians.
+                At the :math:`(\ell = 2, m =2)` multipole,
+                the phase of the cross-polarization will simply by :math:`\pi/2`
+                plus this one.
+        """
 
     @abstractmethod
-    def effective_one_body_waveform(self, params: "WaveformParameters") -> np.ndarray:
-        pass
+    def effective_one_body_waveform(
+        self, params: "WaveformParameters"
+    ) -> tuple[np.ndarray, np.ndarray]:
+        r"""Waveform
+
+        Parameters
+        ----------
+        params : WaveformParameters
+                Parameters of the binary system for which to generate the waveform.
+
+        Returns
+        -------
+        frequencies : np.ndarray
+                Frequencies at which the waveform is given, in natural units:
+                the quantity here is :math:`Mf` (with :math:`G = c = 1`).
+        cartesian_waveform : np.ndarray
+                Cartesian form of the plus-polarized waveform.
+                The normalization for the amplitude is the same as discussed
+                in :func:`post_newtonian_amplitude`.
+        """
+
+    def generate_residuals(
+        self, params: "WaveformParameters"
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Compute the residuals of the :func:`effective_one_body_waveform`
+        from the Post-Newtonian one computed with
+        :func:`post_newtonian_amplitude` and
+        :func:`post_newtonian_phase`.
+
+        Residuals are defined as discussed in :class:`Dataset`.
+
+        Parameters
+        ----------
+        params : WaveformParameters
+            Parameters for which to compute the residuals.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            Amplitude residuals and phase residuals.
+        """
+
+        (
+            frequencies_eob,
+            waveform_eob,
+        ) = self.effective_one_body_waveform(params)
+
+        amplitude_eob, phase_eob = phase_unwrapping(waveform_eob)
+
+        amplitude_pn = self.post_newtonian_amplitude(params, frequencies_eob)
+        phase_pn = self.post_newtonian_phase(params, frequencies_eob)
+
+        return (np.log(amplitude_eob / amplitude_pn), phase_eob - phase_pn)
 
 
 class TEOBResumSGenerator(WaveformGenerator):
@@ -84,6 +183,7 @@ class TEOBResumSGenerator(WaveformGenerator):
     def post_newtonian_phase(
         self, params: "WaveformParameters", frequencies: np.ndarray
     ) -> np.ndarray:
+
         par_dict = params.taylor_f2(frequencies)
 
         phi_5pn = Phif5hPN(
@@ -137,8 +237,8 @@ class TEOBResumSGenerator(WaveformGenerator):
         >>> f, waveform = tg.effective_one_body_waveform(p)
         >>> print(len(waveform))
         519169
-        >>> print(waveform[0])
-        (4679.915419630735+3758.8458103665052j)
+        >>> print(waveform[0]) # doctest: +NUMBER
+        (4679.9+3758.8j)
         """
 
         par_dict = params.teobresums
@@ -203,7 +303,7 @@ class WaveformParameters:
     chi_2: float
     dataset: "Dataset"
 
-    def __eq__(self, other: object):
+    def almost_equal_to(self, other: object):
         """Check for equality with another set of parameters,
         accounting for imprecise floats.
         """
@@ -330,6 +430,17 @@ class WaveformParameters:
 class ParameterGenerator(ABC, Iterator):
     """Generic generator of parameters for new waveforms
     to be used for training.
+
+    Parameters
+    ----------
+    dataset: Dataset
+            Dataset to which the generated parameters will refer.
+            This parameter is required because the parameters must include
+            things such as the initial frequency, which are properties of the dataset.
+    seed: Optional[int]
+            Seed for the random number generator, optional.
+            If it is not given, the :attribute:`Dataset.seed_sequence` of the
+            dataset is used.
     """
 
     def __init__(self, dataset: "Dataset", seed: Optional[int] = None):
@@ -350,16 +461,71 @@ class ParameterGenerator(ABC, Iterator):
 
 
 class UniformParameterGenerator(ParameterGenerator):
-    """Generator of parameters according to a uniform distribution
+    r"""Generator of parameters according to a uniform distribution
     over their allowed ranges.
+
+    Parameters
+    ----------
+    q_range : tuple[float, float]
+            Range of valid mass ratios.
+            Defaults to (1., 2.).
+    lambda1_range : tuple[float, float]
+            Range of valid tidal deformabilities parameters for the larger star.
+            Defaults to (5., 5000.): the lower bound is not zero because that
+            may create some issues with TEOB crashing.
+    lambda2_range : tuple[float, float]
+            Range of valid tidal deformabilities parameters for the smaller star.
+            Defaults to (5., 5000.).
+    chi1_range : tuple[float, float]
+            Range of valid dimensionless aligned spins for the larger star.
+            Defaults to (-.5, .5).
+    chi2_range : tuple[float, float]
+            Range of valid dimensionless aligned spins for the smaller star.
+            Defaults to (-.5, .5).
+
+    Keyword Arguments
+    -----------------
+    dataset: Dataset
+            See the documentation for the initialization of a
+            :class:`ParameterGenerator`.
+    seed: Optional[int]
+            See the documentation for the initialization of a
+            :class:`ParameterGenerator`.
+
+
+    Examples
+    --------
+    >>> generator = UniformParameterGenerator(dataset=Dataset(20., 4096.))
+    >>> params = next(generator)
+    >>> print(type(params))
+    <class 'mlgw_bns.dataset_generation.WaveformParameters'>
+    >>> print(params.mass_ratio) # doctest: +NUMBER
+    1.96
     """
 
+    def __init__(
+        self,
+        q_range: tuple[float, float] = (1.0, 2.0),
+        lambda1_range: tuple[float, float] = (5.0, 5000.0),
+        lambda2_range: tuple[float, float] = (5.0, 5000.0),
+        chi1_range: tuple[float, float] = (-0.5, 0.5),
+        chi2_range: tuple[float, float] = (-0.5, 0.5),
+        **kwargs,
+    ):
+
+        self.q_range = q_range
+        self.lambda1_range = lambda1_range
+        self.lambda2_range = lambda2_range
+        self.chi1_range = chi1_range
+        self.chi2_range = chi2_range
+        super().__init__(**kwargs)
+
     def __next__(self) -> WaveformParameters:
-        mass_ratio = self.rng.uniform(*self.dataset.q_range)
-        lambda_1 = self.rng.uniform(*self.dataset.lambda1_range)
-        lambda_2 = self.rng.uniform(*self.dataset.lambda2_range)
-        chi_1 = self.rng.uniform(*self.dataset.chi1_range)
-        chi_2 = self.rng.uniform(*self.dataset.chi2_range)
+        mass_ratio = self.rng.uniform(*self.q_range)
+        lambda_1 = self.rng.uniform(*self.lambda1_range)
+        lambda_2 = self.rng.uniform(*self.lambda2_range)
+        chi_1 = self.rng.uniform(*self.chi1_range)
+        chi_2 = self.rng.uniform(*self.chi2_range)
 
         return WaveformParameters(
             mass_ratio, lambda_1, lambda_2, chi_1, chi_2, self.dataset
@@ -380,30 +546,49 @@ class Dataset:
     while the phase residuals are defined as
     :math:`\phi _{\text{EOB}} - \phi_{\text{PN}}`.
 
-    Attributes
+    Parameters
     ----------
-    total_mass : float
-            Total mass of the reference binary, in solar masses.
-    q_range : tuple[float, float]
-            Range of valid mass ratios.
-    lambda1_range : tuple[float, float]
-            Range of valid tidal deformabilities parameters for the larger star.
-    lambda2_range : tuple[float, float]
-            Range of valid tidal deformabilities parameters for the smaller star.
-    chi1_range : tuple[float, float]
-            Range of valid dimensionless aligned spins for the larger star.
-    chi2_range : tuple[float, float]
-            Range of valid dimensionless aligned spins for the smaller star.
-    waveform_generator_class : Type[WaveformGenerator]
-            Waveform generator class to be used, should be a
-            subclass of WaveformGenerator.
+    initial_frequency_hz : float
+            Initial frequency from which the waveforms in this dataset
+            should be generated by the effective one body model.
+    srate_hz : float
+            Sampling rate in the time domain.
+            The maximum frequency of the generated time-domain waveforms will be
+            half of this value (see
+            `Nyquist frequency <https://en.wikipedia.org/wiki/Nyquist_frequency>`_).
+    delta_f_hz : Optional[float]
+            Frequency spacing for the generated waveforms.
+            If it is not given, it defaults to the one computed through
+            :func:`Dataset.optimal_df_hz`.
+    waveform_generator : WaveformGenerator
+            Waveform generator to be used.
             Defaults to TEOBResumSGenerator, which uses TEOB for
             the EOB waveform an a TaylorF2 approximant, with 3.5PN-correct
             amplitude and 5.5PN-correct phase.
     parameter_generator_class : Type[ParameterGenerator]
-            Parameter generator class to be used, should be a
-            subclass of ParameterGenerator.
+            Parameter generator class to be used.
+            Should be a subclass of ParameterGenerator; the argument is
+            the class as opposed to an instance since the parameter generator
+            needs to reference the dataset and therefure must be created after it.
             Defaults to UniformParameterGenerator.
+    parameter_generator_kwargs : dict[str, Any]
+
+    seed : int
+            Seed for the random number generator used when generating
+            waveforms for the training.
+            Defaults to 42.
+
+    Examples
+    --------
+    >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
+    >>> print(dataset.delta_f_hz) # should be 1/256 Hz, doctest: +NUMBER
+    0.00390625
+
+    Class Attributes
+    ----------------
+    total_mass : float
+            Total mass of the reference binary, in solar masses (class attribute).
+            Defaults to 2.8; this does not typically need to be changed.
     """
 
     # TODO
@@ -412,53 +597,32 @@ class Dataset:
     # total mass of the binary, in solar masses
     total_mass: float = 2.8
 
-    q_range: tuple[float, float] = (1.0, 2.0)
-    lambda1_range: tuple[float, float] = (5.0, 5000.0)
-    lambda2_range: tuple[float, float] = (5.0, 5000.0)
-    chi1_range: tuple[float, float] = (-0.5, 0.5)
-    chi2_range: tuple[float, float] = (-0.5, 0.5)
-
-    waveform_generator_class: Type["WaveformGenerator"] = TEOBResumSGenerator
-    parameter_generator_class: Type["ParameterGenerator"] = UniformParameterGenerator
+    arrays_to_save: list[str] = [
+        "amplitude_residuals",
+        "phase_residuals",
+        "frequencies",
+    ]
+    # TODO document this
 
     def __init__(
         self,
         initial_frequency_hz: float,
         srate_hz: float,
         delta_f_hz: Optional[float] = None,
+        waveform_generator: WaveformGenerator = TEOBResumSGenerator(),
+        parameter_generator_class: Type[ParameterGenerator] = UniformParameterGenerator,
+        parameter_generator_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 42,
     ):
-        r"""
-        Initialize dataset.
-
-        Parameters
-        ----------
-        initial_frequency_hz : float
-                Initial frequency from which the waveforms in this dataset
-                should be generated by the effective one body model.
-        srate_hz : float
-                Sampling rate in the time domain.
-                The maximum frequency of the generated time-domain waveforms will be
-                half of this value (see
-                `Nyquist frequency <https://en.wikipedia.org/wiki/Nyquist_frequency>`_).
-        delta_f_hz : float
-                Frequency spacing for the generated waveforms.
-        seed : int
-                Seed for the random number generator used when generating
-                waveforms for the training.
-                Defaults to 42.
-
-        Examples
-        --------
-        >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
-        >>> print(dataset.delta_f_hz) # should be 1/256 Hz
-        0.00390625
-        """
 
         self.initial_frequency_hz = initial_frequency_hz
         self.srate_hz = srate_hz
         self.delta_f_hz = self.optimal_df_hz() if delta_f_hz is None else delta_f_hz
-        self.waveform_generator = self.waveform_generator_class()
+        self.waveform_generator = waveform_generator
+        self.parameter_generator_class = parameter_generator_class
+        self.parameter_generator_kwargs = (
+            {} if parameter_generator_kwargs is None else parameter_generator_kwargs
+        )
 
         self.seed_sequence = SeedSequence(seed)
 
@@ -478,6 +642,24 @@ class Dataset:
     def waveform_length(self) -> int:
         return (
             int((self.srate_hz / 2 - self.initial_frequency_hz) / self.delta_f_hz) + 1
+        )
+
+    @property
+    def frequencies(self) -> np.ndarray:
+        """Frequency array corresponding to this dataset,
+        in natural units.
+
+        Returns
+        -------
+        np.ndarray
+            [description]
+        """
+        return self.hz_to_natural_units(
+            np.arange(
+                self.initial_frequency_hz,
+                self.srate_hz / 2 + self.delta_f_hz,
+                self.delta_f_hz,
+            )
         )
 
     def optimal_df_hz(
@@ -537,11 +719,18 @@ class Dataset:
     def hz_to_natural_units(self, frequency_hz: Union[float, np.ndarray]):
         return frequency_hz * self.mass_sum_seconds
 
-    def save(self, file) -> None:
-        """Save the data to a h5 file."""
-        pass
-        # f = h5py.File(self.filename, 'w')
-        # dset = f.create_dataset(self.filename)
+    def save(self, file: h5py.File, group_name: str) -> None:
+        """Save the data to a h5 file.
+        This method should be called"""
+        if group_name not in file:
+            file.create_group(group_name)
+
+        for array in self.arrays_to_save:
+            array_path = f"{group_name}/{array}"
+            if array_path not in file:
+                file.create_dataset(f"{group_name}/{array}", data=getattr(self, array))
+            else:
+                file[array_path] = getattr(self, array)
 
     def load(self) -> None:
         """Load the data from a h5 file."""
@@ -571,34 +760,28 @@ class Dataset:
         """
         return self.total_mass ** 2 / AMP_SI_BASE * eta
 
+    def make_parameter_generator(self):
+        return self.parameter_generator_class(
+            dataset=self,
+            seed=self.seed_sequence.generate_state(1)[0],
+            **self.parameter_generator_kwargs,
+        )
+
     def generate_residuals(
         self, size: int
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
-        parameter_generator = self.parameter_generator_class(
-            dataset=self, seed=self.seed_sequence.generate_state(1)[0]
-        )
-
         amp_residuals = np.empty((size, self.waveform_length))
         phi_residuals = np.empty((size, self.waveform_length))
 
+        parameter_generator = self.make_parameter_generator()
+
         for i in range(size):
             params = next(parameter_generator)
+
             (
-                frequencies_eob,
-                waveform_eob,
-            ) = self.waveform_generator.effective_one_body_waveform(params)
+                amp_residuals[i],
+                phi_residuals[i],
+            ) = self.waveform_generator.generate_residuals(params)
 
-            amplitude_eob, phase_eob = phase_unwrapping(waveform_eob)
-
-            amplitude_pn = self.waveform_generator.post_newtonian_amplitude(
-                params, frequencies_eob
-            )
-            phase_pn = self.waveform_generator.post_newtonian_phase(
-                params, frequencies_eob
-            )
-
-            amp_residuals[i] = np.log(amplitude_eob / amplitude_pn)
-            phi_residuals[i] = phase_eob - phase_pn
-
-        return frequencies_eob, amp_residuals, phi_residuals
+        return self.frequencies, amp_residuals, phi_residuals
