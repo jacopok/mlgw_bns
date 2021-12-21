@@ -8,16 +8,17 @@ Management of a training and validation dataset
 
 .. autoclass:: mlgw_bns.dataset_generation.Dataset
     :members:
-    :special-members: __init__
     
 .. autoclass:: mlgw_bns.dataset_generation.ParameterGenerator
     :members:
 
 .. autoclass:: mlgw_bns.dataset_generation.UniformParameterGenerator
+    :noindex:
     :members:
 
 .. autoclass:: mlgw_bns.dataset_generation.WaveformGenerator
     :members:
 
 .. autoclass:: mlgw_bns.dataset_generation.TEOBResumSGenerator
+    :noindex:
     :members:

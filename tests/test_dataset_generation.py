@@ -49,15 +49,17 @@ def test_waveform_parameters_teobresums_output(parameters):
 
 def test_random_parameter_generation(dataset):
 
-    u = UniformParameterGenerator(dataset)
+    u = UniformParameterGenerator(dataset=dataset)
 
-    assert next(u) == WaveformParameters(
-        mass_ratio=1.9636394957426813,
-        lambda_1=3585.8072979230906,
-        lambda_2=2486.6021441939356,
-        chi_1=0.3841186422717332,
-        chi_2=0.07320957984815568,
-        dataset=dataset,
+    assert next(u).almost_equal_to(
+        WaveformParameters(
+            mass_ratio=1.9636394957426813,
+            lambda_1=3585.8072979230906,
+            lambda_2=2486.6021441939356,
+            chi_1=0.3841186422717332,
+            chi_2=0.07320957984815568,
+            dataset=dataset,
+        )
     )
 
 
@@ -105,3 +107,45 @@ def test_dataset_generation_size_1(benchmark, variable_dataset):
         == phi.shape[-1]
         == variable_dataset.waveform_length
     )
+
+
+def test_changing_parameter_generation_ranges(dataset):
+    parameter_generator = UniformParameterGenerator(
+        q_range=(0.0, 1.0),
+        lambda1_range=(0.0, 1.0),
+        lambda2_range=(0.0, 1.0),
+        chi1_range=(0.0, 1.0),
+        chi2_range=(0.0, 1.0),
+        dataset=dataset,
+    )
+
+    params = next(parameter_generator)
+
+    for attr in ["mass_ratio", "lambda_1", "lambda_2", "chi_1", "chi_2"]:
+        assert 0 <= getattr(params, attr) <= 1
+
+
+def test_frequencies_match_with_eob(variable_parameters, teob_generator):
+
+    freq, waveform = teob_generator.effective_one_body_waveform(variable_parameters)
+
+    assert np.allclose(freq, variable_parameters.dataset.frequencies, atol=0.0)
+
+
+def test_residuals_are_not_too_large(variable_parameters, teob_generator):
+
+    amp_residuals, phi_residuals = teob_generator.generate_residuals(
+        variable_parameters
+    )
+
+    length = len(amp_residuals)
+
+    # The residuals overall should be below a relatively loose bound
+    assert np.all(abs(amp_residuals) < 10)
+    assert np.all(abs(phi_residuals) < 300)
+
+    # their low-frequency parts should satisfy a stricter one
+    assert np.all(abs(amp_residuals[: length // 2]) < 2)
+    assert np.all(abs(phi_residuals[: length // 2]) < 120)
+
+    # TODO can these be lowered?
