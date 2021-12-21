@@ -439,7 +439,7 @@ class ParameterGenerator(ABC, Iterator):
             things such as the initial frequency, which are properties of the dataset.
     seed: Optional[int]
             Seed for the random number generator, optional.
-            If it is not given, the :attribute:`Dataset.seed_sequence` of the
+            If it is not given, the :attr:`Dataset.seed_sequence` of the
             dataset is used.
 
     Class Attributes
@@ -810,4 +810,4 @@ def save_arrays_to_file(
         if array_path not in file:
             file.create_dataset(array_path, data=array)
         else:
-            file[array_path] = array
+            file[array_path][:] = array

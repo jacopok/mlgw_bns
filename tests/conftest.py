@@ -1,10 +1,13 @@
 """This module defines the `fixtures <https://docs.pytest.org/en/6.2.x/fixture.html>`__ 
 which all other testing files can then use."""
 
+import os
+
 import numpy as np
 import pytest
 from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
 
+from mlgw_bns import Model
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
 from mlgw_bns.downsampling_interpolation import DownsamplingTraining
 
@@ -75,6 +78,14 @@ def downsampling_dataset():
         degree=3,
         tol=1e-6,
     )
+
+
+@pytest.fixture
+def model():
+    fname = "test"
+    model = Model(fname)
+    yield model
+    os.remove(f"{fname}.h5")
 
 
 fixture_union("all", ["variable_dataset", "variable_parameters"])
