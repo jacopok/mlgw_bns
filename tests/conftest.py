@@ -10,7 +10,7 @@ from mlgw_bns.downsampling_interpolation import DownsamplingTraining
 
 
 @fixture(name="variable_dataset")
-@parametrize(f_0=[15.0, 20.0, 30.0])
+@parametrize(f_0=[30.0, 40.0])
 def fixture_variable_dataset(f_0):
     """Dataset object with variable initial frequency"""
     return Dataset(
