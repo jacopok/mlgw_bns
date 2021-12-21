@@ -36,23 +36,16 @@ class Model:
 
         Returns
         -------
-        h5py.File
+        file : h5py.File
             To be used as a context manager.
-
-        Examples
-        --------
-        >>> model = Model('test')
-        >>> with model.file as file:
-        ...     if 'new_group' not in file:
-        ...         file.create_group('new_group')
-        ...     print(file.keys())
-        <KeysViewHDF5 ['new_group']>
         """
-        return h5py.File(self.filename, mode="a")
+        return h5py.File(f"{self.filename}.h5", mode="a")
 
-    def generate(self):
+    def generate(self, training_downsampling_dataset_size: int = 64):
         training_downsampling = DownsamplingTraining(self.dataset)
-        training_downsampling.save_downsampling(128, self.file)
+        training_downsampling.save_downsampling(
+            training_downsampling_dataset_size, self.file
+        )
 
 
 class HyperparameterOptimization:
