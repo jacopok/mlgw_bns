@@ -3,32 +3,31 @@
 import logging
 from typing import Optional, Tuple
 
+import h5py
 import numpy as np
 from scipy import interpolate  # type: ignore
 from sortedcontainers import SortedList  # type: ignore
 
-from .dataset_generation import Dataset
+from .dataset_generation import Dataset, save_arrays_to_file
 
 
 class DownsamplingTraining:
-    """Selection of the downsampling indices with a greedy algorithm."""
+    """Selection of the downsampling indices with a greedy algorithm.
 
-    def __init__(self, dataset: Dataset, degree: int = 3, tol: float = 1e-6):
-        """Manager for a dataset of waveforms
-        to be used when training for downsampling.
-
-        Parameters
-        ----------
-        dataset : Dataset
+    Parameters
+    ----------
+    dataset : Dataset
             dataset to which to refer for the generation
             of training waveforms for the downsampling.
-        degree : int
+    degree : int
             degree for the interpolation.
             Defaults to 3.
-        tol : float
+    tol : float
             Tolerance for the interpolation error.
             Defaults to ``1e-6``.
-        """
+    """
+
+    def __init__(self, dataset: Dataset, degree: int = 3, tol: float = 1e-6):
 
         self.dataset = dataset
         self.tol = tol
@@ -207,6 +206,29 @@ class DownsamplingTraining:
         )
 
         return amp_indices, phi_indices
+
+    def save_downsampling(self, training_dataset_size: int, file: h5py.File) -> None:
+        """Call the :func:`calculate_downsampling` function
+        and save its result to the provided file.
+
+        Parameters
+        ----------
+        training_dataset_size : int
+            See :func:`calculate_downsampling`.
+        file : h5py.File
+            File to save the indices to.
+        """
+        amp_indices, phi_indices = self.calculate_downsampling(training_dataset_size)
+
+        dict_to_save = {
+            "amplitude_indices": amp_indices,
+            "phase_indices": phi_indices,
+            "amplitude_frequencies": self.dataset.frequencies[amp_indices],
+            "phase_frequencies": self.dataset.frequencies[phi_indices],
+        }
+
+        with file:
+            save_arrays_to_file(file, "downsampling_indices", dict_to_save)
 
     def validate_downsampling(
         self, training_dataset_size: int, validating_dataset_size: int

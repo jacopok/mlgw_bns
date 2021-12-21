@@ -4,4 +4,4 @@ It uses things such as :class:`numpy.ndarray`
 """
 
 
-from .model import TEOBResumSModel
+from .model import Model

@@ -441,9 +441,16 @@ class ParameterGenerator(ABC, Iterator):
             Seed for the random number generator, optional.
             If it is not given, the :attribute:`Dataset.seed_sequence` of the
             dataset is used.
+
+    Class Attributes
+    ----------------
+    number_of_free_parameters: int
+            Number of parameter which will vary during the random parameter generation.
     """
 
-    def __init__(self, dataset: "Dataset", seed: Optional[int] = None):
+    number_of_free_parameters: int = 5
+
+    def __init__(self, dataset: "Dataset", seed: Optional[int] = None, **kwargs):
 
         self.dataset = dataset
 
@@ -719,19 +726,6 @@ class Dataset:
     def hz_to_natural_units(self, frequency_hz: Union[float, np.ndarray]):
         return frequency_hz * self.mass_sum_seconds
 
-    def save(self, file: h5py.File, group_name: str) -> None:
-        """Save the data to a h5 file.
-        This method should be called"""
-        if group_name not in file:
-            file.create_group(group_name)
-
-        for array in self.arrays_to_save:
-            array_path = f"{group_name}/{array}"
-            if array_path not in file:
-                file.create_dataset(f"{group_name}/{array}", data=getattr(self, array))
-            else:
-                file[array_path] = getattr(self, array)
-
     def load(self) -> None:
         """Load the data from a h5 file."""
         # with h5py.File(self.filename, "r") as file:
@@ -760,7 +754,7 @@ class Dataset:
         """
         return self.total_mass ** 2 / AMP_SI_BASE * eta
 
-    def make_parameter_generator(self):
+    def make_parameter_generator(self) -> ParameterGenerator:
         return self.parameter_generator_class(
             dataset=self,
             seed=self.seed_sequence.generate_state(1)[0],
@@ -770,6 +764,23 @@ class Dataset:
     def generate_residuals(
         self, size: int
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Generate a set of waveform residuals.
+
+        Parameters
+        ----------
+        size : int
+            Number of waveforms to generate.
+
+        Returns
+        -------
+        frequencies: np.ndarray,
+                Frequencies at which the waveforms are computed,
+                in natural units.
+        amp_residuals: np.ndarray
+                Amplitude residuals.
+        phi_residuals: np.ndarray
+                Phase residuals.
+        """
 
         amp_residuals = np.empty((size, self.waveform_length))
         phi_residuals = np.empty((size, self.waveform_length))
@@ -785,3 +796,18 @@ class Dataset:
             ) = self.waveform_generator.generate_residuals(params)
 
         return self.frequencies, amp_residuals, phi_residuals
+
+
+def save_arrays_to_file(
+    file: h5py.File, group_name: str, arrays: dict[str, Any]
+) -> None:
+    """Save the data to a h5 file."""
+    if group_name not in file:
+        file.create_group(group_name)
+
+    for name, array in arrays.items():
+        array_path = f"{group_name}/{name}"
+        if array_path not in file:
+            file.create_dataset(array_path, data=array)
+        else:
+            file[array_path] = array
