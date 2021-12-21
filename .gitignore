@@ -13,3 +13,5 @@ docs/html/
 .coverage
 tests/test_results.xml
 mlgw_bns.svg
+.mutmut-cache
+test.h5
