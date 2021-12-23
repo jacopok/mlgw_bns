@@ -9,7 +9,7 @@ from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
 
 from mlgw_bns import Model
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
-from mlgw_bns.downsampling_interpolation import DownsamplingTraining
+from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
 
 
 @fixture(name="variable_dataset")
@@ -68,16 +68,8 @@ def teob_generator():
 
 
 @pytest.fixture()
-def downsampling_dataset():
-    return DownsamplingTraining(
-        dataset=Dataset(
-            initial_frequency_hz=20.0,
-            delta_f_hz=1.0 / 256.0,
-            srate_hz=4096.0,
-        ),
-        degree=3,
-        tol=1e-6,
-    )
+def greedy_downsampling_training(dataset):
+    return GreedyDownsamplingTraining(dataset=dataset)
 
 
 @pytest.fixture
