@@ -1,6 +1,7 @@
 """Functionality for the management of """
 
 import logging
+from abc import ABC, abstractmethod
 from typing import Optional, Tuple
 
 import h5py
@@ -11,8 +12,8 @@ from sortedcontainers import SortedList  # type: ignore
 from .dataset_generation import Dataset, save_arrays_to_file
 
 
-class DownsamplingTraining:
-    """Selection of the downsampling indices with a greedy algorithm.
+class DownsamplingTraining(ABC):
+    """Selection of the downsampling indices.
 
     Parameters
     ----------
@@ -33,7 +34,110 @@ class DownsamplingTraining:
         self.tol = tol
         self.degree = degree
 
-    def _indices_error(
+    @abstractmethod
+    def calculate_downsampling(
+        self, training_dataset_size: int
+    ) -> tuple[list[int], list[int]]:
+        """Calcalate downsampling with a generic algoritm,
+        training on a dataset with a given sizes."""
+
+    def save_downsampling(self, training_dataset_size: int, file: h5py.File) -> None:
+        """Call the :func:`calculate_downsampling` function
+        and save its result to the provided file.
+
+        Parameters
+        ----------
+        training_dataset_size : int
+            See :func:`calculate_downsampling`.
+        file : h5py.File
+            File to save the indices to.
+        """
+        amp_indices, phi_indices = self.calculate_downsampling(training_dataset_size)
+
+        dict_to_save = {
+            "amplitude_indices": amp_indices,
+            "phase_indices": phi_indices,
+            "amplitude_frequencies": self.dataset.frequencies[amp_indices],
+            "phase_frequencies": self.dataset.frequencies[phi_indices],
+        }
+
+        with file:
+            save_arrays_to_file(file, "downsampling_indices", dict_to_save)
+
+    def validate_downsampling(
+        self, training_dataset_size: int, validating_dataset_size: int
+    ) -> tuple[list[float], list[float]]:
+        """Check that the downsampling is working by looking at the
+        reconstruction error on a fresh dataset.
+
+        Parameters
+        ----------
+        training_dataset_size : int
+            How many waveforms to train the downsampling on.
+        validating_dataset_size : int
+            How many waveforms to validate on.
+
+        Returns
+        -------
+        tuple[list[float], list[float]]
+            Amplitude and phase validation errors;
+            these are reported as :math:`L_\infty` errors:
+            the absolute maximum of the difference.
+        """
+
+        amp_indices, phi_indices = self.calculate_downsampling(training_dataset_size)
+
+        frequencies, amp_residuals, phi_residuals = self.dataset.generate_residuals(
+            size=validating_dataset_size
+        )
+        amp_validation = self.validate_indices(
+            amp_indices, frequencies, amp_residuals[-validating_dataset_size:]
+        )
+        phi_validation = self.validate_indices(
+            phi_indices, frequencies, phi_residuals[-validating_dataset_size:]
+        )
+
+        return amp_validation, phi_validation
+
+    def resample(
+        self, x_ds: np.ndarray, new_x: np.ndarray, y_ds: np.ndarray
+    ) -> np.ndarray:
+        """Resample a function :math:`y(x)` from its values
+        at certain points :math:`y_{ds} = y(x_{ds})`.
+
+        Parameters
+        ----------
+        x_ds : np.ndarray
+                Old, sparse :math:`x` values.
+        new_x : np.ndarray
+                New :math:`x` coordinates at which to evaluate the function.
+        y_ds : np.ndarrays
+                Old, sparse :math:`y` values.
+
+        Returns
+        -------
+        new_y : np.ndarray
+            Function evaluated at the coordinates ``new_x``.
+        """
+
+        return interpolate.splev(
+            new_x, tck=interpolate.splrep(x_ds, y_ds, s=0, k=self.degree), der=0
+        )
+
+    def validate_indices(
+        self, indices: list[int], x_val: np.ndarray, ys_val: list[np.ndarray]
+    ) -> list[float]:
+
+        validation = []
+        for y_val in ys_val:
+            ypred = self.resample(x_val[indices], x_val, y_val[indices])
+            validation.append(max(abs(y_val - ypred)))
+
+        return validation
+
+
+class GreedyDownsamplingTraining(DownsamplingTraining):
+    def indices_error(
         self, ytrue: np.ndarray, ypred: np.ndarray, current_indices: SortedList
     ) -> Tuple[list[int], list[float]]:
         """Find new indices to add to the sampling.
@@ -122,7 +226,7 @@ class DownsamplingTraining:
                     continue
                 ypred = self.resample(x_train[indices], x_train, y[indices])
 
-                indices_batch, errs = self._indices_error(y, ypred, indices)
+                indices_batch, errs = self.indices_error(y, ypred, indices)
 
                 if len(errs) < 1:
                     done_with_wf[i] = True
@@ -140,42 +244,6 @@ class DownsamplingTraining:
             )
 
         return list(indices)
-
-    def validate_indices(
-        self, indices: list[int], x_val: np.ndarray, ys_val: list[np.ndarray]
-    ) -> list[float]:
-
-        validation = []
-        for y_val in ys_val:
-            ypred = self.resample(x_val[indices], x_val, y_val[indices])
-            validation.append(max(abs(y_val - ypred)))
-
-        return validation
-
-    def resample(
-        self, x_ds: np.ndarray, new_x: np.ndarray, y_ds: np.ndarray
-    ) -> np.ndarray:
-        """Resample a function :math:`y(x)` from its values
-        at certain points :math:`y_{ds} = y(x_{ds})`.
-
-        Parameters
-        ----------
-        x_ds : np.ndarray
-                Old, sparse :math:`x` values.
-        new_x : np.ndarray
-                New :math:`x` coordinates at which to evaluate the function.
-        y_ds : np.ndarrays
-                Old, sparse :math:`y` values.
-
-        Returns
-        -------
-        new_y : np.ndarray
-            Function evaluated at the coordinates ``new_x``.
-        """
-
-        return interpolate.splev(
-            new_x, tck=interpolate.splrep(x_ds, y_ds, s=0, k=self.degree), der=0
-        )
 
     def calculate_downsampling(
         self, training_dataset_size: int
@@ -206,61 +274,3 @@ class DownsamplingTraining:
         )
 
         return amp_indices, phi_indices
-
-    def save_downsampling(self, training_dataset_size: int, file: h5py.File) -> None:
-        """Call the :func:`calculate_downsampling` function
-        and save its result to the provided file.
-
-        Parameters
-        ----------
-        training_dataset_size : int
-            See :func:`calculate_downsampling`.
-        file : h5py.File
-            File to save the indices to.
-        """
-        amp_indices, phi_indices = self.calculate_downsampling(training_dataset_size)
-
-        dict_to_save = {
-            "amplitude_indices": amp_indices,
-            "phase_indices": phi_indices,
-            "amplitude_frequencies": self.dataset.frequencies[amp_indices],
-            "phase_frequencies": self.dataset.frequencies[phi_indices],
-        }
-
-        with file:
-            save_arrays_to_file(file, "downsampling_indices", dict_to_save)
-
-    def validate_downsampling(
-        self, training_dataset_size: int, validating_dataset_size: int
-    ) -> tuple[list[float], list[float]]:
-        """Check that the downsampling is working by looking at the
-        reconstruction error on a fresh dataset.
-
-        Parameters
-        ----------
-        training_dataset_size : int
-            How many waveforms to train the downsampling on.
-        validating_dataset_size : int
-            How many waveforms to validate on.
-
-        Returns
-        -------
-        tuple[list[float], list[float]]
-            Amplitude and phase validation errors;
-            these are reported as :math:`L_\infty` errors:
-            the absolute maximum of the difference.
-        """
-
-        amp_indices, phi_indices = self.calculate_downsampling(training_dataset_size)
-
-        frequencies, amp_residuals, phi_residuals = self.dataset.generate_residuals(
-            size=validating_dataset_size
-        )
-        amp_validation = self.validate_indices(
-            amp_indices, frequencies, amp_residuals[-validating_dataset_size:]
-        )
-        phi_validation = self.validate_indices(
-            phi_indices, frequencies, phi_residuals[-validating_dataset_size:]
-        )
-
-        return amp_validation, phi_validation
