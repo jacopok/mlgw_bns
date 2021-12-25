@@ -25,9 +25,9 @@ in the project folder.
 
 For this to work, the `TEOBResumS` repository must be installed in the same folder 
 as `mlgw_bns`:
-some_folder/
 
-```bash
+```
+some_folder/
 |--- mlgw_bns/
     |--- mlgw_bns/
     |--- docs/
