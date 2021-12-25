@@ -12,6 +12,13 @@ import h5py
 import numpy as np
 from numpy.random import SeedSequence, default_rng
 
+from .data_management import (
+    Data,
+    DownsamplingIndices,
+    FDWaveform,
+    Residuals,
+    phase_unwrapping,
+)
 from .taylorf2 import (
     SUN_MASS_SECONDS,
     Af3hPN,
@@ -21,7 +28,6 @@ from .taylorf2 import (
     compute_delta_lambda,
     compute_lambda_tilde,
 )
-from .waveform_management import phase_unwrapping
 
 TF2_BASE: float = 3.668693487138444e-19
 # ( Msun * G / c**3)**(5/6) * Hz**(-7/6) * c / Mpc / s
@@ -117,7 +123,9 @@ class WaveformGenerator(ABC):
         """
 
     def generate_residuals(
-        self, params: "WaveformParameters"
+        self,
+        params: "WaveformParameters",
+        downsampling_indices: Optional[DownsamplingIndices] = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Compute the residuals of the :func:`effective_one_body_waveform`
         from the Post-Newtonian one computed with
@@ -129,12 +137,15 @@ class WaveformGenerator(ABC):
         Parameters
         ----------
         params : WaveformParameters
-            Parameters for which to compute the residuals.
-
+                Parameters for which to compute the residuals.
+        downsampling_indices : Optional[DownsamplingIndices]
+                Indices at which to compute the residuals.
+                If not provided (default) the waveform is given at
+                all indices corresponding to the default FFT grid.
         Returns
         -------
         tuple[np.ndarray, np.ndarray]
-            Amplitude residuals and phase residuals.
+                Amplitude residuals and phase residuals.
         """
 
         (
@@ -144,10 +155,35 @@ class WaveformGenerator(ABC):
 
         amplitude_eob, phase_eob = phase_unwrapping(waveform_eob)
 
-        amplitude_pn = self.post_newtonian_amplitude(params, frequencies_eob)
-        phase_pn = self.post_newtonian_phase(params, frequencies_eob)
+        if downsampling_indices:
+            amp_indices, phi_indices = downsampling_indices
+            amp_frequencies = frequencies_eob[amp_indices]
+            phi_frequencies = frequencies_eob[phi_indices]
+
+            amplitude_eob = amplitude_eob[amp_indices]
+            phase_eob = phase_eob[amp_indices]
+        else:
+            amp_frequencies = frequencies_eob
+            phi_frequencies = frequencies_eob
+
+        amplitude_pn = self.post_newtonian_amplitude(params, amp_frequencies)
+        phase_pn = self.post_newtonian_phase(params, phi_frequencies)
 
         return (np.log(amplitude_eob / amplitude_pn), phase_eob - phase_pn)
+
+    def recompose_residuals(
+        self,
+        frequencies: np.ndarray,
+        residuals: Residuals,
+        params: "WaveformParameters",
+    ) -> FDWaveform:
+        amp_residuals, phi_residuals = residuals
+
+        return FDWaveform(
+            amplitudes=np.exp(amp_residuals)
+            * self.post_newtonian_amplitude(params, frequencies),
+            phases=phi_residuals + self.post_newtonian_phase(params, frequencies),
+        )
 
 
 class TEOBResumSGenerator(WaveformGenerator):
@@ -655,11 +691,6 @@ class Dataset:
     def frequencies(self) -> np.ndarray:
         """Frequency array corresponding to this dataset,
         in natural units.
-
-        Returns
-        -------
-        np.ndarray
-            [description]
         """
         return self.hz_to_natural_units(
             np.arange(
@@ -762,8 +793,8 @@ class Dataset:
         )
 
     def generate_residuals(
-        self, size: int
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        self, size: int, downsampling_indices: Optional[DownsamplingIndices] = None
+    ) -> tuple[np.ndarray, Residuals]:
         """Generate a set of waveform residuals.
 
         Parameters
@@ -773,13 +804,12 @@ class Dataset:
 
         Returns
         -------
+        residuals: Residuals
         frequencies: np.ndarray,
-                Frequencies at which the waveforms are computed,
-                in natural units.
-        amp_residuals: np.ndarray
-                Amplitude residuals.
-        phi_residuals: np.ndarray
-                Phase residuals.
+            Frequencies at which the waveforms are computed,
+            in natural units. This array should have shape
+            ``(number_of_sample_points, )``.
+
         """
 
         amp_residuals = np.empty((size, self.waveform_length))
@@ -795,19 +825,4 @@ class Dataset:
                 phi_residuals[i],
             ) = self.waveform_generator.generate_residuals(params)
 
-        return self.frequencies, amp_residuals, phi_residuals
-
-
-def save_arrays_to_file(
-    file: h5py.File, group_name: str, arrays: dict[str, Any]
-) -> None:
-    """Save the data to a h5 file."""
-    if group_name not in file:
-        file.create_group(group_name)
-
-    for name, array in arrays.items():
-        array_path = f"{group_name}/{name}"
-        if array_path not in file:
-            file.create_dataset(array_path, data=array)
-        else:
-            file[array_path][:] = array
+        return self.frequencies, Residuals(amp_residuals, phi_residuals)

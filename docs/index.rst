@@ -21,6 +21,7 @@ Welcome to ``mlgw_bns``'s documentation!
    model
    dataset_generation
    downsampling_interpolation
+   data_management
    
 Indices and tables
 ==================

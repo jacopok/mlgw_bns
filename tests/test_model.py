@@ -15,8 +15,9 @@ def test_validating_model_creation():
 def test_model_generation(model):
 
     model.generate(4)
+    model.save()
 
     with model.file as file:
-        assert "downsampling_indices/amplitude_indices" in file
-        assert file["downsampling_indices/amplitude_indices"][0] == 0
-        assert 25_000 < file["downsampling_indices/amplitude_indices"][10] < 30_000
+        assert "downsampling/amplitude_indices" in file
+        assert file["downsampling/amplitude_indices"][0] == 0
+        assert 25_000 < file["downsampling/amplitude_indices"][10] < 30_000
