@@ -1,3 +1,9 @@
+"""TaylorF2 Post-Newtonian functions. 
+
+Code adapted from `bajes <https://arxiv.org/abs/2102.00017>`_, 
+which can be found in `this repo <https://github.com/matteobreschi/bajes>`_.
+"""
+
 import numpy as np
 from numba import njit  # type: ignore
 

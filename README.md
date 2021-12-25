@@ -4,23 +4,68 @@
 
 This package's purpose is to speed up the generation of template gravitational waveforms for binary neutron star mergers by training a machine learning model on a dataset of waveforms generated with some physically-motivated surrogate.
 
-It is able to reconstruct them with mismatches $\bar{\mathcal{F}} \lesssim 10^{-4}$
-with as little as $\sim 1000$ training waveforms; the number then steadily drops as more training waveforms are used.
+It is able to reconstruct them with mismatches lower than 1/10000,
+with as little as 1000 training waveforms; 
+the accuracy then steadily drops as more training waveforms are used.
 
 Currently, the only model used for training is [`TEOBResumS`](http://arxiv.org/abs/1806.01772),
 but it is planned to introduce the possibility to use others.
 
 ## Installation
 
-Hopefully,
-```python
-conda install mlgw_bns
+When the package will be published hopefully it will look like
+```bash
+pip install mlgw_bns
 ```
-TODO
+but for now one should clone this repo, install poetry and run 
+```bash
+poetry install
+```
+in the project folder.
+
+For this to work, the `TEOBResumS` repository must be installed in the same folder 
+as `mlgw_bns`:
+some_folder/
+
+```bash
+|--- mlgw_bns/
+    |--- mlgw_bns/
+    |--- docs/
+    |--- tests/
+    |--- ...
+|--- teobresums/
+    |--- Python/
+    |--- C/ 
+    |--- ...
+```
 
 ## Usage
 
-TODO
+To make sure everything is working properly one can run a pipeline
+```bash
+poetry run tox
+```
+which will install all missing dependencies, 
+run tests and also build the documentation locally, in the folder `docs/html/`;
+one can access it starting from `index.html`.
+
+To only run the tests, do 
+```bash
+poetry run pytest
+```
+
+To only build the documentation, do
+```bash
+poetry run sphinx-build docs docs/html
+```
+
+Make a pretty dependency graph with 
+```bash
+pydeps mlgw_bns/
+```
+
+There are pre-commit hooks which will clean up the code, 
+check for the correctness 
 
 ## Inner workings
 
