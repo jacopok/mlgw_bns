@@ -1,4 +1,12 @@
-"""Functionality for the management of """
+"""Functionality for the generation of a set of indices 
+which accurately represent a waveform. 
+
+The default implementation is a greedy one, as defined in 
+:class:`GreedyDownsamplingTraining`. 
+
+To provide an alternate method, just subclass
+:class:`DownsamplingTraining`.
+"""
 
 import logging
 from abc import ABC, abstractmethod
@@ -192,7 +200,8 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
         """Greedily downsample y(x) by making sure that the reconstruction error of each of
         the ys (instances of y(x)) is smaller than tol.
 
-        Args:
+        Arguments
+        ---------
             x_train : np.ndarray
                     x array
             ys : np.ndarray
