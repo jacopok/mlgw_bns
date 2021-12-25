@@ -17,7 +17,8 @@ import numpy as np
 from scipy import interpolate  # type: ignore
 from sortedcontainers import SortedList  # type: ignore
 
-from .dataset_generation import Dataset, save_arrays_to_file
+from .data_management import DownsamplingIndices
+from .dataset_generation import Dataset
 
 
 class DownsamplingTraining(ABC):
@@ -43,34 +44,9 @@ class DownsamplingTraining(ABC):
         self.degree = degree
 
     @abstractmethod
-    def calculate_downsampling(
-        self, training_dataset_size: int
-    ) -> tuple[list[int], list[int]]:
+    def calculate_downsampling(self, training_dataset_size: int) -> DownsamplingIndices:
         """Calcalate downsampling with a generic algoritm,
         training on a dataset with a given sizes."""
-
-    def save_downsampling(self, training_dataset_size: int, file: h5py.File) -> None:
-        """Call the :func:`calculate_downsampling` function
-        and save its result to the provided file.
-
-        Parameters
-        ----------
-        training_dataset_size : int
-            See :func:`calculate_downsampling`.
-        file : h5py.File
-            File to save the indices to.
-        """
-        amp_indices, phi_indices = self.calculate_downsampling(training_dataset_size)
-
-        dict_to_save = {
-            "amplitude_indices": amp_indices,
-            "phase_indices": phi_indices,
-            "amplitude_frequencies": self.dataset.frequencies[amp_indices],
-            "phase_frequencies": self.dataset.frequencies[phi_indices],
-        }
-
-        with file:
-            save_arrays_to_file(file, "downsampling_indices", dict_to_save)
 
     def validate_downsampling(
         self, training_dataset_size: int, validating_dataset_size: int
@@ -95,9 +71,12 @@ class DownsamplingTraining(ABC):
 
         amp_indices, phi_indices = self.calculate_downsampling(training_dataset_size)
 
-        frequencies, amp_residuals, phi_residuals = self.dataset.generate_residuals(
+        frequencies, residuals = self.dataset.generate_residuals(
             size=validating_dataset_size
         )
+
+        amp_residuals, phi_residuals = residuals
+
         amp_validation = self.validate_indices(
             amp_indices, frequencies, amp_residuals[-validating_dataset_size:]
         )
@@ -147,7 +126,7 @@ class DownsamplingTraining(ABC):
 class GreedyDownsamplingTraining(DownsamplingTraining):
     def indices_error(
         self, ytrue: np.ndarray, ypred: np.ndarray, current_indices: SortedList
-    ) -> Tuple[list[int], list[float]]:
+    ) -> tuple[list[int], list[float]]:
         """Find new indices to add to the sampling.
 
         Arguments
@@ -254,9 +233,7 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
 
         return list(indices)
 
-    def calculate_downsampling(
-        self, training_dataset_size: int
-    ) -> tuple[list[int], list[int]]:
+    def calculate_downsampling(self, training_dataset_size: int) -> DownsamplingIndices:
         """Compute a close-to-optimal set of indices at which to sample
         waveforms, so that the reconstruction stays below a certain tolerance.
 
@@ -271,9 +248,10 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
                 Indices for amplitude and phase, respectively.
         """
 
-        frequencies, amp_residuals, phi_residuals = self.dataset.generate_residuals(
+        frequencies, residuals = self.dataset.generate_residuals(
             size=training_dataset_size
         )
+        amp_residuals, phi_residuals = residuals
 
         amp_indices = self.find_indices(
             frequencies, amp_residuals[:training_dataset_size]
@@ -282,4 +260,4 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
             frequencies, phi_residuals[:training_dataset_size]
         )
 
-        return amp_indices, phi_indices
+        return DownsamplingIndices(amp_indices, phi_indices)

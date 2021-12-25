@@ -4,6 +4,7 @@ from typing import Optional
 import h5py
 from numba import njit  # type: ignore
 
+from .data_management import DownsamplingIndices
 from .dataset_generation import Dataset, TEOBResumSGenerator, WaveformGenerator
 from .downsampling_interpolation import DownsamplingTraining, GreedyDownsamplingTraining
 
@@ -49,9 +50,22 @@ class Model:
         return h5py.File(f"{self.filename}.h5", mode="a")
 
     def generate(self, training_downsampling_dataset_size: int = 64):
-        self.downsampling_training.save_downsampling(
-            training_downsampling_dataset_size, self.file
+        """Generate a new model from scratch.
+
+
+        Parameters
+        ----------
+        training_downsampling_dataset_size : int, optional
+            By default 64.
+        """
+        self.downsampling_indices: DownsamplingIndices = (
+            self.downsampling_training.calculate_downsampling(
+                training_downsampling_dataset_size
+            )
         )
+
+    def save(self):
+        self.downsampling_indices.save_to_file(self.file)
 
 
 class HyperparameterOptimization:
