@@ -501,7 +501,7 @@ class ParameterGenerator(ABC, Iterator):
 
     @abstractmethod
     def __next__(self) -> WaveformParameters:
-        pass
+        """Provide the next set of parameters."""
 
 
 class UniformParameterGenerator(ParameterGenerator):
@@ -757,12 +757,6 @@ class Dataset:
 
     def hz_to_natural_units(self, frequency_hz: Union[float, np.ndarray]):
         return frequency_hz * self.mass_sum_seconds
-
-    def load(self) -> None:
-        """Load the data from a h5 file."""
-        # with h5py.File(self.filename, "r") as file:
-        #     self.frequencies = file["data"]
-        pass
 
     def taylor_f2_prefactor(self, eta: float) -> float:
         """Prefactor by which to multiply the waveform

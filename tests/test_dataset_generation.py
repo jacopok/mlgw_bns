@@ -22,6 +22,10 @@ def test_teobresums_generator_creation(teob_generator):
 # ((ac.G * u.Msun / ac.c ** 3)**(5 / 6) / (u.Hz)**(7 / 6) * ac.c / u.Mpc / u.s).decompose().value
 
 
+def test_waveform_parameters_equality_fails(parameters):
+    assert parameters.almost_equal_to(3) is NotImplemented
+
+
 def test_waveform_parameters_teobresums_output(parameters):
     """Test the output of a dictionary compatible with teobresums."""
     for key, val in {
