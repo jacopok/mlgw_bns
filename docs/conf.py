@@ -49,7 +49,10 @@ templates_path = ["_templates"]
 # This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
-napoleon_custom_sections = [("Class Attributes", "params_style")]
+napoleon_custom_sections = [
+    ("Class Attributes", "params_style"),
+    ("Abstract Properties", "params_style"),
+]
 
 # -- Options for HTML output -------------------------------------------------
 
