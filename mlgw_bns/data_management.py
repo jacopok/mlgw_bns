@@ -2,27 +2,35 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any, ClassVar, Iterator
+from dataclasses import dataclass, fields
+from typing import Any, ClassVar, Iterator, Optional, Type, TypeVar
 
 import h5py
 import numpy as np
 
+TYPE_DATA = TypeVar("TYPE_DATA", bound="SavableData")
 
-class Data:
+# mypy does not like abstract dataclasses, see https://github.com/python/mypy/issues/5374
+@dataclass  # type: ignore
+class SavableData:
+    """Generic container for data which might need to be saved to file.
+
+    Subclasses should also be decorated with ``@dataclass``.
+
+
+    """
+
     @property
     @abstractmethod
     def group_name(self) -> str:
         """Name of the group this data should be saved as."""
 
-    @property
-    @abstractmethod
-    def _arrays_list(self) -> list[str]:
-        """List of arrays contained in this object.
-
-        These will be accessed when saving the data
-        to file.
+    @classmethod
+    def _arrays_list(cls) -> list[str]:
+        """A list of the names of the arrays contained within
+        a class.
         """
+        return [field.name for field in fields(cls)]
 
     def __iter__(self) -> Iterator[Any]:
         r"""The implementation of this method allows for
@@ -32,21 +40,19 @@ class Data:
         --------
 
         >>> @dataclass
-        ... class Example(Data):
-        ...    _arrays_list = ['item1', 'item2']
+        ... class ExampleData(SavableData):
         ...    item1 : int
         ...    item2 : int
-        >>>
-        >>> ex = Example(1, 2)
+        >>> ex = ExampleData(1, 2)
         >>> item1, item2 = ex
         >>> print(item1)
         1
 
         Here we are giving these items a datatype of int for simplicity,
-        while in real applications they will be ``np.ndarray``s.
+        while in real applications they will typically be ``np.ndarray``s.
         """
 
-        for array_name in self._arrays_list:
+        for array_name in self._arrays_list():
             yield getattr(self, array_name)
 
     def save_to_file(
@@ -57,7 +63,7 @@ class Data:
         if self.group_name not in file:
             file.create_group(self.group_name)
 
-        for array_name in self._arrays_list:
+        for array_name in self._arrays_list():
             array_path = f"{self.group_name}/{array_name}"
             array = getattr(self, array_name)
             if array_path not in file:
@@ -65,19 +71,34 @@ class Data:
             else:
                 file[array_path][:] = array
 
+    @classmethod
+    def from_file(
+        cls: Type[TYPE_DATA],
+        file: h5py.File,
+        group_name: Optional[str] = None,
+    ) -> TYPE_DATA:
+
+        if group_name is None:
+            group_name = str(cls.group_name)
+
+        def arrays_in_file():
+            for array_name in cls._arrays_list():
+                array_path = f"{group_name}/{array_name}"
+                yield file[array_path][...]
+
+        return cls(*arrays_in_file())
+
 
 @dataclass
-class DownsamplingIndices(Data):
-
-    _arrays_list: ClassVar[list[str]] = ["amplitude_indices", "phase_indices"]
-    group_name: ClassVar[str] = "downsampling"
-
+class DownsamplingIndices(SavableData):
     amplitude_indices: list[int]
     phase_indices: list[int]
 
+    group_name: ClassVar[str] = "downsampling"
+
 
 @dataclass
-class Residuals(Data):
+class Residuals(SavableData):
     """Dataclass which contains a set of sample frequencies
     as well as amplitude and phase residuals.
 
@@ -95,18 +116,14 @@ class Residuals(Data):
     ----------------
     """
 
-    _arrays_list: ClassVar[list[str]] = [
-        "amplitude_residuals",
-        "phase_residuals",
-    ]
-    group_name: ClassVar[str] = "residuals"
-
     amplitude_residuals: np.ndarray
     phase_residuals: np.ndarray
 
+    group_name: ClassVar[str] = "residuals"
+
 
 @dataclass
-class FDWaveform(Data):
+class FDWaveform(SavableData):
     """Dataclass which contains a set of sample frequencies
     as well as the amplitude and phase of frequency-domain waveforms.
 
@@ -121,14 +138,10 @@ class FDWaveform(Data):
     ----------------
     """
 
-    _arrays_list: ClassVar[list[str]] = [
-        "amplitudes",
-        "phases",
-    ]
-    group_name: ClassVar[str] = "residuals"
-
     amplitudes: np.ndarray
     phases: np.ndarray
+
+    group_name: ClassVar[str] = "waveforms"
 
 
 def phase_unwrapping(
