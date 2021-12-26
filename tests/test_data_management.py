@@ -4,11 +4,14 @@ import pytest
 from mlgw_bns.data_management import DownsamplingIndices
 
 
-def test_downsampling_indices_saving(file):
+@pytest.mark.parametrize("saving_count", [1, 2])
+def test_downsampling_indices_saving(file, saving_count):
 
     di = DownsamplingIndices([1, 2, 3], [4, 5, 6])
 
-    di.save_to_file(file)
+    for _ in range(saving_count):
+        # running this once or twice should make no difference
+        di.save_to_file(file)
 
     di2 = DownsamplingIndices.from_file(file)
 

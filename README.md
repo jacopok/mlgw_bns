@@ -61,11 +61,19 @@ poetry run sphinx-build docs docs/html
 
 Make a pretty dependency graph with 
 ```bash
-pydeps mlgw_bns/
+poetry run pydeps mlgw_bns/
+```
+
+To make an html page showing the test coverage of the code, do
+```bash
+poetry run coverage html
 ```
 
 There are pre-commit hooks which will clean up the code, 
-check for the correctness 
+format everything with `black`, check that there are no large files,
+check that the typing is correct with `mypy`. 
+
+
 
 ## Inner workings
 
