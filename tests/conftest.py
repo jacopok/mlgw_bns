@@ -3,6 +3,7 @@ which all other testing files can then use."""
 
 import os
 
+import h5py
 import numpy as np
 import pytest
 from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
@@ -74,10 +75,19 @@ def greedy_downsampling_training(dataset):
 
 @pytest.fixture
 def model():
-    fname = "test"
-    model = Model(fname)
+    name = "test"
+    model = Model(name)
     yield model
-    os.remove(f"{fname}.h5")
+    os.remove(f"{name}.h5")
+
+
+@pytest.fixture
+def file():
+    fname = "test.h5"
+    file = h5py.File(fname, mode="a")
+    yield file
+    file.close()
+    os.remove(fname)
 
 
 fixture_union("all", ["variable_dataset", "variable_parameters"])

@@ -11,12 +11,13 @@ import EOBRun_module  # type: ignore
 import h5py
 import numpy as np
 from numpy.random import SeedSequence, default_rng
+from tqdm import tqdm  # type: ignore
 
 from .data_management import (
-    Data,
     DownsamplingIndices,
     FDWaveform,
     Residuals,
+    SavableData,
     phase_unwrapping,
 )
 from .taylorf2 import (
@@ -817,7 +818,7 @@ class Dataset:
 
         parameter_generator = self.make_parameter_generator()
 
-        for i in range(size):
+        for i in tqdm(range(size)):
             params = next(parameter_generator)
 
             (
