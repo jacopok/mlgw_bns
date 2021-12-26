@@ -3,7 +3,7 @@ Data management
 
 .. automodule:: mlgw_bns.data_management
 
-.. autoclass:: mlgw_bns.data_management.Data
+.. autoclass:: mlgw_bns.data_management.SavableData
     :members:
 
 .. autoclass:: mlgw_bns.data_management.Residuals
@@ -12,5 +12,5 @@ Data management
 .. autoclass:: mlgw_bns.data_management.DownsamplingIndices
     :members:
 
-.. autofunc:: mlgw_bns.data_management.phase_unwrapping
+.. autofunction:: mlgw_bns.data_management.phase_unwrapping
 
