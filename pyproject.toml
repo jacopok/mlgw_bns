@@ -21,7 +21,6 @@ h5py = "^3.6.0"
 TEOBResumSPy = {path='../teobresums/Python', develop=true}
 numba = "^0.54.1"
 sortedcontainers = "^2.4.0"
-mlgw = "^2.0.3"
 
 [tool.poetry.dev-dependencies]
 pytest = "^6.1.2"
