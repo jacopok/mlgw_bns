@@ -44,7 +44,7 @@ class DownsamplingTraining(ABC):
         self.degree = degree
 
     @abstractmethod
-    def calculate_downsampling(self, training_dataset_size: int) -> DownsamplingIndices:
+    def train(self, training_dataset_size: int) -> DownsamplingIndices:
         """Calcalate downsampling with a generic algoritm,
         training on a dataset with a given sizes."""
 
@@ -69,7 +69,7 @@ class DownsamplingTraining(ABC):
             the absolute maximum of the difference.
         """
 
-        amp_indices, phi_indices = self.calculate_downsampling(training_dataset_size)
+        amp_indices, phi_indices = self.train(training_dataset_size)
 
         frequencies, residuals = self.dataset.generate_residuals(
             size=validating_dataset_size
@@ -233,7 +233,7 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
 
         return list(indices)
 
-    def calculate_downsampling(self, training_dataset_size: int) -> DownsamplingIndices:
+    def train(self, training_dataset_size: int) -> DownsamplingIndices:
         """Compute a close-to-optimal set of indices at which to sample
         waveforms, so that the reconstruction stays below a certain tolerance.
 

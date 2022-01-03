@@ -15,7 +15,7 @@ from tqdm import tqdm  # type: ignore
 
 from .data_management import (
     DownsamplingIndices,
-    FDWaveform,
+    FDWaveforms,
     Residuals,
     SavableData,
     phase_unwrapping,
@@ -49,7 +49,7 @@ class WaveformGenerator(ABC):
         at arbitrary frequencies.
         This should be implemented in some fast, closed-form way.
         The speed of the overall model relies on the evaluation
-        of this not taking too long.
+        of this function not taking too long.
 
         Parameters
         ----------
@@ -162,7 +162,7 @@ class WaveformGenerator(ABC):
             phi_frequencies = frequencies_eob[phi_indices]
 
             amplitude_eob = amplitude_eob[amp_indices]
-            phase_eob = phase_eob[amp_indices]
+            phase_eob = phase_eob[phi_indices]
         else:
             amp_frequencies = frequencies_eob
             phi_frequencies = frequencies_eob
@@ -177,10 +177,10 @@ class WaveformGenerator(ABC):
         frequencies: np.ndarray,
         residuals: Residuals,
         params: "WaveformParameters",
-    ) -> FDWaveform:
+    ) -> FDWaveforms:
         amp_residuals, phi_residuals = residuals
 
-        return FDWaveform(
+        return FDWaveforms(
             amplitudes=np.exp(amp_residuals)
             * self.post_newtonian_amplitude(params, frequencies),
             phases=phi_residuals + self.post_newtonian_phase(params, frequencies),
@@ -806,9 +806,15 @@ class Dataset:
             ``(number_of_sample_points, )``.
 
         """
+        if downsampling_indices is None:
+            amp_length = self.waveform_length
+            phi_length = self.waveform_length
+        else:
+            amp_length = downsampling_indices.amp_length
+            phi_length = downsampling_indices.phi_length
 
-        amp_residuals = np.empty((size, self.waveform_length))
-        phi_residuals = np.empty((size, self.waveform_length))
+        amp_residuals = np.empty((size, amp_length))
+        phi_residuals = np.empty((size, phi_length))
 
         parameter_generator = self.make_parameter_generator()
 
@@ -818,6 +824,6 @@ class Dataset:
             (
                 amp_residuals[i],
                 phi_residuals[i],
-            ) = self.waveform_generator.generate_residuals(params)
+            ) = self.waveform_generator.generate_residuals(params, downsampling_indices)
 
         return self.frequencies, Residuals(amp_residuals, phi_residuals)

@@ -1,4 +1,7 @@
-"""Some utility functions."""
+"""Management of data which can be saved 
+in an h5 file.
+
+The idea of these data structures is to """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -8,6 +11,7 @@ from typing import Any, ClassVar, Iterator, Optional, Type, TypeVar
 import h5py
 import numpy as np
 
+# make type hinting available for
 TYPE_DATA = TypeVar("TYPE_DATA", bound="SavableData")
 
 # mypy does not like abstract dataclasses, see https://github.com/python/mypy/issues/5374
@@ -96,6 +100,18 @@ class DownsamplingIndices(SavableData):
 
     group_name: ClassVar[str] = "downsampling"
 
+    @property
+    def amp_length(self):
+        return len(self.amplitude_indices)
+
+    @property
+    def phi_length(self):
+        return len(self.phase_indices)
+
+    @property
+    def length(self):
+        return self.amp_length + self.phi_length
+
 
 @dataclass
 class Residuals(SavableData):
@@ -107,10 +123,10 @@ class Residuals(SavableData):
     ----------
     amplitude_residuals: np.ndarray
             Amplitude residuals. This array should have shape
-            ``(number_of_waveforms, number_of_sample_points)``.
+            ``(number_of_waveforms, number_of_amplitude_sample_points)``.
     phase_residuals: np.ndarray
             Phase residuals. This array should have shape
-            ``(number_of_waveforms, number_of_sample_points)``.
+            ``(number_of_waveforms, number_of_phase_sample_points)``.
 
     Class Attributes
     ----------------
@@ -121,9 +137,75 @@ class Residuals(SavableData):
 
     group_name: ClassVar[str] = "residuals"
 
+    @property
+    def combined(self) -> np.ndarray:
+        """Combine the amplitude and phase residuals
+        into a single array, with shape
+        ``(number_of_waveforms, number_of_amplitude_sample_points+number_of_phase_sample_points)``.
+
+        Returns
+        -------
+        np.ndarray
+            Combined residuals.
+        """
+
+        return np.concatenate((self.amplitude_residuals, self.phase_residuals), axis=1)
+
+    @classmethod
+    def from_combined_residuals(
+        cls, combined_residuals: np.ndarray, numbers_of_points: tuple[int, int]
+    ) -> "Residuals":
+
+        amp_points, phase_points = numbers_of_points
+
+        return cls(
+            combined_residuals[:, :amp_points], combined_residuals[:, -phase_points:]
+        )
+
 
 @dataclass
-class FDWaveform(SavableData):
+class PrincipalComponentData(SavableData):
+    r"""Dataclass which contains a set of sample frequencies
+    as well as amplitude and phase residuals.
+
+    In the parameter definitions, the number of dimensions is the
+    :math:`N` such that each data point belongs to :math:`\mathbb{R}^N`,
+    while the number of components, typically denoted as :math:`K`, is the
+    number of the principal components we choose to keep when
+    reducing the dimensionality of the data.
+
+    Parameters
+    ----------
+    eigenvectors: np.ndarray
+            Eigenvectors from the PCA. This array should have shape
+            ``(number_of_dimensions, number_of_components)``.
+    eigenvalues: np.ndarray
+            Eigenvalues from the PCA. This array should have shape
+            ``(number_of_components, )``.
+    mean: np.ndarray
+            Mean subtracted from the data before decomposing
+            the covariance matrix. This array should have shape
+            ``(number_of_dimensions, )``.
+    principal_components_scaling: np.ndarray
+            Scale by which to divide the principal components,
+            typically computed as the maximum of each in the training.
+            Dividing the eigenvalues by this allows for the scale of the
+            principal components to always be between 0 and 1.
+            This array should have shape
+            ``(number_of_components, )``.
+
+    """
+
+    eigenvectors: np.ndarray
+    eigenvalues: np.ndarray
+    mean: np.ndarray
+    principal_components_scaling: np.ndarray
+
+    group_name: ClassVar[str] = "pca"
+
+
+@dataclass
+class FDWaveforms(SavableData):
     """Dataclass which contains a set of sample frequencies
     as well as the amplitude and phase of frequency-domain waveforms.
 
