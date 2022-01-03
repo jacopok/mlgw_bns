@@ -76,7 +76,7 @@ def greedy_downsampling_training(dataset):
 @pytest.fixture
 def model():
     name = "test"
-    model = Model(name)
+    model = Model(name, pca_components=5)
     yield model
     os.remove(f"{name}.h5")
 
@@ -91,3 +91,12 @@ def file():
 
 
 fixture_union("all", ["variable_dataset", "variable_parameters"])
+
+
+@pytest.fixture
+def random_array():
+    rng = np.random.default_rng(seed=1)
+
+    return rng.multivariate_normal(
+        np.zeros(100), cov=np.diag(1 / np.arange(1, 101) ** 2), size=(100,)
+    )

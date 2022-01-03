@@ -2,7 +2,7 @@ import pytest
 
 
 def test_indices_calculation(greedy_downsampling_training):
-    indices_amp, indices_phi = greedy_downsampling_training.calculate_downsampling(4)
+    indices_amp, indices_phi = greedy_downsampling_training.train(4)
 
     assert len(indices_amp) > 100
     assert len(indices_phi) > 100
