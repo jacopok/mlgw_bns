@@ -37,7 +37,7 @@ def test_downsampling_indices_saving_different_name(file):
 
 def test_saving_and_retrieval_of_data_inside_model(model):
 
-    model.generate(2)
+    model.generate(2, 8)
 
     di = model.downsampling_indices
 

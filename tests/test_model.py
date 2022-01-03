@@ -14,10 +14,12 @@ def test_validating_model_creation():
 
 def test_model_generation(model):
 
-    model.generate(4)
+    model.generate(4, 32)
     model.save()
 
     with model.file as file:
         assert "downsampling/amplitude_indices" in file
         assert file["downsampling/amplitude_indices"][0] == 0
         assert 25_000 < file["downsampling/amplitude_indices"][10] < 30_000
+
+        assert "pca/eigenvalues" in file
