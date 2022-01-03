@@ -134,7 +134,7 @@ class PrincipalComponentAnalysisModel:
     def reconstruct_data(
         reduced_data: np.ndarray, pca_data: PrincipalComponentData
     ) -> np.ndarray:
-        """[summary]
+        """Reconstruct the data.
 
         Parameters
         ----------

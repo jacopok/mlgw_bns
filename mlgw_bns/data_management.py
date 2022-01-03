@@ -155,6 +155,13 @@ class Residuals(SavableData):
     def from_combined_residuals(
         cls, combined_residuals: np.ndarray, numbers_of_points: tuple[int, int]
     ) -> "Residuals":
+        """Generate object from an ND array
+
+        Returns
+        -------
+        [type]
+            [description]
+        """
 
         amp_points, phase_points = numbers_of_points
 
