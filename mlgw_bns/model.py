@@ -4,7 +4,7 @@ from typing import Optional
 import h5py
 from numba import njit  # type: ignore
 
-from .data_management import DownsamplingIndices, PrincipalComponentData
+from .data_management import DownsamplingIndices, PrincipalComponentData, Residuals
 from .dataset_generation import Dataset, TEOBResumSGenerator, WaveformGenerator
 from .downsampling_interpolation import DownsamplingTraining, GreedyDownsamplingTraining
 from .principal_component_analysis import PrincipalComponentTraining
@@ -60,6 +60,7 @@ class Model:
         self,
         training_downsampling_dataset_size: int = 64,
         training_pca_dataset_size: int = 1024,
+        training_nn_dataset_size: int = 1024,
     ):
         """Generate a new model from scratch.
 
@@ -70,6 +71,9 @@ class Model:
             By default 64.
         training_pca_dataset_size : int, optional
             By default 1024.
+        training_pca_dataset_size : int, optional
+            By default 1024.
+
         """
 
         self.downsampling_indices: DownsamplingIndices = (
@@ -83,6 +87,10 @@ class Model:
         self.pca_data: PrincipalComponentData = self.pca_training.train(
             training_pca_dataset_size
         )
+
+        _, residuals = self.dataset.generate_residuals(training_nn_dataset_size)
+
+        self.training_dataset: Residuals = residuals
 
     def save(self):
         for arr in [self.downsampling_indices, self.pca_data]:
