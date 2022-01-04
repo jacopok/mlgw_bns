@@ -35,15 +35,13 @@ def test_downsampling_indices_saving_different_name(file):
         di3 = DownsamplingIndices.from_file(file)
 
 
-def test_saving_and_retrieval_of_data_inside_model(model):
+def test_saving_and_retrieval_of_data_inside_model(generated_model):
 
-    model.generate(2, 8)
+    di = generated_model.downsampling_indices
 
-    di = model.downsampling_indices
+    generated_model.save()
 
-    model.save()
-
-    di2 = DownsamplingIndices.from_file(model.file)
+    di2 = DownsamplingIndices.from_file(generated_model.file)
 
     # Ugly workaround: the default __eq__ implemented by dataclasses
     # does not play well with arrays
