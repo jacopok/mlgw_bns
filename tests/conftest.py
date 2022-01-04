@@ -73,17 +73,23 @@ def greedy_downsampling_training(dataset):
     return GreedyDownsamplingTraining(dataset=dataset)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def model():
-    name = "test"
+    name = "test_model"
     model = Model(name, pca_components=5)
     yield model
     os.remove(f"{name}.h5")
 
 
+@pytest.fixture(scope="session")
+def generated_model(model):
+    model.generate(16, 128)
+    yield model
+
+
 @pytest.fixture
 def file():
-    fname = "test.h5"
+    fname = "test_file.h5"
     file = h5py.File(fname, mode="a")
     yield file
     file.close()

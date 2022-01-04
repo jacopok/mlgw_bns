@@ -1,5 +1,6 @@
 import numpy as np
 
+from mlgw_bns.data_management import PrincipalComponentData
 from mlgw_bns.principal_component_analysis import PrincipalComponentAnalysisModel
 
 
@@ -34,3 +35,9 @@ def test_pca_model_reconstruction_inexact(random_array):
 
     assert np.allclose(reconstructed_array, random_array, atol=1e-2, rtol=1e-2)
     assert np.average(abs(reconstructed_array - random_array)) < 1e-3
+
+
+def test_pca_in_model(generated_model):
+    pca_data = generated_model.pca_data
+
+    assert isinstance(pca_data, PrincipalComponentData)
