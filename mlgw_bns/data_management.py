@@ -70,9 +70,21 @@ class SavableData:
         for array_name in self._arrays_list():
             array_path = f"{self.group_name}/{array_name}"
             array = getattr(self, array_name)
+
+            # convert to numpy array here in order to be able to get
+            # the shape of lists as well
+            shape = np.array(array).shape
+
             if array_path not in file:
-                file.create_dataset(array_path, data=array)
+                # the purpose of "maxshape=None" is to make the size variable
+                file.create_dataset(
+                    array_path,
+                    data=array,
+                    maxshape=tuple(None for _ in shape),
+                )
+
             else:
+                file[array_path].resize(shape)
                 file[array_path][:] = array
 
     @classmethod
