@@ -5,7 +5,12 @@ import h5py
 from numba import njit  # type: ignore
 
 from .data_management import DownsamplingIndices, PrincipalComponentData, Residuals
-from .dataset_generation import Dataset, TEOBResumSGenerator, WaveformGenerator
+from .dataset_generation import (
+    Dataset,
+    ParameterSet,
+    TEOBResumSGenerator,
+    WaveformGenerator,
+)
 from .downsampling_interpolation import DownsamplingTraining, GreedyDownsamplingTraining
 from .principal_component_analysis import PrincipalComponentTraining
 
@@ -88,12 +93,15 @@ class Model:
             training_pca_dataset_size
         )
 
-        _, residuals = self.dataset.generate_residuals(training_nn_dataset_size)
+        _, parameters, residuals = self.dataset.generate_residuals(
+            training_nn_dataset_size
+        )
 
         self.training_dataset: Residuals = residuals
+        self.training_parameters: ParameterSet = parameters
 
     def save(self):
-        for arr in [self.downsampling_indices, self.pca_data]:
+        for arr in [self.downsampling_indices, self.pca_data, self.training_dataset]:
             arr.save_to_file(self.file)
 
 
