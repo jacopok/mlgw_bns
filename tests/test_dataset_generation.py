@@ -3,6 +3,7 @@ import pytest
 
 from mlgw_bns.dataset_generation import (
     Dataset,
+    ParameterSet,
     TEOBResumSGenerator,
     UniformParameterGenerator,
     WaveformGenerator,
@@ -99,7 +100,7 @@ def test_tf2_phi_generation_time(benchmark, parameters, frequencies, teob_genera
 
 @pytest.mark.benchmark(group="residual-generation", min_rounds=3)
 def test_dataset_generation_size_1(benchmark, variable_dataset):
-    frequencies, res = benchmark(variable_dataset.generate_residuals, size=1)
+    frequencies, params, res = benchmark(variable_dataset.generate_residuals, size=1)
     amp, phi = res
 
     assert np.isclose(
@@ -112,6 +113,8 @@ def test_dataset_generation_size_1(benchmark, variable_dataset):
         == phi.shape[-1]
         == variable_dataset.waveform_length
     )
+
+    assert isinstance(params, ParameterSet)
 
 
 def test_changing_parameter_generation_ranges(dataset):

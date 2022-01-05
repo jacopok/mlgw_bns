@@ -21,4 +21,4 @@ def test_model_saving(generated_model):
         assert file["downsampling/amplitude_indices"][0] == 0
         assert 25_000 < file["downsampling/amplitude_indices"][10] < 30_000
 
-        assert "pca/eigenvalues" in file
+        assert "principal_component_analysis/eigenvalues" in file

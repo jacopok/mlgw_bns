@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Optional, Type, Union
+from typing import Any, ClassVar, Optional, Type, Union
 
 import EOBRun_module  # type: ignore
 import h5py
@@ -331,6 +331,14 @@ class WaveformParameters:
             parallel to the orbital angular momentum of the binary.
     chi_2 : float
             Aligned spin component of the smaller star.
+
+    Class Attributes
+    ----------------
+    number_of_parameters: int
+            How many intrinsic parameters are modelled.
+            This class variable should equal the number of other
+            floating-point attributes the class has,
+            it is included for convenience.
     """
 
     mass_ratio: float
@@ -339,6 +347,8 @@ class WaveformParameters:
     chi_1: float
     chi_2: float
     dataset: "Dataset"
+
+    number_of_parameters: ClassVar[int] = 5
 
     def almost_equal_to(self, other: object):
         """Check for equality with another set of parameters,
@@ -462,6 +472,54 @@ class WaveformParameters:
             "timeShift": 0.0,
             "iota": 0.0,
         }
+
+    @property
+    def array(self):
+        return np.array(
+            [self.mass_ratio, self.lambda_1, self.lambda_2, self.chi_1, self.chi_2]
+        )
+
+
+@dataclass
+class ParameterSet(SavableData):
+    """Dataclass which contains an array of parameters for waveform generation.
+
+    Parameters
+    ----------
+    parameter_array: np.ndarray
+            Array with shape
+            ``(number_of_parameter_tuples, number_of_parameters)``,
+            where ``number_of_parameters==5`` currently.s
+    """
+
+    parameter_array: np.ndarray
+
+    group_name: ClassVar[str] = "training_parameters"
+
+    def at_indices(
+        self, indices: Union[slice, list[int]], dataset: Dataset
+    ) -> list[WaveformParameters]:
+        """Return a list of WaveformParameters
+
+        Parameters
+        ----------
+        indices : Union[slice, list[int]]
+            Indices at which to pick the waveforms to return
+        dataset : Dataset
+            Dataset, required for the initialization of :class:`WaveformParameters`.
+
+        Returns
+        -------
+        list[WaveformParameters]
+
+        >>> param_set = ParameterSet(np.array([[1, 2, 3, 4, 5]]))
+        >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
+        >>> wp_list = param_set.at_indices([0], dataset)
+        >>> print(wp_list[0].array)
+        [1 2 3 4 5]
+        """
+        reduced_array = self.parameter_array[indices]
+        return [WaveformParameters(*params, dataset) for params in reduced_array]  # type: ignore
 
 
 class ParameterGenerator(ABC, Iterator):
@@ -788,14 +846,19 @@ class Dataset:
         )
 
     def generate_residuals(
-        self, size: int, downsampling_indices: Optional[DownsamplingIndices] = None
-    ) -> tuple[np.ndarray, Residuals]:
+        self,
+        size: int,
+        downsampling_indices: Optional[DownsamplingIndices] = None,
+    ) -> tuple[np.ndarray, ParameterSet, Residuals]:
         """Generate a set of waveform residuals.
 
         Parameters
         ----------
         size : int
-            Number of waveforms to generate.
+                Number of waveforms to generate.
+        downsampling_indices: Optional[DownsamplingIndices]
+                If provided, return the waveform only at these indices,
+                which can be different between phase and amplitude.
 
         Returns
         -------
@@ -815,6 +878,7 @@ class Dataset:
 
         amp_residuals = np.empty((size, amp_length))
         phi_residuals = np.empty((size, phi_length))
+        parameter_array = np.empty((size, WaveformParameters.number_of_parameters))
 
         parameter_generator = self.make_parameter_generator()
 
@@ -826,4 +890,10 @@ class Dataset:
                 phi_residuals[i],
             ) = self.waveform_generator.generate_residuals(params, downsampling_indices)
 
-        return self.frequencies, Residuals(amp_residuals, phi_residuals)
+            parameter_array[i] = params.array
+
+        return (
+            self.frequencies,
+            ParameterSet(parameter_array),
+            Residuals(amp_residuals, phi_residuals),
+        )

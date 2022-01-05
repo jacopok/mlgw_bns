@@ -220,7 +220,7 @@ class PrincipalComponentData(SavableData):
     mean: np.ndarray
     principal_components_scaling: np.ndarray
 
-    group_name: ClassVar[str] = "pca"
+    group_name: ClassVar[str] = "principal_component_analysis"
 
 
 @dataclass

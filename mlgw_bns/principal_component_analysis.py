@@ -50,8 +50,9 @@ class PrincipalComponentTraining:
             "Generating %s waveforms for PCA training", number_of_training_waveforms
         )
 
-        frequencies, residuals = self.dataset.generate_residuals(
-            number_of_training_waveforms, self.downsampling_indices
+        _, _, residuals = self.dataset.generate_residuals(
+            number_of_training_waveforms,
+            self.downsampling_indices,
         )
 
         logging.info("Fitting PCA model")

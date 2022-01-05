@@ -71,7 +71,7 @@ class DownsamplingTraining(ABC):
 
         amp_indices, phi_indices = self.train(training_dataset_size)
 
-        frequencies, residuals = self.dataset.generate_residuals(
+        frequencies, _, residuals = self.dataset.generate_residuals(
             size=validating_dataset_size
         )
 
@@ -248,7 +248,7 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
                 Indices for amplitude and phase, respectively.
         """
 
-        frequencies, residuals = self.dataset.generate_residuals(
+        frequencies, _, residuals = self.dataset.generate_residuals(
             size=training_dataset_size
         )
         amp_residuals, phi_residuals = residuals
