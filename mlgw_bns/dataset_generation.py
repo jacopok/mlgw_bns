@@ -489,14 +489,20 @@ class ParameterSet(SavableData):
     parameter_array: np.ndarray
             Array with shape
             ``(number_of_parameter_tuples, number_of_parameters)``,
-            where ``number_of_parameters==5`` currently.s
+            where ``number_of_parameters==5`` currently.
     """
 
     parameter_array: np.ndarray
 
     group_name: ClassVar[str] = "training_parameters"
 
-    def at_indices(
+    def __post_init__(self):
+        assert self.parameter_array.shape[1] == WaveformParameters.number_of_parameters
+
+    def __getitem__(self, key):
+        return self.__class__(self.parameter_array[key])
+
+    def waveform_parameters_at_indices(
         self, indices: Union[slice, list[int]], dataset: Dataset
     ) -> list[WaveformParameters]:
         """Return a list of WaveformParameters
@@ -512,9 +518,14 @@ class ParameterSet(SavableData):
         -------
         list[WaveformParameters]
 
+        Examples
+        --------
+
+        We generate a :class:`ParameterSet` with a single array of parameters ,
+
         >>> param_set = ParameterSet(np.array([[1, 2, 3, 4, 5]]))
         >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
-        >>> wp_list = param_set.at_indices([0], dataset)
+        >>> wp_list = param_set.waveform_parameters_at_indices([0], dataset)
         >>> print(wp_list[0].array)
         [1 2 3 4 5]
         """
