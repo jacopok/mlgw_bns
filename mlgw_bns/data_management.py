@@ -124,6 +124,10 @@ class DownsamplingIndices(SavableData):
     def length(self):
         return self.amp_length + self.phi_length
 
+    @property
+    def numbers_of_points(self):
+        return self.amp_length, self.phi_length
+
 
 @dataclass
 class Residuals(SavableData):
@@ -148,6 +152,13 @@ class Residuals(SavableData):
     phase_residuals: np.ndarray
 
     group_name: ClassVar[str] = "residuals"
+
+    def __post_init__(self):
+        assert self.amplitude_residuals.shape[0] == self.phase_residuals.shape[0]
+
+    def __len__(self):
+
+        return self.amplitude_residuals.shape[0]
 
     @property
     def combined(self) -> np.ndarray:
