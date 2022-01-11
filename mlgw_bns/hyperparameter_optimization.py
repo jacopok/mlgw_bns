@@ -21,6 +21,42 @@ class HyperparameterOptimization:
     """Manager for the optimization of the hyperparameters
     corresponding to a certain :class:`Model`.
 
+    The optimization performed is over two variables:
+    the reconstruction accuracy and the training time.
+
+    **Reconstruction accuracy** is quantified by looking at the average
+    square error in the reconstruction of the residuals;
+    spefifically, the average is taken over both amplitude and phase residuals,
+    and the value returned by the :meth:`objective` function is the base-10
+    logarithm of this.
+
+    **Training time** accounts for both the time required to train the
+    neural network and the estimated time required to generate the waveforms
+    needed for the training.
+    This can vary, since one of the hyperparameters varied in the training
+    is the number of waveforms in the training dataset.
+
+    Including it is convenient since having more waveforms ---
+    a finer sampling of the waveform space ---
+    means the optimal network might be different.
+
+    However, only ever training networks with as large a number of waveforms
+    as we might wish to use in the end gets expensive;
+    therefore, we vary the number of training waveforms in the optimization,
+    so that the optuna study is able to learn the basic region of parameter space
+    which it is best to explore, and then extend that knowledge to the
+    new region of the parameter space with more training waveforms.
+
+    The inclusion of this cost term is needed since, typically,
+    using more waveforms will yield a better fit.
+    So, we do multi-parameter optimization: see, for example,
+    `Multiobjective tree-structured parzen estimator
+    for computationally expensive optimization problems <https://doi.org/10.1145/3377930.3389817>`_
+    by Ozaki et al.
+
+    To visualize the Pareto front of the optimization, one can use the
+    :meth:`plot_pareto` method after an optimization run.
+
     Parameters
     ----------
     model: Model
@@ -37,10 +73,19 @@ class HyperparameterOptimization:
             the initializer looks for a file with the correct name
             in the local directory and uses it,
             and it creates a new study if it cannot find it.
+
+    Class Attributes
+    waveform_gen_time: float
+            Reference generation time for a single waveform,
+            to be used in the computation of the effective time
+            in the :meth:`objective`.
+            Defaults to 0.1.
+    save_every_n_minutes: float
+            When running the optimization through :meth:`optimize`,
+            every how many minutes to save the study.
+            Defaults to 10.
     """
 
-    # reference generation time for a single waveform,
-    # to be used in the computation of the effective time
     waveform_gen_time: float = 0.1
 
     save_every_n_minutes: float = 10.0
@@ -220,3 +265,39 @@ class HyperparameterOptimization:
             self.study, target=lambda t: t.values[0], target_name="Error"
         )
         fig.show()
+
+    def best_hyperparameters(
+        self, training_number: Optional[int] = None
+    ) -> Hyperparameters:
+        """Yield the best hyperparameters found using less than
+        a certain training waveform.
+
+        Parameters
+        ----------
+        training_number : int, optional
+            Number of training waveforms; by default None,
+            in which case return the hyperparameters
+            for as many waveforms as the current model has available.
+
+        Returns
+        -------
+        Hyperparameters
+        """
+
+        best_trials = self.study.best_trials
+
+        if training_number is None:
+            training_number = self.training_data_number
+
+        accuracy = lambda trial: trial.values[0]
+
+        best_trial = sorted(
+            [
+                trial
+                for trial in best_trials
+                if trial.params["n_train"] <= training_number
+            ],
+            key=accuracy,
+        )[0]
+
+        return Hyperparameters(**best_trial.params)
