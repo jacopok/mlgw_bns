@@ -23,6 +23,7 @@ Welcome to ``mlgw_bns``'s documentation!
    downsampling_interpolation
    data_management
    principal_component_analysis
+   hyperparameter_optimization
    
 Indices and tables
 ==================

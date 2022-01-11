@@ -2,4 +2,9 @@ Model for waveform generation
 =============================
 
 .. automodule:: mlgw_bns.model
-   :members:
+
+.. autoclass:: mlgw_bns.model.Model
+    :members:
+
+.. autoclass:: mlgw_bns.model.Hyperparameters
+    :members:
