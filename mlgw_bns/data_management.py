@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
-from typing import Any, ClassVar, Iterator, Optional, Type, TypeVar
+from typing import Any, ClassVar, Iterator, Optional, Type, TypeVar, Union
 
 import h5py
 import numpy as np
@@ -146,6 +146,8 @@ class Residuals(SavableData):
 
     Class Attributes
     ----------------
+    group_name: str = "residuals"
+            Name of the group in the h5 file these will be saved in.
     """
 
     amplitude_residuals: np.ndarray
@@ -157,8 +159,15 @@ class Residuals(SavableData):
         assert self.amplitude_residuals.shape[0] == self.phase_residuals.shape[0]
 
     def __len__(self):
-
         return self.amplitude_residuals.shape[0]
+
+    def __getitem__(self, key: Union[slice, list[int]]):
+        return self.__class__(self.amplitude_residuals[key], self.phase_residuals[key])
+
+    def __hash__(self):
+        return hash(
+            (self.amplitude_residuals.tostring(), self.phase_residuals.tostring())
+        )
 
     @property
     def combined(self) -> np.ndarray:
@@ -178,19 +187,52 @@ class Residuals(SavableData):
     def from_combined_residuals(
         cls, combined_residuals: np.ndarray, numbers_of_points: tuple[int, int]
     ) -> "Residuals":
-        """Generate object from an ND array
+        """Generate object from a ``np.ndarray``
+        containing the combined residuals: amplitude and phase
+        appended to each other.
 
-        Returns
-        -------
-        [type]
-            [description]
+        The number of points these will each contain is given as the argument
+        ``numbers_of_points == (amp_points, phase_points)``.
+
         """
 
         amp_points, phase_points = numbers_of_points
 
+        assert combined_residuals.shape[1] == amp_points + phase_points
+
         return cls(
             combined_residuals[:, :amp_points], combined_residuals[:, -phase_points:]
         )
+
+    def flatten_phase(
+        self, frequencies: np.ndarray, first_section_flat: float = 0.2
+    ) -> None:
+        """Subtract a linear term from the phase,
+        such that it is often close to 0.
+
+        Parameters
+        ----------
+        frequencies: np.ndarray
+                Frequencies to which the phase points correspond.
+                Required for the linear term subtraction.
+        first_section_flat: float
+                The linear term is chosen so that the first
+                phase residual is zero, and so is the one corresponding
+                to this fraction of the frequencies.
+                Defaults to .1.
+        """
+
+        number_of_points = self.phase_residuals.shape[1]
+
+        index = int(first_section_flat * number_of_points)
+
+        for i, phase_arr in enumerate(self.phase_residuals):
+            slope = (phase_arr[index] - phase_arr[0]) / (
+                frequencies[index] - frequencies[0]
+            )
+            self.phase_residuals[i] = (
+                phase_arr - slope * (frequencies - frequencies[0]) - phase_arr[0]
+            )
 
 
 @dataclass
