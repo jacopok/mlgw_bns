@@ -39,6 +39,21 @@ AMP_SI_BASE: float = 4.2425873413901263e24
 class WaveformGenerator(ABC):
     """Generator of theoretical waveforms
     according to some pre-existing model.
+
+    This is an abstract class: users may extend ``mlgw_bns`` by
+    subclassing this and training a networks using that new waveform generator.
+
+    This can be accomplished by implementing the methods
+    :meth:`post_newtonian_amplitude`,
+    :meth:`post_newtonian_phase` and
+    :meth:`effective_one_body_waveform`.
+
+    Users may wish to leave the Post-Newtonian model already implemented here
+    and only switch TEOBResumS to another waveform template:
+    the easiest way to accomplish this is to subclass TEOBResumSGenerator
+    and only override its :meth:`effective_one_body_waveform` method.
+
+
     """
 
     @abstractmethod
@@ -176,14 +191,47 @@ class WaveformGenerator(ABC):
         self,
         frequencies: np.ndarray,
         residuals: Residuals,
-        params: "WaveformParameters",
+        params: "ParameterSet",
+        dataset: "Dataset",
     ) -> FDWaveforms:
+        """Recompose a set of residuals into true waveforms.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which the waveform is given, in natural units
+        residuals : Residuals
+            Residuals to recompose.
+        params : ParameterSet
+            Parameters of the waveforms corresponding to the residuals.
+        dataset : Dataset
+            Reference dataset.
+
+        Returns
+        -------
+        FDWaveforms
+            Reconstructed waveforms; these may differ from the original ones
+            by a linear phase term (corresponding to a time shift) even if no manipulation
+            has been done, because of how the :class:`Residuals` are stored.
+        """
+
         amp_residuals, phi_residuals = residuals
 
+        waveform_param_list = params.waveform_parameters(dataset)
+
+        pn_amps = np.ndarray(
+            [
+                self.post_newtonian_amplitude(par, frequencies)
+                for par in waveform_param_list
+            ]
+        )
+        pn_phis = np.ndarray(
+            [self.post_newtonian_phase(par, frequencies) for par in waveform_param_list]
+        )
+
         return FDWaveforms(
-            amplitudes=np.exp(amp_residuals)
-            * self.post_newtonian_amplitude(params, frequencies),
-            phases=phi_residuals + self.post_newtonian_phase(params, frequencies),
+            amplitudes=np.exp(amp_residuals) * pn_amps,
+            phases=phi_residuals + pn_phis,
         )
 
 
@@ -502,15 +550,11 @@ class ParameterSet(SavableData):
     def __getitem__(self, key):
         return self.__class__(self.parameter_array[key])
 
-    def waveform_parameters_at_indices(
-        self, indices: Union[slice, list[int]], dataset: Dataset
-    ) -> list[WaveformParameters]:
-        """Return a list of WaveformParameters
+    def waveform_parameters(self, dataset: Dataset) -> list[WaveformParameters]:
+        """Return a list of WaveformParameters.
 
         Parameters
         ----------
-        indices : Union[slice, list[int]]
-            Indices at which to pick the waveforms to return
         dataset : Dataset
             Dataset, required for the initialization of :class:`WaveformParameters`.
 
@@ -525,12 +569,12 @@ class ParameterSet(SavableData):
 
         >>> param_set = ParameterSet(np.array([[1, 2, 3, 4, 5]]))
         >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
-        >>> wp_list = param_set.waveform_parameters_at_indices([0], dataset)
+        >>> wp_list = param_set.waveform_parameters(dataset)
         >>> print(wp_list[0].array)
         [1 2 3 4 5]
         """
-        reduced_array = self.parameter_array[indices]
-        return [WaveformParameters(*params, dataset) for params in reduced_array]  # type: ignore
+
+        return [WaveformParameters(*params, dataset) for params in self.parameter_array]  # type: ignore
 
 
 class ParameterGenerator(ABC, Iterator):
