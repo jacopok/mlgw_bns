@@ -26,9 +26,55 @@ from .principal_component_analysis import (
 
 @dataclass
 class Hyperparameters:
+    r"""Dataclass containing the parameters which are passed to
+    the neural network for training, as well as a few more.
+
+    Parameters
+    ----------
+    pc_exponent: float
+            Exponent to be used in the normalization of the
+            principal components: the network learns to reconstruct
+            :math:`x_i \lambda_i^\alpha`, where
+            :math:`x_i` are the principal-component
+            representation of a waveform, while
+            :math:`\lambda_i` are the eigenvalues of the PCA
+            and finally :math:`\alpha` is this parameter.
+    n_train: float
+            Number of waveforms to use in the training.
+    hidden_layer_sizes: tuple[int, ...]
+            Sizes of the layers in the neural network.
+            For more details, refer to the documentation
+            of the :class:`MLPRegressor`.
+    activation: str
+            Activation function.
+            For more details, refer to the documentation
+            of the :class:`MLPRegressor`.
+    alpha: float
+            Regularization parameter.
+            For more details, refer to the documentation
+            of the :class:`MLPRegressor`.
+    batch_size: int
+            For more details, refer to the documentation
+            of the :class:`MLPRegressor`.
+    learning_rate_init: float
+            For more details, refer to the documentation
+            of the :class:`MLPRegressor`.
+    tol: float
+            For more details, refer to the documentation
+            of the :class:`MLPRegressor`.
+    validation_fraction: float
+            For more details, refer to the documentation
+            of the :class:`MLPRegressor`.
+    n_iter_no_change: float
+            For more details, refer to the documentation
+            of the :class:`MLPRegressor`.
+    """
 
     # controls how much weight is give to higher principal components
     pc_exponent: float
+
+    # number of training data points to use
+    n_train: int
 
     # parameters for the sklearn neural network
     hidden_layer_sizes: tuple[int, ...]
@@ -40,11 +86,12 @@ class Hyperparameters:
     validation_fraction: float
     n_iter_no_change: float
 
-    # number of training data points to use
-    n_train: Optional[int]
-
     @property
-    def nn_params(self):
+    def nn_params(self) -> dict[str, Union[int, float, str, bool, tuple[int, ...]]]:
+        """Return a dictionary which can be readily unpacked
+        and used to initialize a :class:`MLPRegressor`.
+        """
+
         return {
             "max_iter": 1000,
             "hidden_layer_sizes": self.hidden_layer_sizes,
@@ -61,6 +108,16 @@ class Hyperparameters:
 
     @classmethod
     def from_trial(cls, trial: optuna.Trial, n_train_max: int):
+        """Generate the hyperparameter set starting from an
+        :class:`optuna.Trial`.
+
+        Parameters
+        ----------
+        trial : optuna.Trial
+                Used to generate the parameters.
+        n_train_max : int
+                Upper bound for the attribute :attr:`n_train`.
+        """
 
         n_layers = trial.suggest_int("n_layers", 2, 4)
 
@@ -74,7 +131,7 @@ class Hyperparameters:
                 trial.suggest_categorical("activation", ["relu", "tanh", "logistic"])
             ),
             alpha=trial.suggest_loguniform("alpha", 1e-6, 1e-1),  # Default: 1e-4
-            batch_size=trial.suggest_int("batch_size", 150, 250),  # Default: 200
+            batch_size=trial.suggest_int("batch_size", 100, 200),  # Default: 200
             learning_rate_init=trial.suggest_loguniform(
                 "learning_rate_init", 2e-4, 5e-2
             ),  # Default: 1e-3
@@ -86,22 +143,40 @@ class Hyperparameters:
                 "validation_fraction", 0.1, 0.1
             ),  # Default: 1e-1
             pc_exponent=trial.suggest_loguniform("pc_exponent", 1e-3, 1),
-            n_train=trial.suggest_int("n_train", 100, n_train_max),
+            n_train=trial.suggest_int("n_train", 200, n_train_max),
         )
 
 
 class Model:
-    """Generic ``mlgw_bns`` model.
-    This class implements little functionality by itself,
-    acting instead as a container and wrapper around the different
-    moving parts inside ``mlgw_bns``.
+    """``mlgw_bns`` model.
+    This class incorporates all the functionality required to
+    compute the downsampling indices, train a PCA model,
+    train a neural network and predict new waveforms.
 
-    Functionality:
 
-    * neural network training
-    * fast surrogate waveform generation
-    * saving the model to an h5 file
-
+    Parameters
+    ----------
+    filename : str
+            Name for the model. Saved data will be saved under this name.
+    initial_frequency_hz : float, optional
+            Initial frequency for the waveforms, by default 20.0
+    srate_hz : float, optional
+            Time-domain signal rate for the waveforms,
+            which is twice the maximum frequency of
+            their frequency-domain version.
+            By default 4096.0
+    pca_components : int, optional
+            Number of PCA components to use when reducing
+            the dimensionality of the dataset.
+            By default 30, which is high enough to reach extremely good
+            reconstruction accuracy (mismatches smaller than :math:`10^{-8}`).
+    waveform_generator : WaveformGenerator, optional
+            Generator for the waveforms to be used in the training,
+            by default TEOBResumSGenerator().
+    downsampling_training : DownsamplingTraining, optional
+            Training algorithm for the downsampling;
+            by default None, which means the greedy algorithm
+            implemented in :class:`GreedyDownsamplingTraining` is used.
     """
 
     def __init__(
@@ -140,42 +215,49 @@ class Model:
 
     def generate(
         self,
-        training_downsampling_dataset_size: int = 64,
-        training_pca_dataset_size: int = 1024,
-        training_nn_dataset_size: int = 1024,
+        training_downsampling_dataset_size: Optional[int] = 64,
+        training_pca_dataset_size: Optional[int] = 1024,
+        training_nn_dataset_size: Optional[int] = 1024,
     ) -> None:
         """Generate a new model from scratch.
 
+        The parameters are the sizes of the three datasets to be used when training,
+        if they are set to None they are not computed and the pre-existing
+        values are used instead.
 
         Parameters
         ----------
         training_downsampling_dataset_size : int, optional
-            By default 64.
+                By default 64.
         training_pca_dataset_size : int, optional
-            By default 1024.
-        training_pca_dataset_size : int, optional
-            By default 1024.
+                By default 1024.
+        training_nn_dataset_size : int, optional
+                By default 1024.
 
         """
 
-        self.downsampling_indices: DownsamplingIndices = (
-            self.downsampling_training.train(training_downsampling_dataset_size)
-        )
+        if training_downsampling_dataset_size is not None:
+            self.downsampling_indices: DownsamplingIndices = (
+                self.downsampling_training.train(training_downsampling_dataset_size)
+            )
 
-        self.pca_training = PrincipalComponentTraining(
-            self.dataset, self.downsampling_indices, self.pca_components
-        )
+        if training_pca_dataset_size is not None:
+            self.pca_training = PrincipalComponentTraining(
+                self.dataset, self.downsampling_indices, self.pca_components
+            )
 
-        self.pca_data: PrincipalComponentData = self.pca_training.train(
-            training_pca_dataset_size
-        )
+            self.pca_data: PrincipalComponentData = self.pca_training.train(
+                training_pca_dataset_size
+            )
 
-        _, parameters, residuals = self.dataset.generate_residuals(
-            training_nn_dataset_size
-        )
+        if training_nn_dataset_size is not None:
+            _, parameters, residuals = self.dataset.generate_residuals(
+                training_nn_dataset_size, self.downsampling_indices
+            )
 
-        self.training_dataset: Residuals = residuals
-        self.training_parameters: ParameterSet = parameters
+            self.training_dataset: Residuals = residuals
+            self.training_parameters: ParameterSet = parameters
+
         self.train_parameter_scaler()
 
         self.is_loaded = True
@@ -221,14 +303,9 @@ class Model:
     def reduced_residuals(self) -> np.ndarray:
         """Reduced-dimensionality residuals
         --- in other words, PCA components ---
-        corresponding to :attribute:`training_dataset`.
+        corresponding to :attr:`training_dataset`.
 
-        This attribute is cached, so that it
-
-        Returns
-        -------
-        np.ndarray
-            [description]
+        This attribute is cached.
         """
 
         return self._reduced_residuals(self.training_dataset)
@@ -239,11 +316,34 @@ class Model:
 
     @property
     def pca_model(self) -> PrincipalComponentAnalysisModel:
+        """PCA model to be used for dimensionality reduction.
+
+        Returns
+        -------
+        PrincipalComponentAnalysisModel
+        """
         return PrincipalComponentAnalysisModel(self.pca_components)
 
     def train_nn(
         self, hyper: Hyperparameters, indices: Union[list[int], slice] = slice(None)
     ) -> MLPRegressor:
+        """Train a
+
+        Parameters
+        ----------
+        hyper : Hyperparameters
+            Hyperparameters to be used in the initialization
+            of the network.
+        indices : Union[list[int], slice], optional
+            Indices used to perform a selection of a subsection
+            of the training data; by default ``slice(None)``
+            which means all available training data is used.
+
+        Returns
+        -------
+        MLPRegressor
+            Trained network.
+        """
 
         scaled_params: np.ndarray = self.param_scaler.transform(
             self.training_parameters.parameter_array[indices]
@@ -261,6 +361,23 @@ class Model:
     def predict_residuals_bulk(
         self, params: ParameterSet, nn: MLPRegressor, hyper: Hyperparameters
     ) -> Residuals:
+        """Make a prediction for a set of different parameters,
+        using a network provided as a parameter.
+
+        Parameters
+        ----------
+        params : ParameterSet
+            Parameters of the residuals to reconstruct.
+        nn : MLPRegressor
+            Neural network to use for the reconstruction
+        hyper : Hyperparameters
+            Used just for the :attr:`Hyperparameters.pc_exponent` attribute.
+
+        Returns
+        -------
+        Residuals
+            Prediction through the model plus PCA.
+        """
 
         scaled_params = self.param_scaler.transform(params.parameter_array)
 
