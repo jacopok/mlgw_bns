@@ -75,4 +75,5 @@ intersphinx_mapping = {
     "numpy": ("https://numpy.org/devdocs/", None),
     "sklearn": ("https://scikit-learn.org/stable/", None),
     "h5py": ("https://docs.h5py.org/en/stable/", None),
+    "optuna": ("https://optuna.readthedocs.io/en/stable/", None),
 }
