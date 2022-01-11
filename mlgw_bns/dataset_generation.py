@@ -860,6 +860,7 @@ class Dataset:
         self,
         size: int,
         downsampling_indices: Optional[DownsamplingIndices] = None,
+        flatten_phase: bool = True,
     ) -> tuple[np.ndarray, ParameterSet, Residuals]:
         """Generate a set of waveform residuals.
 
@@ -870,19 +871,28 @@ class Dataset:
         downsampling_indices: Optional[DownsamplingIndices]
                 If provided, return the waveform only at these indices,
                 which can be different between phase and amplitude.
+                Defaults to None.
+        flatten_phase: bool
+                Whether to subtract a linear term from the phase
+                such that it is roughly constant in its first section
+                (through the method :func:`Residuals.flatten_phase`).
+                Defaults to True,
+                but it is always set to False if the downsampling indices
+                are not provided.
 
         Returns
         -------
-        residuals: Residuals
         frequencies: np.ndarray,
             Frequencies at which the waveforms are computed,
             in natural units. This array should have shape
             ``(number_of_sample_points, )``.
-
+        parameters: ParameterSet
+        residuals: Residuals
         """
         if downsampling_indices is None:
             amp_length = self.waveform_length
             phi_length = self.waveform_length
+            flatten_phase = False
         else:
             amp_length = downsampling_indices.amp_length
             phi_length = downsampling_indices.phi_length
@@ -903,8 +913,18 @@ class Dataset:
 
             parameter_array[i] = params.array
 
+        residuals = Residuals(amp_residuals, phi_residuals)
+
+        if flatten_phase:
+            if downsampling_indices is None:
+                indices: Union[slice, list[int]] = slice(None)
+            else:
+                indices = downsampling_indices.phase_indices
+
+            residuals.flatten_phase(self.frequencies[indices])
+
         return (
             self.frequencies,
             ParameterSet(parameter_array),
-            Residuals(amp_residuals, phi_residuals),
+            residuals,
         )
