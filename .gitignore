@@ -14,4 +14,6 @@ docs/html/
 tests/test_results.xml
 mlgw_bns.svg
 .mutmut-cache
-test.h5
+*.h5
+*.pkl
+mlgw_bns/model.py
