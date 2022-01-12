@@ -8,6 +8,7 @@ import h5py
 import joblib  # type: ignore
 import numpy as np
 import optuna
+import pkg_resources
 from numba import njit  # type: ignore
 from sklearn.neural_network import MLPRegressor  # type: ignore
 from sklearn.preprocessing import StandardScaler  # type: ignore
@@ -30,6 +31,8 @@ from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
     PrincipalComponentTraining,
 )
+
+TRIALS_FILE = "data/best_trials.pkl"
 
 
 @dataclass
@@ -168,7 +171,15 @@ class Hyperparameters:
         return cls(**params)
 
     @classmethod
-    def default(cls):
+    def default(cls, training_waveform_number: Optional[int] = None):
+
+        try:
+            if training_waveform_number is not None:
+                best_trials = retrieve_best_trials_list()
+                return best_trial_under_n(best_trials, training_waveform_number)
+        except FileNotFoundError:
+            pass
+
         return cls(
             hidden_layer_sizes=(50, 50),
             activation="relu",
@@ -421,7 +432,7 @@ class Model:
 
     def set_hyper_and_train_nn(self, hyper: Optional[Hyperparameters] = None) -> None:
         if hyper is None:
-            hyper = Hyperparameters.default()
+            hyper = Hyperparameters.default(len(self.training_dataset))
 
         self.nn = self.train_nn(hyper)
         self.hyper = hyper
@@ -524,3 +535,26 @@ class Model:
 #     hp = pre_plus * wf
 #     hc = pre_cross * wf
 #     return hp, hc
+
+
+def retrieve_best_trials_list() -> list[optuna.trial.FrozenTrial]:
+
+    stream = pkg_resources.resource_stream(__name__, TRIALS_FILE)
+    return joblib.load(stream)
+
+
+def best_trial_under_n(
+    best_trials: list[optuna.trial.FrozenTrial], training_number: int
+) -> Hyperparameters:
+
+    accuracy = lambda trial: trial.values[0]
+
+    # take the most accurate trial
+    # which used less training data than the given
+    # training number
+    best_trial = sorted(
+        [trial for trial in best_trials if trial.params["n_train"] <= training_number],
+        key=accuracy,
+    )[0]
+
+    return Hyperparameters.from_frozen_trial(best_trial)

@@ -20,3 +20,4 @@ mlgw_bns/model.py
 prof.html
 .gitignore
 try_model_validation.py
+!mlgw_bns/data/best_trials.pkl
