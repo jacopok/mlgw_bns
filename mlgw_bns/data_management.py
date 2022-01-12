@@ -290,6 +290,8 @@ class FDWaveforms(SavableData):
 
     Class Attributes
     ----------------
+    group_name: str
+        Defaults to "waveforms".
     """
 
     amplitudes: np.ndarray
