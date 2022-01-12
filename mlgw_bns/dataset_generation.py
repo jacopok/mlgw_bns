@@ -20,6 +20,8 @@ from .data_management import (
     SavableData,
     phase_unwrapping,
 )
+
+# from .downsampling_interpolation import DownsamplingTraining
 from .taylorf2 import (
     SUN_MASS_SECONDS,
     Af3hPN,
@@ -186,53 +188,6 @@ class WaveformGenerator(ABC):
         phase_pn = self.post_newtonian_phase(params, phi_frequencies)
 
         return (np.log(amplitude_eob / amplitude_pn), phase_eob - phase_pn)
-
-    def recompose_residuals(
-        self,
-        frequencies: np.ndarray,
-        residuals: Residuals,
-        params: "ParameterSet",
-        dataset: "Dataset",
-    ) -> FDWaveforms:
-        """Recompose a set of residuals into true waveforms.
-
-        Parameters
-        ----------
-        frequencies : np.ndarray
-            Frequencies at which the waveform is given, in natural units
-        residuals : Residuals
-            Residuals to recompose.
-        params : ParameterSet
-            Parameters of the waveforms corresponding to the residuals.
-        dataset : Dataset
-            Reference dataset.
-
-        Returns
-        -------
-        FDWaveforms
-            Reconstructed waveforms; these may differ from the original ones
-            by a linear phase term (corresponding to a time shift) even if no manipulation
-            has been done, because of how the :class:`Residuals` are stored.
-        """
-
-        amp_residuals, phi_residuals = residuals
-
-        waveform_param_list = params.waveform_parameters(dataset)
-
-        pn_amps = np.ndarray(
-            [
-                self.post_newtonian_amplitude(par, frequencies)
-                for par in waveform_param_list
-            ]
-        )
-        pn_phis = np.ndarray(
-            [self.post_newtonian_phase(par, frequencies) for par in waveform_param_list]
-        )
-
-        return FDWaveforms(
-            amplitudes=np.exp(amp_residuals) * pn_amps,
-            phases=phi_residuals + pn_phis,
-        )
 
 
 class TEOBResumSGenerator(WaveformGenerator):
@@ -548,6 +503,7 @@ class ParameterSet(SavableData):
         assert self.parameter_array.shape[1] == WaveformParameters.number_of_parameters
 
     def __getitem__(self, key):
+        """Allow for the slicing of this object to be a closed operation."""
         return self.__class__(self.parameter_array[key])
 
     def waveform_parameters(self, dataset: Dataset) -> list[WaveformParameters]:
@@ -575,6 +531,27 @@ class ParameterSet(SavableData):
         """
 
         return [WaveformParameters(*params, dataset) for params in self.parameter_array]  # type: ignore
+
+    @classmethod
+    def from_parameter_generator(
+        cls, parameter_generator: "ParameterGenerator", number_of_parameter_tuples: int
+    ):
+        """Make a set of new parameter tuples
+        by randomly generating them with a :class:`ParameterGenerator`.
+
+        Parameters
+        ----------
+        parameter_generator : ParameterGenerator
+            To generate the tuples.
+        number_of_parameter_tuples : int
+            How many tuples to generate
+        """
+
+        param_array = np.array(
+            [next(parameter_generator).array for _ in range(number_of_parameter_tuples)]
+        )
+
+        return cls(param_array)
 
 
 class ParameterGenerator(ABC, Iterator):
@@ -690,13 +667,11 @@ class UniformParameterGenerator(ParameterGenerator):
 
 
 class Dataset:
-    r"""A dataset of data generated with some model.
+    r"""Metadata for a dataset.
 
-    Includes:
-
-    * frequencies at which the data are sampled
-    * frequency indices
-    * amplitude and phase residuals for all modes
+    # TODO: the name of this class is misleading,
+    as it contains all information contained to generate
+    the dataset but not the data itself.
 
     The amplitude residuals are defined as
     :math:`\log(A _{\text{EOB}} / A_{\text{PN}})`,
@@ -806,12 +781,17 @@ class Dataset:
         """Frequency array corresponding to this dataset,
         in natural units.
         """
-        return self.hz_to_natural_units(
-            np.arange(
-                self.initial_frequency_hz,
-                self.srate_hz / 2 + self.delta_f_hz,
-                self.delta_f_hz,
-            )
+        return self.hz_to_natural_units(self.frequencies_hz)
+
+    @property
+    def frequencies_hz(self) -> np.ndarray:
+        """Frequency array corresponding to this dataset,
+        in Hz.
+        """
+        return np.arange(
+            self.initial_frequency_hz,
+            self.srate_hz / 2 + self.delta_f_hz,
+            self.delta_f_hz,
         )
 
     def optimal_df_hz(
@@ -947,7 +927,7 @@ class Dataset:
 
         parameter_generator = self.make_parameter_generator()
 
-        for i in tqdm(range(size)):
+        for i in tqdm(range(size), unit="residuals computed"):
             params = next(parameter_generator)
 
             (
@@ -972,3 +952,88 @@ class Dataset:
             ParameterSet(parameter_array),
             residuals,
         )
+
+    def recompose_residuals(
+        self,
+        residuals: Residuals,
+        params: ParameterSet,
+        downsampling_indices: Optional["DownsamplingIndices"] = None,
+    ) -> FDWaveforms:
+        """Recompose a set of residuals into true waveforms.
+
+        Parameters
+        ----------
+        residuals : Residuals
+            Residuals to recompose.
+        params : ParameterSet
+            Parameters of the waveforms corresponding to the residuals.
+        downsampling_indices: DownsamplingIndices, optional
+            Indices at which to sample the waveforms.
+            Defaults to None, which means to use the whole sampling
+
+        Returns
+        -------
+        FDWaveforms
+            Reconstructed waveforms; these may differ from the original ones
+            by a linear phase term (corresponding to a time shift) even if no manipulation
+            has been done, because of how the :class:`Residuals` are stored.
+        """
+
+        amp_residuals, phi_residuals = residuals
+
+        waveform_param_list = params.waveform_parameters(self)
+
+        if downsampling_indices is None:
+            amp_indices: Union[slice, list[int]] = slice(None)
+            phi_indices: Union[slice, list[int]] = slice(None)
+        else:
+            amp_indices = downsampling_indices.amplitude_indices
+            phi_indices = downsampling_indices.phase_indices
+
+        pn_amps = np.array(
+            [
+                self.waveform_generator.post_newtonian_amplitude(
+                    par, self.frequencies[amp_indices]
+                )
+                for par in waveform_param_list
+            ]
+        )
+        pn_phis = np.array(
+            [
+                self.waveform_generator.post_newtonian_phase(
+                    par, self.frequencies[phi_indices]
+                )
+                for par in waveform_param_list
+            ]
+        )
+
+        return FDWaveforms(
+            amplitudes=np.exp(amp_residuals) * pn_amps,
+            phases=phi_residuals + pn_phis,
+        )
+
+    def generate_waveforms_from_params(
+        self,
+        parameters: ParameterSet,
+        downsampling_indices: Optional[DownsamplingIndices] = None,
+    ) -> FDWaveforms:
+
+        if downsampling_indices is None:
+            amp_indices: Union[slice, list[int]] = slice(None)
+            phi_indices: Union[slice, list[int]] = slice(None)
+        else:
+            amp_indices = downsampling_indices.amplitude_indices
+            phi_indices = downsampling_indices.phase_indices
+
+        waveform_param_list = parameters.waveform_parameters(self)
+
+        amps = []
+        phis = []
+
+        for par in tqdm(waveform_param_list, unit="waveforms"):
+            _, cartesian_wf = self.waveform_generator.effective_one_body_waveform(par)
+            amp, phi = phase_unwrapping(cartesian_wf)
+            amps.append(amp[amp_indices])
+            phis.append(phi[phi_indices])
+
+        return FDWaveforms(np.array(amps), np.array(phis))
