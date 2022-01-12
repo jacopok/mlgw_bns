@@ -17,3 +17,6 @@ mlgw_bns.svg
 *.h5
 *.pkl
 mlgw_bns/model.py
+prof.html
+.gitignore
+try_model_validation.py
