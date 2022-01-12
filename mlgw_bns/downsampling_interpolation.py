@@ -107,6 +107,13 @@ class DownsamplingTraining(ABC):
             Function evaluated at the coordinates ``new_x``.
         """
 
+        if x_ds.shape != y_ds.shape:
+            logging.error(
+                f"""Shape mismatch in the downsampling arrays! 
+                The shape of x_ds is {x_ds.shape}
+                while the shape of y_ds is {y_ds.shape}."""
+            )
+
         return interpolate.splev(
             new_x, tck=interpolate.splrep(x_ds, y_ds, s=0, k=self.degree), der=0
         )
