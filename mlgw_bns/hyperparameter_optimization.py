@@ -83,12 +83,12 @@ class HyperparameterOptimization:
     save_every_n_minutes: float
             When running the optimization through :meth:`optimize`,
             every how many minutes to save the study.
-            Defaults to 10.
+            Defaults to 30.
     """
 
     waveform_gen_time: float = 0.1
 
-    save_every_n_minutes: float = 10.0
+    save_every_n_minutes: float = 30.0
 
     def __init__(
         self,
@@ -124,7 +124,7 @@ class HyperparameterOptimization:
     @property
     def study_filename(self) -> str:
         """Name of the file to save the study to."""
-        return f"study_{self.model.filename}.pkl"
+        return f"{self.model.filename}_study.pkl"
 
     def objective(
         self,
@@ -269,8 +269,8 @@ class HyperparameterOptimization:
     def best_hyperparameters(
         self, training_number: Optional[int] = None
     ) -> Hyperparameters:
-        """Yield the best hyperparameters found using less than
-        a certain training waveform.
+        """Return the best hyperparameters found using less than
+        a certain number of training waveforms.
 
         Parameters
         ----------
@@ -291,6 +291,9 @@ class HyperparameterOptimization:
 
         accuracy = lambda trial: trial.values[0]
 
+        # take the most accurate trial
+        # which used less training data than the given
+        # training number
         best_trial = sorted(
             [
                 trial
@@ -300,4 +303,4 @@ class HyperparameterOptimization:
             key=accuracy,
         )[0]
 
-        return Hyperparameters(**best_trial.params)
+        return Hyperparameters.from_frozen_trial(best_trial)
