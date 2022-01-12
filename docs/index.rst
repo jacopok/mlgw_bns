@@ -24,6 +24,7 @@ Welcome to ``mlgw_bns``'s documentation!
    data_management
    principal_component_analysis
    hyperparameter_optimization
+   model_validation
    
 Indices and tables
 ==================
