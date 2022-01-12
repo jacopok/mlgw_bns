@@ -14,7 +14,7 @@ from optuna.visualization import (
 from sklearn.neural_network import MLPRegressor  # type: ignore
 
 from .data_management import Residuals
-from .model import Hyperparameters, Model
+from .model import Hyperparameters, Model, best_trial_under_n
 
 
 class HyperparameterOptimization:
@@ -289,18 +289,7 @@ class HyperparameterOptimization:
         if training_number is None:
             training_number = self.training_data_number
 
-        accuracy = lambda trial: trial.values[0]
+        return best_trial_under_n(best_trials, training_number)
 
-        # take the most accurate trial
-        # which used less training data than the given
-        # training number
-        best_trial = sorted(
-            [
-                trial
-                for trial in best_trials
-                if trial.params["n_train"] <= training_number
-            ],
-            key=accuracy,
-        )[0]
-
-        return Hyperparameters.from_frozen_trial(best_trial)
+    def save_best_trials_to_file(self, filename) -> None:
+        joblib.dump(self.study.best_trials, f"{filename}.pkl")
