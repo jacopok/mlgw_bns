@@ -39,9 +39,9 @@ def test_saving_and_retrieval_of_data_inside_model(generated_model):
 
     di = generated_model.downsampling_indices
 
-    generated_model.save()
+    generated_model.save_arrays()
 
-    di2 = DownsamplingIndices.from_file(generated_model.file)
+    di2 = DownsamplingIndices.from_file(generated_model.file_arrays)
 
     # Ugly workaround: the default __eq__ implemented by dataclasses
     # does not play well with arrays
