@@ -78,7 +78,7 @@ def model():
     name = "test_model"
     model = Model(name, pca_components=5)
     yield model
-    os.remove(f"{name}.h5")
+    os.remove(model.file_arrays.filename)
 
 
 @pytest.fixture(scope="session")
