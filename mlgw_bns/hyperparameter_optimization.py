@@ -213,37 +213,59 @@ class HyperparameterOptimization:
             np.average(amp_square_differences) + np.average(phi_square_differences)
         ) / 2.0
 
-    def optimize(self, timeout_min: float = 10.0, save_to_file=True):
+    def optimize(self, timeout_min: float = 5.0) -> None:
         """Run the optimization ---
-        this is a wrapper around :meth:`optuna.Study.optimize`).
-        This command can take an arbitrary amount of time, therefore
-        its timeout is provided as a parameter.
-        Typically, good results can be achieved within a few hours.
+        this is a wrapper around :meth:`optuna.Study.optimize` ---
+        for a certain amount of minutes.
 
         Parameters
         ----------
         timeout_min : float, optional
-            Number of minutes to run for, by default 10.0.
-        save_to_file : bool, optional
-            Whether to save the study every so often ---
-            the interval between which to save is determined by the class attribute
-            :attr:`save_every_n_minutes`.
-            By default True.
+            Number of minutes to run for, by default 5
         """
 
         obj = lambda trial: self.objective(trial)
+        self.study.optimize(obj, timeout=timeout_min * 60)
 
-        iterations: int = max(int(timeout_min / self.save_every_n_minutes), 1)
+    def optimize_and_save(self, timeout_hr: float = 1.0) -> None:
+        """Run the optimization ---
+        this is a wrapper around :meth:`optuna.Study.optimize`.
+        This command can take an arbitrary amount of time, therefore
+        its timeout is provided as a parameter.
+        Typically, good results can be achieved within a few hours.
 
-        timeout_per_iter = 60 * timeout_min / iterations
+        The interval between which to save is determined by the class attribute
+        :attr:`save_every_n_minutes`.
 
-        for _ in range(iterations):
+        Parameters
+        ----------
+        timeout_hr : float, optional
+            Number of hours to run for, by default 1.
+        """
 
-            self.study.optimize(obj, timeout=timeout_per_iter)
+        iterations: int = max(int(timeout_hr * 60 / self.save_every_n_minutes), 1)
 
-            if save_to_file:
-                joblib.dump(self.study, self.study_filename)
-                logging.info("Saved to file.")
+        expected_datetime_end = datetime.datetime.now() + datetime.timedelta(
+            hours=timeout_hr
+        )
+
+        for n in range(iterations):
+
+            remaining_minutes: float = (
+                expected_datetime_end - datetime.datetime.now()
+            ) / datetime.timedelta(minutes=1)
+
+            if remaining_minutes <= 0:
+                return
+
+            iterations_left: int = iterations - n
+
+            timeout_min: float = remaining_minutes / iterations_left
+
+            self.optimize(timeout_min=timeout_min)
+
+            joblib.dump(self.study, self.study_filename)
+            logging.info("Saved to file.")
 
     def plot_pareto(self) -> None:
         """Plot the Pareto front of the bivariate optimization."""
