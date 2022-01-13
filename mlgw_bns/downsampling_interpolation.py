@@ -108,10 +108,9 @@ class DownsamplingTraining(ABC):
         """
 
         if x_ds.shape != y_ds.shape:
-            logging.error(
+            raise ValueError(
                 f"""Shape mismatch in the downsampling arrays! 
-                The shape of x_ds is {x_ds.shape}
-                while the shape of y_ds is {y_ds.shape}."""
+                The shape of x_ds is {x_ds.shape} while the shape of y_ds is {y_ds.shape}."""
             )
 
         return interpolate.splev(
