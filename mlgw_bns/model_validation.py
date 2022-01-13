@@ -10,7 +10,7 @@ from tqdm import tqdm  # type: ignore
 from .data_management import FDWaveforms
 from .dataset_generation import Dataset, ParameterSet, WaveformGenerator
 from .downsampling_interpolation import DownsamplingIndices, DownsamplingTraining
-from .model import Model
+from .model import Model, cartesian_waveforms_at_frequencies
 
 
 class ValidateModel:
@@ -156,53 +156,3 @@ class ValidateModel:
 
         res = minimize_scalar(to_minimize, method="brent", bracket=(-0.1, 0.1))
         return 1 - (-res.fun) / norm
-
-
-def cartesian_waveforms_at_frequencies(
-    waveforms: FDWaveforms,
-    new_frequencies: np.ndarray,
-    dataset: Dataset,
-    downsampling_training: DownsamplingTraining,
-    downsampling_indices: DownsamplingIndices,
-) -> np.ndarray:
-    """Starting from an array of downsampled waveforms decomposed into
-    amplitude and phase, interpolate them to a new frequency grid and
-    put them in Cartesian form.
-
-    Parameters
-    ----------
-    waveforms : FDWaveforms
-        Waveforms to put in Cartesian form.
-    new_frequencies : np.ndarray
-        Frequencies to resample to, in natural units.
-    dataset : Dataset
-        Reference dataset.
-    downsampling_training : DownsamplingTraining
-        Training model for the downsampling, contains metadata needed for the resampling.
-    downsampling_indices : DownsamplingIndices
-        Downsampling indices, needed for the resampling.
-
-    Returns
-    -------
-    np.ndarray
-        Cartesian waveform.
-    """
-
-    amp_frequencies = dataset.frequencies[downsampling_indices.amplitude_indices]
-    phi_frequencies = dataset.frequencies[downsampling_indices.phase_indices]
-
-    amps = np.array(
-        [
-            downsampling_training.resample(amp_frequencies, new_frequencies, amp)
-            for amp in waveforms.amplitudes
-        ]
-    )
-
-    phis = np.array(
-        [
-            downsampling_training.resample(phi_frequencies, new_frequencies, phi)
-            for phi in waveforms.phases
-        ]
-    )
-
-    return amps * np.exp(1j * phis)
