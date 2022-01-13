@@ -13,12 +13,12 @@ Model for waveform generation
     :members:
 
 
-.. autofunc:: mlgw_bns.model.compute_polarizations
+.. autofunction:: mlgw_bns.model.compute_polarizations
 
-.. autofunc:: mlgw_bns.model.retrieve_best_trials_list
+.. autofunction:: mlgw_bns.model.retrieve_best_trials_list
 
-.. autofunc:: mlgw_bns.model.best_trial_under_n
+.. autofunction:: mlgw_bns.model.best_trial_under_n
 
-.. autofunc:: mlgw_bns.model.cartesian_waveforms_at_frequencies
+.. autofunction:: mlgw_bns.model.cartesian_waveforms_at_frequencies
 
-.. autofunc:: mlgw_bns.model.combine_amplitude_phase
+.. autofunction:: mlgw_bns.model.combine_amplitude_phase
