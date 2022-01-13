@@ -25,6 +25,7 @@ from .dataset_generation import (
     ParameterSet,
     TEOBResumSGenerator,
     WaveformGenerator,
+    WaveformParameters,
 )
 from .downsampling_interpolation import DownsamplingTraining, GreedyDownsamplingTraining
 from .principal_component_analysis import (
@@ -177,7 +178,7 @@ class Hyperparameters:
             if training_waveform_number is not None:
                 best_trials = retrieve_best_trials_list()
                 return best_trial_under_n(best_trials, training_waveform_number)
-        except FileNotFoundError:
+        except (FileNotFoundError, IndexError):
             pass
 
         return cls(
@@ -191,6 +192,47 @@ class Hyperparameters:
             validation_fraction=0.1,
             pc_exponent=0.2,
             n_train=200,
+        )
+
+
+@dataclass
+class ExtendedWaveformParameters(WaveformParameters):
+    """Subclass of :class:`WaveformParameters`.
+    This class includes all the intrinsic parameters contained
+    there, as well as certain extrinsic parameters.
+
+    It is the standard interface with which to predict waveforms
+    with the :class:`Model` class.
+
+    Parameters
+    ----------
+    distance_mpc: float
+            Distance to the compact binary, in Megaparsecs.
+    inclination: float
+            Inclination of the binary, in radians:
+            angle between its orbital angular momentum
+            and the observation direction.
+    reference_phase: float
+            Global phase to be added.
+    time_shift: float
+            Time shift, in seconds: it corresponds to a linear phase term to be added.
+    total_mass: float
+            Total mass of the binary system, in solar masses.
+    """
+
+    distance_mpc: float
+    inclination: float
+    reference_phase: float
+    time_shift: float
+    total_mass: float
+
+    @property
+    def mass_sum_seconds(self) -> float:
+        """Return the total mass of the system, :attr:`total_mass`,
+        measured in seconds (:math:`GM / c^3`)."""
+
+        return self.dataset.mass_sum_seconds * (
+            self.dataset.total_mass / self.total_mass
         )
 
 
@@ -276,8 +318,8 @@ class Model:
     def generate(
         self,
         training_downsampling_dataset_size: Optional[int] = 64,
-        training_pca_dataset_size: Optional[int] = 1024,
-        training_nn_dataset_size: Optional[int] = 1024,
+        training_pca_dataset_size: Optional[int] = 256,
+        training_nn_dataset_size: Optional[int] = 256,
     ) -> None:
         """Generate a new model from scratch.
 
@@ -290,9 +332,9 @@ class Model:
         training_downsampling_dataset_size : int, optional
                 By default 64.
         training_pca_dataset_size : int, optional
-                By default 1024.
+                By default 256.
         training_nn_dataset_size : int, optional
-                By default 1024.
+                By default 256.
 
         """
 
@@ -344,20 +386,22 @@ class Model:
     def load(self) -> None:
         """Load model from the files present in the current folder."""
 
-        self.downsampling_indices = DownsamplingIndices.from_file(self.file_arrays)
-        self.pca_data = PrincipalComponentData.from_file(self.file_arrays)
-        self.training_dataset = Residuals.from_file(self.file_arrays)
-        self.training_parameters = ParameterSet.from_file(self.file_arrays)
+        try:
+            self.downsampling_indices = DownsamplingIndices.from_file(self.file_arrays)
+            self.pca_data = PrincipalComponentData.from_file(self.file_arrays)
+            self.training_dataset = Residuals.from_file(self.file_arrays)
+            self.training_parameters = ParameterSet.from_file(self.file_arrays)
+            self.is_loaded = True
+        except FileNotFoundError:
+            logging.info("No h5 file found.")
 
         try:
             self.hyper = joblib.load(self.filename_hyper)
             self.nn = joblib.load(self.filename_nn)
         except FileNotFoundError:
-            logging.info("No trained network nor hyperparmeters found.")
+            logging.info("No trained network or hyperparmeters found.")
 
         self.train_parameter_scaler()
-
-        self.is_loaded = True
 
     def train_parameter_scaler(self) -> None:
         """Train the parameter scaler, which takes the
@@ -472,8 +516,17 @@ class Model:
         )
 
     def predict_waveforms_bulk(
-        self, params: ParameterSet, nn: MLPRegressor, hyper: Hyperparameters
+        self,
+        params: ParameterSet,
+        nn: Optional[MLPRegressor] = None,
+        hyper: Optional[Hyperparameters] = None,
     ) -> FDWaveforms:
+
+        if nn is None:
+            nn = self.nn
+
+        if hyper is None:
+            hyper = self.hyper
 
         residuals = self.predict_residuals_bulk(params, nn, hyper)
 
@@ -481,63 +534,102 @@ class Model:
             residuals, params, self.downsampling_indices
         )
 
+    def predict(self, frequencies: np.ndarray, params: ExtendedWaveformParameters):
+        """Calculate the waveforms in the plus and cross polarizations,
+        accounting for extrinsic parameters
 
-#     def predict(self, frequencies: np.ndarray, params: dict[str, float]):
-#         """Calculate the waveforms in the plus and cross polarizations,
-#         accounting for extrinsic parameters
+        Parameters
+        ----------
+        frequencies : np.ndarray
+                Frequencies where to compute the waveform, in Hz.
+        params : ExtendedWaveformParameters
+                Parameters, both intrinsic and extrinsic.
 
-#         Parameters
-#         ----------
-#         f (np.ndarray)
-#                 Frequencies where to compute the waveform, in SI units.
-#         params (dict)
-#                 Dictionary of parameters, both intrinsic and extrinsic.
+        Returns
+        -------
+        hp, hc (complex np.ndarray)
+                Plus and cross-polarized waveforms.
 
-#         Returns
-#         -------
-#         hp, hc (complex np.ndarray)
-#                 Plus and cross-polarized waveforms.
+        """
 
-#         """
+        waveforms = self.predict_waveforms_bulk(
+            ParameterSet.from_list_of_waveform_parameters([params])
+        )
 
-#         q = params.pop('q', 1)
-#         eta = q / (1+q)**2
+        phase_shift = (
+            params.reference_phase + (2 * np.pi * params.time_shift) * frequencies
+        )
 
-#         p = [q,
-#             params.pop('lambda1', 0),
-#             params.pop('lambda2', 0),
-#             params.pop('s1z', 0),
-#             params.pop('s2z', 0)]
+        waveforms.phases[0] += phase_shift
 
-#         distance = params.pop('distance', 1)
-#         iota = params.pop('iota', 0)
-#         phi_ref = params.pop('phi_ref', 0)
-#         time_shift  = params.pop('time_shift', 0)
-#         mtot = params.pop('mtot', const.MASS_SUM)
+        cartesian_waveforms = cartesian_waveforms_at_frequencies(
+            waveforms,
+            frequencies * params.mass_sum_seconds,
+            self.dataset,
+            self.downsampling_training,
+            self.downsampling_indices,
+        )
 
-#         inv_mass_sum_hz = const.INV_SUN_MASS_HZ / mtot
+        pre = self.dataset.mlgw_bns_prefactor(params.eta, params.total_mass)
+        cosi = np.cos(params.inclination)
+        pre_plus = (1 + cosi ** 2) / 2 * pre / params.distance_mpc
+        pre_cross = cosi * pre * (-1j) / params.distance_mpc
 
-#         _, amp, phi = self.predict(
-#             freqs = f / inv_mass_sum_hz,
-#             params=p, one_wf=True)
+        return compute_polarizations(cartesian_waveforms[0], pre_plus, pre_cross)
 
-#         phase_shift = phi_ref + (2 * np.pi * time_shift) * f
-#         pre = self.dataset.mlgw_bns_prefactor(eta)
-#         cosi = np.cos(iota)
-#         pre_plus = (1 + cosi ** 2) / 2 * pre / distance
-#         pre_cross = cosi * pre * (-1j) / distance
 
-#         return include_extrinsic_params(amp, phi, phase_shift, pre_plus, pre_cross)
+@njit
+def compute_polarizations(
+    waveform: np.ndarray,
+    pre_plus: Union[complex, float],
+    pre_cross: Union[complex, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute the two polarizations of the waveform,
+    assuming they are the same but for a differerent prefactor
+    (which is the case for compact binary coalescences).
 
-# @njit
-# def include_extrinsic_params(amp: np.ndarray, phi: np.ndarray, phase_shift: float, pre_plus: float, pre_cross: float) -> tuple[np.ndarray, np.ndarray]:
-#     wf = amp * np.exp(1j * (phi + phase_shift))
-#     hp = pre_plus * wf
-#     hc = pre_cross * wf
-#     return hp, hc
+    This function is separated out so that it can be decorated with
+    `numba.njit <https://numba.pydata.org/numba-doc/latest/reference/jit-compilation.html>`_
+    which allows it to be compiled --- this can speed up the computation somewhat.
+
+    Parameters
+    ----------
+    waveform : np.ndarray
+        Cartesian complex-valued waveform.
+    pre_plus : complex
+        Complex-valued prefactor for the plus polarization of the waveform.
+    pre_cross : complex
+        Complex-valued prefactor for the cross polarization of the waveform.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        Plus and cross polarizations: complex-valued arrays.
+    """
+    hp = pre_plus * waveform
+    hc = pre_cross * waveform
+    return hp, hc
 
 
 def retrieve_best_trials_list() -> list[optuna.trial.FrozenTrial]:
+    """Read the list of best trials which is provided
+    with the package.
+
+    This list's location can be found at the location
+    defined by ``TRIALS_FILE``;
+    if one wishes to modify it, a new one can be generated
+    with the method :meth:`save_best_trials_to_file` of the
+    class :class:`mlgw_bns.hyperparameter_optimization.HyperparameterOptimization`
+    after an optimization job has been run.
+
+    The current trials provided are the result of about 30 hours
+    of optimization on a laptop.
+
+    Returns
+    -------
+    list[optuna.trial.FrozenTrial]
+        List of the trials in the Pareto front of an optimization.
+    """
 
     stream = pkg_resources.resource_stream(__name__, TRIALS_FILE)
     return joblib.load(stream)
@@ -546,6 +638,25 @@ def retrieve_best_trials_list() -> list[optuna.trial.FrozenTrial]:
 def best_trial_under_n(
     best_trials: list[optuna.trial.FrozenTrial], training_number: int
 ) -> Hyperparameters:
+    """Utility function to retrieve
+    a set of hyperparameters starting from a list of optimization trials.
+    The best trial in terms of accuracy is returned.
+
+    Parameters
+    ----------
+    best_trials : list[optuna.trial.FrozenTrial]
+        List of trials in the Pareto front of an optimization run.
+        A default value for such a list is the one provided by
+        :func:`retrieve_best_trials_list`.
+    training_number : int
+        Return the best trial obtained while using less than this number
+        of training waveforms.
+
+    Returns
+    -------
+    Hyperparameters
+        Hyperparameters corresponding to the best trial found.
+    """
 
     accuracy = lambda trial: trial.values[0]
 
@@ -558,3 +669,74 @@ def best_trial_under_n(
     )[0]
 
     return Hyperparameters.from_frozen_trial(best_trial)
+
+
+def cartesian_waveforms_at_frequencies(
+    waveforms: FDWaveforms,
+    new_frequencies: np.ndarray,
+    dataset: Dataset,
+    downsampling_training: DownsamplingTraining,
+    downsampling_indices: DownsamplingIndices,
+) -> np.ndarray:
+    """Starting from an array of downsampled waveforms decomposed into
+    amplitude and phase, interpolate them to a new frequency grid and
+    put them in Cartesian form.
+
+    Parameters
+    ----------
+    waveforms : FDWaveforms
+        Waveforms to put in Cartesian form.
+    new_frequencies : np.ndarray
+        Frequencies to resample to, in natural units.
+    dataset : Dataset
+        Reference dataset.
+    downsampling_training : DownsamplingTraining
+        Training model for the downsampling, contains metadata needed for the resampling.
+    downsampling_indices : DownsamplingIndices
+        Downsampling indices, needed for the resampling.
+
+    Returns
+    -------
+    np.ndarray
+        Cartesian waveforms: complex array with shape
+        ``(n_waveforms, len(new_frequencies))``.
+    """
+
+    amp_frequencies = dataset.frequencies[downsampling_indices.amplitude_indices]
+    phi_frequencies = dataset.frequencies[downsampling_indices.phase_indices]
+
+    amps = np.array(
+        [
+            downsampling_training.resample(amp_frequencies, new_frequencies, amp)
+            for amp in waveforms.amplitudes
+        ]
+    )
+
+    phis = np.array(
+        [
+            downsampling_training.resample(phi_frequencies, new_frequencies, phi)
+            for phi in waveforms.phases
+        ]
+    )
+
+    return combine_amplitude_phase(amps, phis)
+
+
+@njit
+def combine_amplitude_phase(amp: np.ndarray, phi: np.ndarray) -> np.ndarray:
+    r"""Starting from arrays of amplitude :math:`A` and phase :math:`\phi`,
+    return the cartesian waveform :math:`A e^{i \phi}`.
+
+    Parameters
+    ----------
+    amp : np.ndarray
+        Amplitude array.
+    phi : np.ndarray
+        Phase array.
+
+    Returns
+    -------
+    np.ndarray
+        Cartesian waveform.
+    """
+    return amp * np.exp(1j * phi)
