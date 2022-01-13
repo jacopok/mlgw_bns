@@ -1,3 +1,4 @@
+import datetime
 import logging
 from dataclasses import dataclass
 from time import perf_counter
@@ -291,5 +292,11 @@ class HyperparameterOptimization:
 
         return best_trial_under_n(best_trials, training_number)
 
-    def save_best_trials_to_file(self, filename) -> None:
+    def save_best_trials_to_file(self, filename: str = "best_trials") -> None:
         joblib.dump(self.study.best_trials, f"{filename}.pkl")
+
+    def total_training_time(self) -> datetime.timedelta:
+        return sum(
+            (t.datetime_complete - t.datetime_start for t in self.study.trials),
+            datetime.timedelta(0, 0),
+        )
