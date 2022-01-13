@@ -293,6 +293,7 @@ class Model:
         self.hyper: Hyperparameters = Hyperparameters.default()
 
         self.is_loaded: bool = False
+        self.nn_trained: bool = False
 
     @property
     def file_arrays(self) -> h5py.File:
@@ -398,6 +399,7 @@ class Model:
         try:
             self.hyper = joblib.load(self.filename_hyper)
             self.nn = joblib.load(self.filename_nn)
+            self.nn_trained = True
         except FileNotFoundError:
             logging.info("No trained network or hyperparmeters found.")
 
@@ -480,6 +482,7 @@ class Model:
 
         self.nn = self.train_nn(hyper)
         self.hyper = hyper
+        self.nn_trained = True
 
     def predict_residuals_bulk(
         self, params: ParameterSet, nn: MLPRegressor, hyper: Hyperparameters

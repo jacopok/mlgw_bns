@@ -99,7 +99,7 @@ class HyperparameterOptimization:
         study: Optional[optuna.Study] = None,
     ):
 
-        assert model.is_loaded
+        assert model.nn_trained
 
         self.model = model
         self.rng = np.random.default_rng(seed=optimization_seed)
@@ -107,7 +107,7 @@ class HyperparameterOptimization:
 
         if study is None:
             try:
-                self.study = joblib.load(self.study_filename)
+                self.study: optuna.Study = joblib.load(self.study_filename)
                 logging.info("Loading study from %s", self.study_filename)
             except FileNotFoundError:
                 self.study = optuna.create_study(
@@ -319,6 +319,8 @@ class HyperparameterOptimization:
 
     def total_training_time(self) -> datetime.timedelta:
         return sum(
-            (t.datetime_complete - t.datetime_start for t in self.study.trials),
-            datetime.timedelta(0, 0),
+            ((t.datetime_complete - t.datetime_start) for t in self.study.trials),  # type: ignore
+            datetime.timedelta(),
         )
+        # Trial.datetime_complete (and _start) are defined as optional in the
+        # FrozenTrial type, but here they will always be set
