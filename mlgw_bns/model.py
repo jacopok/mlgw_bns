@@ -98,9 +98,7 @@ class Hyperparameters:
     validation_fraction: float
     n_iter_no_change: float
 
-    max_iter: ClassVar[int] = 2000
-
-    group_name: ClassVar[str] = "hyperparameters"
+    max_iter: ClassVar[int] = 1000
 
     @property
     def nn_params(self) -> dict[str, Union[int, float, str, bool, tuple[int, ...]]]:
@@ -254,7 +252,7 @@ class Model:
             which is twice the maximum frequency of
             their frequency-domain version.
             By default 4096.0
-    pca_components : int, optional
+    pca_components_number : int, optional
             Number of PCA components to use when reducing
             the dimensionality of the dataset.
             By default 30, which is high enough to reach extremely good
@@ -273,7 +271,7 @@ class Model:
         filename: str,
         initial_frequency_hz: float = 20.0,
         srate_hz: float = 4096.0,
-        pca_components: int = 30,
+        pca_components_number: int = 30,
         waveform_generator: WaveformGenerator = TEOBResumSGenerator(),
         downsampling_training: Optional[DownsamplingTraining] = None,
     ):
@@ -287,13 +285,30 @@ class Model:
             else downsampling_training
         )
 
-        self.pca_components = pca_components
+        self.pca_components_number = pca_components_number
 
         self.nn: Optional[MLPRegressor] = None
         self.hyper: Hyperparameters = Hyperparameters.default()
 
-        self.is_loaded: bool = False
-        self.nn_trained: bool = False
+        self.training_dataset: Optional[Residuals] = None
+        self.training_parameters: Optional[ParameterSet] = None
+
+        self.pca_data: Optional[PrincipalComponentData] = None
+        self.downsampling_indices: Optional[DownsamplingIndices] = None
+
+    @property
+    def auxiliary_data_available(self) -> bool:
+        return self.pca_data is not None and self.downsampling_indices is not None
+
+    @property
+    def nn_available(self) -> bool:
+        return self.nn is not None and self.auxiliary_data_available
+
+    @property
+    def training_dataset_available(self) -> bool:
+        return (
+            self.training_dataset is not None and self.training_parameters is not None
+        )
 
     @property
     def file_arrays(self) -> h5py.File:
@@ -325,8 +340,14 @@ class Model:
         """Generate a new model from scratch.
 
         The parameters are the sizes of the three datasets to be used when training,
-        if they are set to None they are not computed and the pre-existing
-        values are used instead.
+        if they are set to None they are not computed and the pre-existing values are used instead.
+
+        Raises
+        ------
+        AssertionError
+                If one of the parameters is set to None but no
+                pre-existing data is availabele for it.
+
 
         Parameters
         ----------
@@ -340,42 +361,57 @@ class Model:
         """
 
         if training_downsampling_dataset_size is not None:
-            self.downsampling_indices: DownsamplingIndices = (
-                self.downsampling_training.train(training_downsampling_dataset_size)
+            self.downsampling_indices = self.downsampling_training.train(
+                training_downsampling_dataset_size
             )
+        else:
+            assert self.downsampling_indices is not None
 
         if training_pca_dataset_size is not None:
             self.pca_training = PrincipalComponentTraining(
-                self.dataset, self.downsampling_indices, self.pca_components
+                self.dataset, self.downsampling_indices, self.pca_components_number
             )
 
-            self.pca_data: PrincipalComponentData = self.pca_training.train(
-                training_pca_dataset_size
-            )
+            self.pca_data = self.pca_training.train(training_pca_dataset_size)
+        else:
+            assert self.pca_data is not None
 
         if training_nn_dataset_size is not None:
             _, parameters, residuals = self.dataset.generate_residuals(
                 training_nn_dataset_size, self.downsampling_indices
             )
 
-            self.training_dataset: Residuals = residuals
-            self.training_parameters: ParameterSet = parameters
+            self.training_dataset = residuals
+            self.training_parameters = parameters
+        else:
+            assert self.training_dataset is not None
+            assert self.training_parameters is not None
 
         self.train_parameter_scaler()
 
-        self.is_loaded = True
-
-    def save_arrays(self) -> None:
+    def save_arrays(self, include_training_data: bool = True) -> None:
         """Save all big arrays contained in this object to the file
         defined as ``{filename}.h5``.
         """
 
-        for arr in [
+        assert self.pca_data is not None
+        assert self.downsampling_indices is not None
+
+        arr_list: list[SavableData] = [
             self.downsampling_indices,
             self.pca_data,
-            self.training_dataset,
-            self.training_parameters,
-        ]:
+        ]
+
+        if include_training_data:
+            assert self.training_dataset is not None
+            assert self.training_parameters is not None
+
+            arr_list += [
+                self.training_dataset,
+                self.training_parameters,
+            ]
+
+        for arr in arr_list:
             arr.save_to_file(self.file_arrays)
 
     def save(self) -> None:
@@ -392,14 +428,14 @@ class Model:
             self.pca_data = PrincipalComponentData.from_file(self.file_arrays)
             self.training_dataset = Residuals.from_file(self.file_arrays)
             self.training_parameters = ParameterSet.from_file(self.file_arrays)
-            self.is_loaded = True
         except FileNotFoundError:
-            logging.info("No h5 file found.")
+            logging.info("No data file found.")
+
+            # TODO introduce handling of only certain files being present
 
         try:
             self.hyper = joblib.load(self.filename_hyper)
             self.nn = joblib.load(self.filename_nn)
-            self.nn_trained = True
         except FileNotFoundError:
             logging.info("No trained network or hyperparmeters found.")
 
@@ -412,6 +448,7 @@ class Model:
 
         The parameter scaler is always trained on all the available dataset.
         """
+        assert self.training_parameters is not None
 
         self.param_scaler: StandardScaler = StandardScaler().fit(
             self.training_parameters.parameter_array
@@ -421,16 +458,21 @@ class Model:
     def reduced_residuals(self) -> np.ndarray:
         """Reduced-dimensionality residuals
         --- in other words, PCA components ---
-        corresponding to :attr:`training_dataset`.
+        corresponding to the :attr:`training_dataset`.
 
         This attribute is cached.
         """
 
+        assert self.training_dataset is not None
+
         return self._reduced_residuals(self.training_dataset)
 
     @lru_cache(maxsize=1)
-    def _reduced_residuals(self, dataset: Residuals):
-        return self.pca_model.reduce_data(dataset.combined, self.pca_data)
+    def _reduced_residuals(self, residuals: Residuals):
+
+        assert self.pca_data is not None
+
+        return self.pca_model.reduce_data(residuals.combined, self.pca_data)
 
     @property
     def pca_model(self) -> PrincipalComponentAnalysisModel:
@@ -440,7 +482,7 @@ class Model:
         -------
         PrincipalComponentAnalysisModel
         """
-        return PrincipalComponentAnalysisModel(self.pca_components)
+        return PrincipalComponentAnalysisModel(self.pca_components_number)
 
     def train_nn(
         self, hyper: Hyperparameters, indices: Union[list[int], slice] = slice(None)
@@ -462,6 +504,8 @@ class Model:
         MLPRegressor
             Trained network.
         """
+        assert self.training_parameters is not None
+        assert self.pca_data is not None
 
         scaled_params: np.ndarray = self.param_scaler.transform(
             self.training_parameters.parameter_array[indices]
@@ -477,12 +521,23 @@ class Model:
         )
 
     def set_hyper_and_train_nn(self, hyper: Optional[Hyperparameters] = None) -> None:
+        """Train the network according to the hyperparameters given,
+        and set it as a class attribute
+
+        Parameters
+        ----------
+        hyper : Hyperparameters, optional
+            Hyperparameters to use when training the network, by default None.
+            If not given, the default is to fall back to the standard set of hyperparameters
+            provided with the module.
+        """
+
         if hyper is None:
+            assert self.training_dataset is not None
             hyper = Hyperparameters.default(len(self.training_dataset))
 
         self.nn = self.train_nn(hyper)
         self.hyper = hyper
-        self.nn_trained = True
 
     def predict_residuals_bulk(
         self, params: ParameterSet, nn: MLPRegressor, hyper: Hyperparameters
@@ -504,6 +559,9 @@ class Model:
         Residuals
             Prediction through the model plus PCA.
         """
+
+        assert self.pca_data is not None
+        assert self.downsampling_indices is not None
 
         scaled_params = self.param_scaler.transform(params.parameter_array)
 
@@ -554,6 +612,7 @@ class Model:
                 Plus and cross-polarized waveforms.
 
         """
+        assert self.downsampling_indices is not None
 
         waveforms = self.predict_waveforms_bulk(
             ParameterSet.from_list_of_waveform_parameters([params])

@@ -31,8 +31,7 @@ def test_downsampling_indices_saving_different_name(file):
     assert np.array_equal(di.amplitude_indices, di2.amplitude_indices)
     assert np.array_equal(di.phase_indices, di2.phase_indices)
 
-    with pytest.raises(KeyError):
-        di3 = DownsamplingIndices.from_file(file)
+    assert DownsamplingIndices.from_file(file) is None
 
 
 def test_saving_and_retrieval_of_data_inside_model(generated_model):

@@ -92,6 +92,7 @@ class ValidateModel:
         list[float]
             Mismatches between the waveforms, in order.
         """
+        assert self.model.downsampling_indices is not None
 
         cartesian_1 = cartesian_waveforms_at_frequencies(
             waveform_array_1,

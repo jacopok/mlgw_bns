@@ -99,7 +99,8 @@ class HyperparameterOptimization:
         study: Optional[optuna.Study] = None,
     ):
 
-        assert model.nn_trained
+        assert model.nn_available
+        assert model.training_dataset_available
 
         self.model = model
         self.rng = np.random.default_rng(seed=optimization_seed)
@@ -120,6 +121,7 @@ class HyperparameterOptimization:
     @property
     def training_data_number(self) -> int:
         """Number of available training waveforms."""
+        assert self.model.training_dataset is not None
         return len(self.model.training_dataset)
 
     @property
@@ -151,6 +153,8 @@ class HyperparameterOptimization:
                 The training time includes both the training of the network and,
                 roughly, the generation of the waveforms used for training.
         """
+        assert self.model.training_dataset is not None
+        assert self.model.training_parameters is not None
 
         hyper = Hyperparameters.from_trial(trial, n_train_max=self.training_data_number)
 
