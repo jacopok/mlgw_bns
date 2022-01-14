@@ -21,3 +21,5 @@ prof.html
 .gitignore
 try_model_validation.py
 !mlgw_bns/data/best_trials.pkl
+mlgw_bns/data_management.py
+*.pdf
