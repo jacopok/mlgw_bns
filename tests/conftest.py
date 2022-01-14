@@ -76,7 +76,7 @@ def greedy_downsampling_training(dataset):
 @pytest.fixture(scope="session")
 def model():
     name = "test_model"
-    model = Model(name, pca_components=5)
+    model = Model(name, pca_components_number=5)
     yield model
     os.remove(model.file_arrays.filename)
 

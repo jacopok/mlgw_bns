@@ -4,9 +4,10 @@ in an h5 file.
 The idea of these data structures is to """
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
-from typing import Any, ClassVar, Iterator, Optional, Type, TypeVar, Union
+from typing import Any, ClassVar, Iterable, Iterator, Optional, Type, TypeVar, Union
 
 import h5py
 import numpy as np
@@ -92,17 +93,26 @@ class SavableData:
         cls: Type[TYPE_DATA],
         file: h5py.File,
         group_name: Optional[str] = None,
-    ) -> TYPE_DATA:
+    ) -> Optional[TYPE_DATA]:
 
         if group_name is None:
             group_name = str(cls.group_name)
 
-        def arrays_in_file():
-            for array_name in cls._arrays_list():
-                array_path = f"{group_name}/{array_name}"
-                yield file[array_path][...]
+        def arrays_in_file() -> Optional[list[np.ndarray]]:
+            try:
+                array_list = []
+                for array_name in cls._arrays_list():
+                    array_path = f"{group_name}/{array_name}"
+                    array_list.append(file[array_path][...])
+                return array_list
+            except KeyError:
+                logging.warning("Some of the arrays in %s not found", group_name)
+                return None
 
-        return cls(*arrays_in_file())
+        if arrays_in_file() is not None:
+            return cls(*arrays_in_file())
+        else:
+            return None
 
 
 @dataclass
