@@ -543,7 +543,7 @@ lxml = ["lxml"]
 
 [[package]]
 name = "identify"
-version = "2.4.3"
+version = "2.4.4"
 description = "File identification library for Python"
 category = "dev"
 optional = false
@@ -740,7 +740,7 @@ python-versions = ">=3.7"
 
 [[package]]
 name = "lalsuite"
-version = "7.2"
+version = "7.3"
 description = "LIGO Scientific Collaboration Algorithm Library - minimal Python package"
 category = "main"
 optional = false
@@ -1040,7 +1040,7 @@ numpy = "*"
 
 [[package]]
 name = "nvidia-ml-py"
-version = "11.450.51"
+version = "11.515.0"
 description = "Python Bindings for the NVIDIA Management Library"
 category = "dev"
 optional = false
@@ -1617,7 +1617,7 @@ jupyter = ["ipywidgets (>=7.5.1,<8.0.0)"]
 
 [[package]]
 name = "scalene"
-version = "1.3.16"
+version = "1.4.0"
 description = "Scalene: A high-resolution, low-overhead CPU, GPU, and memory profiler for Python"
 category = "dev"
 optional = false
@@ -1626,7 +1626,7 @@ python-versions = ">=3.7"
 [package.dependencies]
 cloudpickle = ">=1.5.0"
 numpy = "*"
-nvidia-ml-py = "11.450.51"
+nvidia-ml-py = ">=11.450.51"
 rich = ">=9.2.0"
 
 [[package]]
@@ -2546,8 +2546,8 @@ html5lib = [
     {file = "html5lib-1.1.tar.gz", hash = "sha256:b2e5b40261e20f354d198eae92afc10d750afb487ed5e50f9c4eaf07c184146f"},
 ]
 identify = [
-    {file = "identify-2.4.3-py2.py3-none-any.whl", hash = "sha256:ac9c919c8ac5b90d03f8e1bce6dedcbd8a3b2a59c46737c04ed852e2d307af29"},
-    {file = "identify-2.4.3.tar.gz", hash = "sha256:8d80d877441073e7222ff272da45ca5ca1d901412790544b446e7d363ad5e9f0"},
+    {file = "identify-2.4.4-py2.py3-none-any.whl", hash = "sha256:aa68609c7454dbcaae60a01ff6b8df1de9b39fe6e50b1f6107ec81dcda624aa6"},
+    {file = "identify-2.4.4.tar.gz", hash = "sha256:6b4b5031f69c48bf93a646b90de9b381c6b5f560df4cbe0ed3cf7650ae741e4d"},
 ]
 idna = [
     {file = "idna-3.3-py3-none-any.whl", hash = "sha256:84d9dd047ffa80596e0f246e2eab0b391788b0503584e8945f2368256d2735ff"},
@@ -2647,13 +2647,13 @@ kiwisolver = [
     {file = "kiwisolver-1.3.2.tar.gz", hash = "sha256:fc4453705b81d03568d5b808ad8f09c77c47534f6ac2e72e733f9ca4714aa75c"},
 ]
 lalsuite = [
-    {file = "lalsuite-7.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:34be3fb46499df0a89112e3fe5da0c01ad76dc017df9666ac29139e706329595"},
-    {file = "lalsuite-7.2-cp37-cp37m-macosx_10_15_x86_64.whl", hash = "sha256:940352376b8078b6770b019ff28c7577a82a7c4ac7da9ca9cf837c4bfb59c242"},
-    {file = "lalsuite-7.2-cp37-cp37m-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:efaebf01dd619dc609ce932e06c74e66d67c1ec69b8968a24eda019c92767e78"},
-    {file = "lalsuite-7.2-cp38-cp38-macosx_10_15_x86_64.whl", hash = "sha256:0b135917e42464227b7fdfaeb5052a3e9649705dd4562f98fd932ac525bc303c"},
-    {file = "lalsuite-7.2-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b397916f0e502fa2c277eda697f694726bb8643baed5efda3cef70a2635aa85c"},
-    {file = "lalsuite-7.2-cp39-cp39-macosx_10_15_x86_64.whl", hash = "sha256:d296070457cd820a1b526d146012f394bcd9fdbc053aced05ec5a245a55024ba"},
-    {file = "lalsuite-7.2-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e237a56996840fedec25ec55327664c887807152f684cd83b102d6e17f745949"},
+    {file = "lalsuite-7.3-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2ce1b75d61d6c973efe20efb9fc5eea4f4a8309dc8a5de968f8a29dab31a7892"},
+    {file = "lalsuite-7.3-cp37-cp37m-macosx_10_15_x86_64.whl", hash = "sha256:5eeb704ee1182c42ce8373a5406684f5cd7e942a71f599fafda5f5c066db43c7"},
+    {file = "lalsuite-7.3-cp37-cp37m-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8ae5b1c4d805df41223524a6441cc458bad5ba869bfbcbeeb9d1f6abc2c60935"},
+    {file = "lalsuite-7.3-cp38-cp38-macosx_10_15_x86_64.whl", hash = "sha256:42bc2125222b7f06537d54fe234b144b2b6143f2a31b265fa928112cd0e55ecb"},
+    {file = "lalsuite-7.3-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:42884d60df97a93ccea9504c4ddebbf9e7173597705388fb493fd3199bcdbc37"},
+    {file = "lalsuite-7.3-cp39-cp39-macosx_10_15_x86_64.whl", hash = "sha256:de09c5c58a2d932f18df98cbe667988de958f45fb6171131e11dd6cbc5106db6"},
+    {file = "lalsuite-7.3-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:155729b5cadb5f6f0eb28609342a0bbc525370b550db0a666aa4836d907857d6"},
 ]
 lazy-object-proxy = [
     {file = "lazy-object-proxy-1.7.1.tar.gz", hash = "sha256:d609c75b986def706743cdebe5e47553f4a5a1da9c5ff66d76013ef396b5a8a4"},
@@ -2989,7 +2989,8 @@ numtest = [
     {file = "numtest-2.0.6.tar.gz", hash = "sha256:31da8011f07cba4763a1db5bb456f9101322ab2ae93da6b6fb3b9639b766a6aa"},
 ]
 nvidia-ml-py = [
-    {file = "nvidia-ml-py-11.450.51.tar.gz", hash = "sha256:5aa6dd23a140b1ef2314eee5ca154a45397b03e68fd9ebc4f72005979f511c73"},
+    {file = "nvidia-ml-py-11.515.0.tar.gz", hash = "sha256:8b064f97e30de27f0fc32dd618b8a57b2cf3263c1346142f0566512247996d9d"},
+    {file = "nvidia_ml_py-11.515.0-py3-none-any.whl", hash = "sha256:f0b9295adfa82c57202520b86caa9d1b319292a8caed5b95646ac46c6f28405e"},
 ]
 optuna = [
     {file = "optuna-2.10.0-py3-none-any.whl", hash = "sha256:457ff8b12b459dc1eeb0178389ff9e5c4da41764cc91152fe324bfd56f88d43f"},
@@ -3274,15 +3275,18 @@ rich = [
     {file = "rich-11.0.0.tar.gz", hash = "sha256:c32a8340b21c75931f157466fefe81ae10b92c36a5ea34524dff3767238774a4"},
 ]
 scalene = [
-    {file = "scalene-1.3.16-cp310-cp310-macosx_10_14_universal2.whl", hash = "sha256:314d3880cc2df2093118f70cfb1c2913af3307a9989804d031e8035e6b41912d"},
-    {file = "scalene-1.3.16-cp310-cp310-manylinux_2_24_x86_64.whl", hash = "sha256:2f27440a19b0e1f0251b7f536078dde9cd3a6a394e0d53fa0ce0cefd5f58fb25"},
-    {file = "scalene-1.3.16-cp37-cp37m-macosx_10_14_universal2.whl", hash = "sha256:559edb3c77ecff3edeacbd32b248c380389af40931c88b2af4fdfbeed6f4bc28"},
-    {file = "scalene-1.3.16-cp37-cp37m-manylinux_2_24_x86_64.whl", hash = "sha256:3057a29f9562fe6a493d17bfff693c29de6427c9c5147278e0bea7160677e06a"},
-    {file = "scalene-1.3.16-cp38-cp38-macosx_10_14_universal2.whl", hash = "sha256:064242ac8eadcdb13155d0c24d7a6e16a66bf0d6093fc8d5d83cbda73e2270a1"},
-    {file = "scalene-1.3.16-cp38-cp38-manylinux_2_24_x86_64.whl", hash = "sha256:cc3cfa3327f186cfb3a92bb76d8be0856548aaaf62ec8b639d96d3ea911e1a68"},
-    {file = "scalene-1.3.16-cp39-cp39-macosx_10_14_universal2.whl", hash = "sha256:f45f63dd3873cf8ad5adaa6ad189323a1a371293e9608d6766f9b5f924421671"},
-    {file = "scalene-1.3.16-cp39-cp39-manylinux_2_24_x86_64.whl", hash = "sha256:3d920dfe61190c499e9f902082d9d92591dd6556f4550f111d836966c6c6f498"},
-    {file = "scalene-1.3.16.tar.gz", hash = "sha256:3c2fb524b4c611773b147dc889e2d58b48a543d3161ea576ccc0db778e9f5915"},
+    {file = "scalene-1.4.0-cp310-cp310-macosx_10_15_universal2.whl", hash = "sha256:0407813d14a2fbf4e474211cc70c0351a62130d6d1a55a7a3268ff9d98bee472"},
+    {file = "scalene-1.4.0-cp310-cp310-manylinux_2_24_x86_64.whl", hash = "sha256:991b284c524a5c4592580abd23b94f430875cad59ab996d3be3db718fe270fdb"},
+    {file = "scalene-1.4.0-cp310-cp310-win_amd64.whl", hash = "sha256:490ef851a633aaf016da234d5618dfb8f6a6001261b33956de1e17b1838ba67c"},
+    {file = "scalene-1.4.0-cp37-cp37m-macosx_10_14_universal2.whl", hash = "sha256:d88ace79d1a715d9504fe897ae759955c1748d06fdc9847ee539386d4baa2533"},
+    {file = "scalene-1.4.0-cp37-cp37m-manylinux_2_24_x86_64.whl", hash = "sha256:0b9a1cd91f7a9566a1054f84f73d4f96380e7c97816d5d04aa9bf90e9fe8c821"},
+    {file = "scalene-1.4.0-cp38-cp38-macosx_10_14_universal2.whl", hash = "sha256:8b6e8e8330a965b36d3927ab6751f3429609fe1d40ac0f3ca741998367e106e6"},
+    {file = "scalene-1.4.0-cp38-cp38-manylinux_2_24_x86_64.whl", hash = "sha256:e28d3cc252b3bd9ea814bf2898b3871edf7dc7bad40b70f61ab9f4fd85abfb5d"},
+    {file = "scalene-1.4.0-cp38-cp38-win_amd64.whl", hash = "sha256:0183f6d7684654d983e852b13cad132ac9b7c70bd54a0ad37b3b1cce3521e788"},
+    {file = "scalene-1.4.0-cp39-cp39-macosx_10_14_universal2.whl", hash = "sha256:85f273f3e06fc98e8817e02bdeaff9c42f7976c23eadc492aa045549523007a5"},
+    {file = "scalene-1.4.0-cp39-cp39-manylinux_2_24_x86_64.whl", hash = "sha256:d14ba3d4db4a4ec7dc2f23ba617359e500fb9cdd24736874733f823ced33731b"},
+    {file = "scalene-1.4.0-cp39-cp39-win_amd64.whl", hash = "sha256:1c58bb4fd4183724d8811ffde0034ebbe4777bc3bb13b2a6083d06d5d654be94"},
+    {file = "scalene-1.4.0.tar.gz", hash = "sha256:c195fd62373102f22bd528a7b157c053db4b080ed9966b9ecd2aaf99b1d6c25c"},
 ]
 scikit-learn = [
     {file = "scikit-learn-1.0.2.tar.gz", hash = "sha256:b5870959a5484b614f26d31ca4c17524b1b0317522199dc985c3b4256e030767"},
