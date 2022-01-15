@@ -6,6 +6,7 @@ import os
 import h5py
 import numpy as np
 import pytest
+from EOBRun_module import EOBRunPy  # type: ignore
 from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
 
 from mlgw_bns import Model
@@ -20,6 +21,7 @@ def fixture_variable_dataset(f_0):
     return Dataset(
         initial_frequency_hz=f_0,
         srate_hz=4096.0,
+        waveform_generator=TEOBResumSGenerator(EOBRunPy),
     )
 
 
@@ -29,6 +31,7 @@ def fixture_dataset():
     return Dataset(
         initial_frequency_hz=20.0,
         srate_hz=4096.0,
+        waveform_generator=TEOBResumSGenerator(EOBRunPy),
     )
 
 
@@ -65,7 +68,7 @@ def frequencies(dataset):
 @pytest.fixture
 def teob_generator():
     """Waveform generator based in TEOBResumS."""
-    return TEOBResumSGenerator()
+    return TEOBResumSGenerator(EOBRunPy)
 
 
 @pytest.fixture()
@@ -83,8 +86,14 @@ def model():
 
 @pytest.fixture(scope="session")
 def generated_model(model):
-    model.generate(16, 32, 32)
+    model.generate(8, 32, 64)
     yield model
+
+
+@pytest.fixture(scope="session")
+def trained_model(generated_model):
+    generated_model.set_hyper_and_train_nn()
+    yield generated_model
 
 
 @pytest.fixture

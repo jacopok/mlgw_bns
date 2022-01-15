@@ -5,9 +5,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, ClassVar, Optional, Type, Union
+from typing import Any, Callable, ClassVar, Optional, Type, Union
 
-import EOBRun_module  # type: ignore
 import h5py
 import numpy as np
 from numpy.random import SeedSequence, default_rng
@@ -190,12 +189,17 @@ class WaveformGenerator(ABC):
         return (np.log(amplitude_eob / amplitude_pn), phase_eob - phase_pn)
 
 
-class TEOBResumSGenerator(WaveformGenerator):
-    """Generate waveforms using the
-    TEOBResumS effective-one-body code,
+class BarePostNewtonianGenerator(WaveformGenerator):
+    """Generate waveforms with
     3.5PN-accurate post-newtonian amplitude,
     and 5.5PN-accurate post-newtonian phase
-    with 7.5PN-accurate tidal terms."""
+    with 7.5PN-accurate tidal terms.
+
+    This classes' :meth:`effective_one_body_waveform` method
+    is not implemented: it is used as a fallback when
+    the ``EOBRun_module`` python wrapper for TEOBResumS
+    cannot be imported.
+    """
 
     def post_newtonian_amplitude(
         self, params: "WaveformParameters", frequencies: np.ndarray
@@ -268,11 +272,23 @@ class TEOBResumSGenerator(WaveformGenerator):
         return phase - phase[0]
 
     def effective_one_body_waveform(self, params: "WaveformParameters"):
+        return NotImplemented
+
+
+class TEOBResumSGenerator(BarePostNewtonianGenerator):
+    """Generate waveforms using the
+    TEOBResumS effective-one-body code"""
+
+    def __init__(self, eobrun_callable: Callable[[dict], tuple[np.ndarray, ...]]):
+        self.eobrun_callable = eobrun_callable
+
+    def effective_one_body_waveform(self, params: "WaveformParameters"):
         r"""Generate an EOB waveform with TEOB.
 
         Examples
         --------
-        >>> tg = TEOBResumSGenerator()
+        >>> from EOBRun_module import EOBRunPy
+        >>> tg = TEOBResumSGenerator(EOBRunPy)
         >>> p = WaveformParameters(1, 300, 300, .3, -.3, Dataset(20., 4096.))
         >>> f, waveform = tg.effective_one_body_waveform(p)
         >>> print(len(waveform))
@@ -281,7 +297,7 @@ class TEOBResumSGenerator(WaveformGenerator):
         (4679.9+3758.8j)
         """
 
-        par_dict = params.teobresums
+        par_dict: dict = params.teobresums
 
         n_additional = 256
 
@@ -296,7 +312,7 @@ class TEOBResumSGenerator(WaveformGenerator):
         new_f0 = f_0 - delta_f * n_additional
         par_dict["initial_frequency"] = new_f0
 
-        f_spa, rhpf, ihpf, _, _ = EOBRun_module.EOBRunPy(par_dict)
+        f_spa, rhpf, ihpf, _, _ = self.eobrun_callable(par_dict)
 
         f_spa = f_spa[n_additional:]
 
@@ -745,7 +761,7 @@ class Dataset:
         initial_frequency_hz: float,
         srate_hz: float,
         delta_f_hz: Optional[float] = None,
-        waveform_generator: WaveformGenerator = TEOBResumSGenerator(),
+        waveform_generator: WaveformGenerator = BarePostNewtonianGenerator(),
         parameter_generator_class: Type[ParameterGenerator] = UniformParameterGenerator,
         parameter_generator_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 42,

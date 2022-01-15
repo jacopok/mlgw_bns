@@ -68,10 +68,9 @@ def test_random_parameter_generation(dataset):
     )
 
 
-def test_generated_waveform_length(variable_parameters):
+def test_generated_waveform_length(variable_parameters, teob_generator):
 
-    generator = TEOBResumSGenerator()
-    freq, waveform = generator.effective_one_body_waveform(variable_parameters)
+    freq, waveform = teob_generator.effective_one_body_waveform(variable_parameters)
 
     dset = variable_parameters.dataset
 
