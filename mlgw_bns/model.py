@@ -21,6 +21,7 @@ from .data_management import (
     SavableData,
 )
 from .dataset_generation import (
+    BarePostNewtonianGenerator,
     Dataset,
     ParameterSet,
     TEOBResumSGenerator,
@@ -155,7 +156,7 @@ class Hyperparameters:
                 "n_iter_no_change", 40, 100, log=True
             ),  # default: 10
             pc_exponent=trial.suggest_loguniform("pc_exponent", 1e-3, 1),
-            n_train=trial.suggest_int("n_train", 200, n_train_max),
+            n_train=trial.suggest_int("n_train", 50, n_train_max),
         )
 
     @classmethod
@@ -233,6 +234,22 @@ class ExtendedWaveformParameters(WaveformParameters):
             self.dataset.total_mass / self.total_mass
         )
 
+    @property
+    def teobresums(self) -> dict[str, Union[float, int]]:
+        """Parameter dictionary in a format compatible with
+        TEOBResumS.
+
+        The parameters are all converted to natural units.
+        """
+        base_dict = super().teobresums
+
+        return base_dict | {
+            "M": self.total_mass,
+            "distance": self.distance_mpc,
+            "inclination": self.inclination,
+        }
+        # TODO figure out if it is possible to also pass the phase and the time shift.
+
 
 class Model:
     """``mlgw_bns`` model.
@@ -258,8 +275,10 @@ class Model:
             By default 30, which is high enough to reach extremely good
             reconstruction accuracy (mismatches smaller than :math:`10^{-8}`).
     waveform_generator : WaveformGenerator, optional
-            Generator for the waveforms to be used in the training,
-            by default TEOBResumSGenerator().
+            Generator for the waveforms to be used in the training;
+            by default None, in which case the system attempts to import
+            the Python wrapper for TEOBResumS, failing which a :class:`BareBarePostNewtonianGenerator`
+            is used, which is unable to generate effective-one-body waveforms.
     downsampling_training : DownsamplingTraining, optional
             Training algorithm for the downsampling;
             by default None, which means the greedy algorithm
@@ -272,18 +291,34 @@ class Model:
         initial_frequency_hz: float = 20.0,
         srate_hz: float = 4096.0,
         pca_components_number: int = 30,
-        waveform_generator: WaveformGenerator = TEOBResumSGenerator(),
+        waveform_generator: Optional[WaveformGenerator] = None,
         downsampling_training: Optional[DownsamplingTraining] = None,
     ):
 
         self.filename = filename
-        self.dataset = Dataset(initial_frequency_hz, srate_hz)
-        self.waveform_generator = waveform_generator
-        self.downsampling_training = (
-            GreedyDownsamplingTraining(self.dataset)
-            if downsampling_training is None
-            else downsampling_training
+
+        if waveform_generator is None:
+            try:
+                from EOBRun_module import EOBRunPy  # type: ignore
+
+                self.waveform_generator: WaveformGenerator = TEOBResumSGenerator(
+                    EOBRunPy
+                )
+            except ModuleNotFoundError:
+                self.waveform_generator = BarePostNewtonianGenerator()
+        else:
+            self.waveform_generator = waveform_generator
+
+        self.dataset = Dataset(
+            initial_frequency_hz, srate_hz, waveform_generator=self.waveform_generator
         )
+
+        if downsampling_training is None:
+            self.downsampling_training: DownsamplingTraining = (
+                GreedyDownsamplingTraining(self.dataset)
+            )
+        else:
+            self.downsampling_training = downsampling_training
 
         self.pca_components_number = pca_components_number
 
@@ -619,7 +654,9 @@ class Model:
         )
 
         phase_shift = (
-            params.reference_phase + (2 * np.pi * params.time_shift) * frequencies
+            params.reference_phase
+            + (2 * np.pi * params.time_shift)
+            * self.dataset.frequencies_hz[self.downsampling_indices.phase_indices]
         )
 
         waveforms.phases[0] += phase_shift

@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import Type
+from typing import Optional, Type
 
 import numpy as np
 import pycbc.psd  # type: ignore
@@ -31,6 +31,7 @@ class ValidateModel:
 
         self.model = model
 
+        self.pds_name: str = psd_name
         self.psd: pycbc.types.FrequencySeries = pycbc.psd.from_string(
             psd_name,
             length=len(model.dataset.frequencies) // downsample_by,
@@ -44,6 +45,9 @@ class ValidateModel:
 
         self.frequencies = psd_frequencies[mask]
         self.psd_values = self.psd[mask]
+
+    def psd_at_frequencies(self, frequencies: np.ndarray) -> np.ndarray:
+        return np.array([self.psd.at_frequency(freq) for freq in frequencies])
 
     def validation_mismatches(self, number_of_validation_waveforms: int) -> list[float]:
         """Validate the model by computing the mismatch between
@@ -117,7 +121,12 @@ class ValidateModel:
             )
         ]
 
-    def mismatch(self, waveform_1: np.ndarray, waveform_2: np.ndarray) -> float:
+    def mismatch(
+        self,
+        waveform_1: np.ndarray,
+        waveform_2: np.ndarray,
+        frequencies: Optional[np.ndarray] = None,
+    ) -> float:
         """Compute the mismatch between two Cartesian waveforms.
 
         The mismatch between waveforms :math:`a` and :math:`b` is defined as the
@@ -136,12 +145,29 @@ class ValidateModel:
             First Cartesian waveform to compare.
         waveform_2 : np.ndarray
             Second Cartesian waveform to compare.
-        frequencies : np.ndarray
-            Frequencies at which the two waveforms are sampled.
+        frequencies : np.ndarray, optional
+            Frequencies at which the two waveforms are sampled, in Hz.
+            If None (default), it is assumed that the waveforms are sampled at
+            the attribute :attr:`frequencies` of this object.
         """
 
-        psd_values = self.psd_values
-        frequencies = self.frequencies
+        if frequencies is None:
+            psd_values = self.psd_values
+            frequencies = self.frequencies
+        else:
+            # TODO deal with the possibility that the frequencies may
+            # lie outside the range of the PSD's frequencies
+            # (recompute whole PSD?)
+            # (or just ignore the part outside of the bounds?)
+            # for now we do the latter
+            mask = np.bitwise_and(
+                self.model.dataset.initial_frequency_hz < frequencies,
+                frequencies < self.model.dataset.srate_hz / 2.0,
+            )
+            psd_values = self.psd_at_frequencies(frequencies[mask])
+            frequencies = frequencies[mask]
+            waveform_1 = waveform_1[mask]
+            waveform_2 = waveform_2[mask]
 
         def product(a: np.ndarray, b: np.ndarray) -> float:
             integral = integrate.trapezoid(np.conj(a) * b / psd_values, x=frequencies)
@@ -152,6 +178,7 @@ class ValidateModel:
         )
 
         def to_minimize(t_c: float) -> float:
+            assert frequencies is not None
             offset = np.exp(2j * np.pi * (frequencies * t_c))
             return -product(waveform_1, waveform_2 * offset)
 
