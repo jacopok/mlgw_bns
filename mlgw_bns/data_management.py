@@ -247,8 +247,10 @@ class Residuals(SavableData):
 
 @dataclass
 class PrincipalComponentData(SavableData):
-    r"""Dataclass which contains a set of sample frequencies
-    as well as amplitude and phase residuals.
+    r"""Dataclass which contains all the data required for a
+    PCA model to work: eigenvalues and eigenvectors
+    of the covariance matrix, mean of the data,
+    and reference scaling for the principal component reperesentation.
 
     In the parameter definitions, the number of dimensions is the
     :math:`N` such that each data point belongs to :math:`\mathbb{R}^N`,
