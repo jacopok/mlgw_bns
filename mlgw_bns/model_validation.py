@@ -49,26 +49,30 @@ class ValidateModel:
     def psd_at_frequencies(self, frequencies: np.ndarray) -> np.ndarray:
         return np.array([self.psd.at_frequency(freq) for freq in frequencies])
 
-    def true_and_predicted_waveforms(
-        self, number_of_validation_waveforms: int
-    ) -> tuple[FDWaveforms, FDWaveforms]:
-
+    def param_set(self, number_of_waveforms: int) -> ParameterSet:
         parameter_generator = self.model.dataset.make_parameter_generator()
 
-        param_set = ParameterSet.from_parameter_generator(
-            parameter_generator, number_of_validation_waveforms
+        return ParameterSet.from_parameter_generator(
+            parameter_generator, number_of_waveforms
         )
 
-        true_waveforms: FDWaveforms = self.model.dataset.generate_waveforms_from_params(
-            param_set, self.model.downsampling_indices
-        )
-        predicted_waveforms: FDWaveforms = self.model.predict_waveforms_bulk(
-            param_set, self.model.nn, self.model.hyper
+    def true_waveforms(self, number_of_waveforms: int) -> FDWaveforms:
+
+        return self.model.dataset.generate_waveforms_from_params(
+            self.param_set(number_of_waveforms), self.model.downsampling_indices
         )
 
-        return true_waveforms, predicted_waveforms
+    def predicted_waveforms(self, number_of_waveforms: int) -> FDWaveforms:
 
-    def validation_mismatches(self, number_of_validation_waveforms: int) -> list[float]:
+        return self.model.predict_waveforms_bulk(
+            self.param_set(number_of_waveforms), self.model.nn, self.model.hyper
+        )
+
+    def validation_mismatches(
+        self,
+        number_of_validation_waveforms: int,
+        true_waveforms: Optional[FDWaveforms] = None,
+    ) -> list[float]:
         """Validate the model by computing the mismatch between
         theoretical waveforms and waveforms reconstructed by the model.
 
@@ -83,9 +87,10 @@ class ValidateModel:
             List of mismatches.
         """
 
-        true_waveforms, predicted_waveforms = self.true_and_predicted_waveforms(
-            number_of_validation_waveforms
-        )
+        if true_waveforms is None:
+            true_waveforms = self.true_waveforms(number_of_validation_waveforms)
+
+        predicted_waveforms = self.predicted_waveforms(number_of_validation_waveforms)
 
         return self.mismatch_array(true_waveforms, predicted_waveforms)
 
