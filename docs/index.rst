@@ -12,19 +12,21 @@ Welcome to ``mlgw_bns``'s documentation!
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
+   :caption: Contact
    
-   install
-   overview.md
    contact
-   
-   model
-   dataset_generation
-   downsampling_interpolation
-   data_management
-   principal_component_analysis
-   hyperparameter_optimization
-   model_validation
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Usage guides
+      
+   usage_guides/index
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Package reference
+
+   package_reference/index
    
 Indices and tables
 ==================
