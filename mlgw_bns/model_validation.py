@@ -49,6 +49,25 @@ class ValidateModel:
     def psd_at_frequencies(self, frequencies: np.ndarray) -> np.ndarray:
         return np.array([self.psd.at_frequency(freq) for freq in frequencies])
 
+    def true_and_predicted_waveforms(
+        self, number_of_validation_waveforms: int
+    ) -> tuple[FDWaveforms, FDWaveforms]:
+
+        parameter_generator = self.model.dataset.make_parameter_generator()
+
+        param_set = ParameterSet.from_parameter_generator(
+            parameter_generator, number_of_validation_waveforms
+        )
+
+        true_waveforms: FDWaveforms = self.model.dataset.generate_waveforms_from_params(
+            param_set, self.model.downsampling_indices
+        )
+        predicted_waveforms: FDWaveforms = self.model.predict_waveforms_bulk(
+            param_set, self.model.nn, self.model.hyper
+        )
+
+        return true_waveforms, predicted_waveforms
+
     def validation_mismatches(self, number_of_validation_waveforms: int) -> list[float]:
         """Validate the model by computing the mismatch between
         theoretical waveforms and waveforms reconstructed by the model.
@@ -64,17 +83,8 @@ class ValidateModel:
             List of mismatches.
         """
 
-        parameter_generator = self.model.dataset.make_parameter_generator()
-
-        param_set = ParameterSet.from_parameter_generator(
-            parameter_generator, number_of_validation_waveforms
-        )
-
-        true_waveforms: FDWaveforms = self.model.dataset.generate_waveforms_from_params(
-            param_set, self.model.downsampling_indices
-        )
-        predicted_waveforms: FDWaveforms = self.model.predict_waveforms_bulk(
-            param_set, self.model.nn, self.model.hyper
+        true_waveforms, predicted_waveforms = self.true_and_predicted_waveforms(
+            number_of_validation_waveforms
         )
 
         return self.mismatch_array(true_waveforms, predicted_waveforms)
