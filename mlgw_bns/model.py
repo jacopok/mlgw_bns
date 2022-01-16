@@ -243,10 +243,13 @@ class ExtendedWaveformParameters(WaveformParameters):
         """
         base_dict = super().teobresums
 
-        return base_dict | {
-            "M": self.total_mass,
-            "distance": self.distance_mpc,
-            "inclination": self.inclination,
+        return {
+            **base_dict,
+            **{
+                "M": self.total_mass,
+                "distance": self.distance_mpc,
+                "inclination": self.inclination,
+            },
         }
         # TODO figure out if it is possible to also pass the phase and the time shift.
 
