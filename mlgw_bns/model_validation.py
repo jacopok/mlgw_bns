@@ -161,8 +161,8 @@ class ValidateModel:
             # (or just ignore the part outside of the bounds?)
             # for now we do the latter
             mask = np.bitwise_and(
-                self.model.dataset.initial_frequency_hz < frequencies,
-                frequencies < self.model.dataset.srate_hz / 2.0,
+                min(self.frequencies) < frequencies,
+                frequencies < max(self.frequencies) - 2 * self.model.dataset.delta_f_hz,
             )
             psd_values = self.psd_at_frequencies(frequencies[mask])
             frequencies = frequencies[mask]
