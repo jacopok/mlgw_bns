@@ -12,14 +12,14 @@ repository = "https://github.com/jacopok/mlgw_bns"
 
 [tool.poetry.dependencies]
 python = ">=3.7,<3.10"
-numpy = "^1.22.1"
+numpy = ">=1.18,<1.22"
 tqdm = "^4.62.3"
 optuna = "^2.10.0"
 scikit-learn = "^1.0.1"
 PyCBC = "^1.18.3"
 h5py = "^3.6.0"
 TEOBResumSPy = {path='../teobresums/Python', develop=true, optional=true}
-numba = "^0.54.1"
+numba = "^0.55.0"
 sortedcontainers = "^2.4.0"
 joblib = "^1.1.0"
 plotly = "^5.5.0"
