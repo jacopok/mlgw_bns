@@ -503,23 +503,26 @@ class Model:
             filename_nn = self.filename_nn
             ignore_warnings = False
 
-        try:
-            self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
-            self.pca_data = PrincipalComponentData.from_file(file_arrays)
-            self.training_parameters = ParameterSet.from_file(file_arrays)
-            self.training_dataset = Residuals.from_file(
-                file_arrays, ignore_warnings=ignore_warnings
-            )
-        except FileNotFoundError:
-            logging.info("No data file found.")
+        self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
+        self.pca_data = PrincipalComponentData.from_file(file_arrays)
+        self.training_parameters = ParameterSet.from_file(file_arrays)
 
-            # TODO introduce handling of only certain files being present
+        if (
+            self.downsampling_indices is None
+            or self.pca_data is None
+            or self.training_parameters is None
+        ):
+            raise FileNotFoundError
+
+        self.training_dataset = Residuals.from_file(
+            file_arrays, ignore_warnings=ignore_warnings
+        )
 
         try:
             self.hyper = joblib.load(filename_hyper)
             self.nn = joblib.load(filename_nn)
         except FileNotFoundError:
-            logging.info("No trained network or hyperparmeters found.")
+            logging.warn("No trained network or hyperparmeters found.")
 
         self.train_parameter_scaler()
 
