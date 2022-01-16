@@ -3,5 +3,5 @@
 
 
 from .hyperparameter_optimization import HyperparameterOptimization
-from .model import Model
+from .model import ExtendedWaveformParameters, Model
 from .model_validation import ValidateModel
