@@ -42,12 +42,33 @@ def test_default_model_with_validation_mismatches(default_model):
     assert all(m < 1e-5 for m in mismatches)
 
 
+def test_default_model_residuals(default_model):
+
+    vm = ValidateModel(default_model)
+
+    true_wfs, pred_wfs = vm.true_and_predicted_waveforms(32)
+
+    amp_errors = np.log(true_wfs.amplitudes / pred_wfs.amplitudes)
+    assert np.all(abs(amp_errors) < 3e-2)
+
+    # TODO include phase errors, but subtracting the linear term
+    # phase_errors = true_wfs.phases - pred_wfs.phases
+
+    # for i, pe in enumerate(phase_errors):
+    #     phase_errors[i] -= something
+
+    # assert all(abs(phase_errors) < 1e-2)
+
+
+@pytest.mark.xfail
 @pytest.mark.benchmark(group="model-prediction")
 @pytest.mark.parametrize(
-    "model_name, tolerance", [("trained_model", 1e-1), ("default_model", 1e-1)]
+    "number_of_sample_points",
+    [16384]
+    # "number_of_sample_points", [128, 256, 512, 1024, 2048, 4096, 8192, 16384]
 )
 @pytest.mark.parametrize(
-    "number_of_sample_points", [128, 256, 512, 1024, 2048, 4096, 8192, 16384]
+    "model_name, tolerance", [("trained_model", 1e-2), ("default_model", 1e-4)]
 )
 def test_model_nn_prediction(
     model_name, tolerance, request, benchmark, number_of_sample_points
@@ -59,8 +80,8 @@ def test_model_nn_prediction(
 
     params = ExtendedWaveformParameters(
         mass_ratio=1.0,
-        lambda_1=500,
-        lambda_2=50,
+        lambda_1=500.0,
+        lambda_2=50.0,
         chi_1=0.1,
         chi_2=-0.1,
         dataset=model.dataset,
@@ -77,10 +98,24 @@ def test_model_nn_prediction(
     teob_dict["srate_interp"] /= params.mass_sum_seconds
     teob_dict["df"] /= params.mass_sum_seconds
 
+    n_additional = 256
+
+    # tweak initial frequency backward by a few samples
+    # this is needed because of a bug in TEOBResumS
+    # causing the phase evolution not to behave properly
+    # at the beginning of integration
+    # TODO remove this once the TEOB bug is fixed
+
+    f_0 = teob_dict["initial_frequency"]
+    delta_f = teob_dict["df"]
+    new_f0 = f_0 - delta_f * n_additional
+    teob_dict["initial_frequency"] = new_f0
+
     f_spa, rhp_teob, ihp_teob, rhc_teob, ihc_teob = EOBRunPy(teob_dict)
 
-    hp_teob = rhp_teob - 1j * ihp_teob
-    hc_teob = rhc_teob - 1j * ihc_teob
+    hp_teob = (rhp_teob - 1j * ihp_teob)[n_additional:]
+    hc_teob = (rhc_teob - 1j * ihc_teob)[n_additional:]
+    f_spa = f_spa[n_additional:]
 
     n_downsample = len(f_spa) // number_of_sample_points
 
