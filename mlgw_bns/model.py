@@ -477,8 +477,17 @@ class Model:
         if self.nn is not None:
             joblib.dump(self.nn, self.filename_nn)
 
-    def load(self, streams: Optional[tuple[IO[bytes], IO[bytes], IO[bytes]]]) -> None:
-        """Load model from the files present in the current folder."""
+    def load(
+        self, streams: Optional[tuple[IO[bytes], IO[bytes], IO[bytes]]] = None
+    ) -> None:
+        """Load model from the files present in the current folder.
+
+        Parameters
+        ----------
+        streams: tuple[IO[bytes], IO[bytes], IO[bytes]], optional
+                For internal use (specifically, loading the default model).
+                Defaults to None (look in the current folder).
+        """
 
         if streams is not None:
             filename_arrays: Union[IO[bytes], str]
@@ -876,4 +885,4 @@ def combine_amplitude_phase(amp: np.ndarray, phi: np.ndarray) -> np.ndarray:
     np.ndarray
         Cartesian waveform.
     """
-    return amp * np.exp(1j * phi)
+    return amp * np.exp(-1j * phi)
