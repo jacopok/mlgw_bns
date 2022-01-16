@@ -299,8 +299,12 @@ class FDWaveforms(SavableData):
     ----------
     amplitudes: np.ndarray
             Amplitude residuals.
+            An array with shape
+            ``(n_waveforms, n_samples_amp)``.
     phases: np.ndarray
             Phase residuals.
+            An array with shape
+            ``(n_waveforms, n_samples_phi)``.
 
     Class Attributes
     ----------------

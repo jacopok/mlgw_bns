@@ -50,6 +50,7 @@ def test_default_model_residuals(default_model):
 
     amp_errors = np.log(true_wfs.amplitudes / pred_wfs.amplitudes)
     assert np.all(abs(amp_errors) < 3e-2)
+    assert np.all(abs(amp_errors)[:, :10] < 1e-3)
 
     # TODO include phase errors, but subtracting the linear term
     # phase_errors = true_wfs.phases - pred_wfs.phases
@@ -63,9 +64,10 @@ def test_default_model_residuals(default_model):
 @pytest.mark.xfail
 @pytest.mark.benchmark(group="model-prediction")
 @pytest.mark.parametrize(
+    # "number_of_sample_points",
+    # [16384]
     "number_of_sample_points",
-    [16384]
-    # "number_of_sample_points", [128, 256, 512, 1024, 2048, 4096, 8192, 16384]
+    [128, 256, 512, 1024, 2048, 4096, 8192, 16384],
 )
 @pytest.mark.parametrize(
     "model_name, tolerance", [("trained_model", 1e-2), ("default_model", 1e-4)]
