@@ -11,6 +11,8 @@ the accuracy then steadily drops as more training waveforms are used.
 Currently, the only model used for training is [`TEOBResumS`](http://arxiv.org/abs/1806.01772),
 but it is planned to introduce the possibility to use others.
 
+![dependencygraph](mlgw_bns.svg)
+
 ## Installation
 
 When the package will be published hopefully it will look like
@@ -80,15 +82,15 @@ The main steps taken by `mlgw_bns` to train on a dataset are as follows:
 - generate the dataset 
 - decompose the Fourier transforms of the waveforms into phase and amplitude
 - downsample the dataset to a few thousand points
-- apply a PCA to reduce the dimensionality to a few tens of real numbers (TODO)
-- train a neural network on the relation 
-    between the waveform parameters and the PCA components (TODO)
+- apply a PCA to reduce the dimensionality to a few tens of real numbers
+- train a neural network on the relation
+    between the waveform parameters and the PCA components
 
 In several of these steps data-driven optimizations are performed:
 
 - the points at which the waveforms are downsampled are not uniformly chosen:
     instead, a greedy downsampling algorithm determines them
-- the PCA is trained on a separate downsampled dataset, which is then thrown out (TODO)
+- the PCA is trained on a separate downsampled dataset, which is then thrown out
 - the hyperparameters for the neural network are optimized according to both
-    the time taken for the training and the estimated reconstruction error (TODO)
+    the time taken for the training and the estimated reconstruction error
 

@@ -12,7 +12,7 @@ docs/_templates/
 docs/html/
 .coverage
 tests/test_results.xml
-mlgw_bns.svg
+!mlgw_bns.svg
 .mutmut-cache
 *.h5
 *.pkl
