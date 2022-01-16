@@ -25,3 +25,6 @@ mlgw_bns/data_management.py
 *.pdf
 prediction.prof
 profile_model_prediction.py
+!mlgw_bns/data/default_dataset_arrays.h5
+!mlgw_bns/data/default_dataset_nn.pkl
+!mlgw_bns/data/default_dataset_hyper.pkl
