@@ -176,7 +176,7 @@ class Residuals(SavableData):
 
     def __hash__(self):
         return hash(
-            (self.amplitude_residuals.tostring(), self.phase_residuals.tostring())
+            (self.amplitude_residuals.tobytes(), self.phase_residuals.tobytes())
         )
 
     @property
