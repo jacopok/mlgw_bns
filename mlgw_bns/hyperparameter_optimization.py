@@ -99,7 +99,7 @@ class HyperparameterOptimization:
         study: Optional[optuna.Study] = None,
     ):
 
-        assert model.nn_available
+        assert model.auxiliary_data_available
         assert model.training_dataset_available
 
         self.model = model
@@ -251,6 +251,10 @@ class HyperparameterOptimization:
 
         expected_datetime_end = datetime.datetime.now() + datetime.timedelta(
             hours=timeout_hr
+        )
+        logging.info(
+            "Starting to train at %s, will end at %s",
+            (datetime.datetime.now(), expected_datetime_end.isoformat()),
         )
 
         for n in range(iterations):
