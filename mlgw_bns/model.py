@@ -2,7 +2,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import ClassVar, Optional, Union
+from typing import IO, ClassVar, Optional, Union
 
 import h5py
 import joblib  # type: ignore
@@ -35,6 +35,7 @@ from .principal_component_analysis import (
 )
 
 TRIALS_FILE = "data/best_trials.pkl"
+DEFAULT_DATASET_BASENAME = "data/default_dataset"
 
 
 @dataclass
@@ -334,6 +335,20 @@ class Model:
         self.pca_data: Optional[PrincipalComponentData] = None
         self.downsampling_indices: Optional[DownsamplingIndices] = None
 
+    @classmethod
+    def default(cls, filename: str):
+        model = cls(DEFAULT_DATASET_BASENAME)
+
+        stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
+        stream_hyper = pkg_resources.resource_stream(__name__, model.filename_hyper)
+        stream_nn = pkg_resources.resource_stream(__name__, model.filename_nn)
+
+        model.load(streams=(stream_arrays, stream_hyper, stream_nn))
+
+        model.filename = filename
+
+        return model
+
     @property
     def auxiliary_data_available(self) -> bool:
         return self.pca_data is not None and self.downsampling_indices is not None
@@ -349,6 +364,10 @@ class Model:
         )
 
     @property
+    def filename_arrays(self) -> str:
+        return f"{self.filename}_arrays.h5"
+
+    @property
     def file_arrays(self) -> h5py.File:
         """File object in which to save datasets.
 
@@ -357,7 +376,7 @@ class Model:
         file : h5py.File
             To be used as a context manager.
         """
-        return h5py.File(f"{self.filename}_arrays.h5", mode="a")
+        return h5py.File(self.filename_arrays, mode="a")
 
     @property
     def filename_nn(self) -> str:
@@ -434,46 +453,62 @@ class Model:
 
         assert self.pca_data is not None
         assert self.downsampling_indices is not None
+        assert self.training_parameters is not None
 
         arr_list: list[SavableData] = [
             self.downsampling_indices,
             self.pca_data,
+            self.training_parameters,
         ]
 
         if include_training_data:
             assert self.training_dataset is not None
-            assert self.training_parameters is not None
 
             arr_list += [
                 self.training_dataset,
-                self.training_parameters,
             ]
 
         for arr in arr_list:
             arr.save_to_file(self.file_arrays)
 
-    def save(self) -> None:
-        self.save_arrays()
+    def save(self, include_training_data: bool = True) -> None:
+        self.save_arrays(include_training_data)
         joblib.dump(self.hyper, self.filename_hyper)
         if self.nn is not None:
             joblib.dump(self.nn, self.filename_nn)
 
-    def load(self) -> None:
+    def load(self, streams: Optional[tuple[IO[bytes], IO[bytes], IO[bytes]]]) -> None:
         """Load model from the files present in the current folder."""
 
+        if streams is not None:
+            filename_arrays: Union[IO[bytes], str]
+            filename_hyper: Union[IO[bytes], str]
+            filename_nn: Union[IO[bytes], str]
+
+            filename_arrays, filename_hyper, filename_nn = streams
+            file_arrays = h5py.File(filename_arrays, mode="r")
+            ignore_warnings = True
+        else:
+            file_arrays = self.file_arrays
+            filename_hyper = self.filename_hyper
+            filename_nn = self.filename_nn
+            ignore_warnings = False
+
         try:
-            self.downsampling_indices = DownsamplingIndices.from_file(self.file_arrays)
-            self.pca_data = PrincipalComponentData.from_file(self.file_arrays)
-            self.training_dataset = Residuals.from_file(self.file_arrays)
-            self.training_parameters = ParameterSet.from_file(self.file_arrays)
+            self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
+            self.pca_data = PrincipalComponentData.from_file(file_arrays)
+            self.training_parameters = ParameterSet.from_file(file_arrays)
+            self.training_dataset = Residuals.from_file(
+                file_arrays, ignore_warnings=ignore_warnings
+            )
         except FileNotFoundError:
             logging.info("No data file found.")
 
             # TODO introduce handling of only certain files being present
 
         try:
-            self.hyper = joblib.load(self.filename_hyper)
-            self.nn = joblib.load(self.filename_nn)
+            self.hyper = joblib.load(filename_hyper)
+            self.nn = joblib.load(filename_nn)
         except FileNotFoundError:
             logging.info("No trained network or hyperparmeters found.")
 

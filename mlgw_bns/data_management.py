@@ -93,6 +93,7 @@ class SavableData:
         cls: Type[TYPE_DATA],
         file: h5py.File,
         group_name: Optional[str] = None,
+        ignore_warnings: bool = False,
     ) -> Optional[TYPE_DATA]:
 
         if group_name is None:
@@ -106,7 +107,8 @@ class SavableData:
                     array_list.append(file[array_path][...])
                 return array_list
             except KeyError:
-                logging.warning("Some of the arrays in %s not found", group_name)
+                if not ignore_warnings:
+                    logging.warning("Some of the arrays in %s not found", group_name)
                 return None
 
         if arrays_in_file() is not None:

@@ -24,7 +24,7 @@ def test_model_saving(generated_model):
         assert "principal_component_analysis/eigenvalues" in file
 
 
-def test_model_with_validation_mismatches(trained_model):
+def test_quick_model_with_validation_mismatches(trained_model):
 
     vm = ValidateModel(trained_model)
 
@@ -33,11 +33,29 @@ def test_model_with_validation_mismatches(trained_model):
     assert all(m < 1e-2 for m in mismatches)
 
 
+def test_default_model_with_validation_mismatches(default_model):
+
+    vm = ValidateModel(default_model)
+
+    mismatches = vm.validation_mismatches(32)
+
+    assert all(m < 1e-5 for m in mismatches)
+
+
 @pytest.mark.benchmark(group="model-prediction")
+@pytest.mark.parametrize(
+    "model_name, tolerance", [("trained_model", 1e-1), ("default_model", 1e-1)]
+)
 @pytest.mark.parametrize(
     "number_of_sample_points", [128, 256, 512, 1024, 2048, 4096, 8192, 16384]
 )
-def test_model_nn_prediction(trained_model, benchmark, number_of_sample_points):
+def test_model_nn_prediction(
+    model_name, tolerance, request, benchmark, number_of_sample_points
+):
+    """Test whether the prediction for the plus and cross polarizations
+    provided by the model matches the value given by
+    """
+    model = request.getfixturevalue(model_name)
 
     params = ExtendedWaveformParameters(
         mass_ratio=1.0,
@@ -45,7 +63,7 @@ def test_model_nn_prediction(trained_model, benchmark, number_of_sample_points):
         lambda_2=50,
         chi_1=0.1,
         chi_2=-0.1,
-        dataset=trained_model.dataset,
+        dataset=model.dataset,
         distance_mpc=1.0,
         inclination=0.0,
         reference_phase=0.0,
@@ -68,9 +86,9 @@ def test_model_nn_prediction(trained_model, benchmark, number_of_sample_points):
 
     freqs_hz = f_spa[::n_downsample]
 
-    hp, hc = benchmark(trained_model.predict, freqs_hz, params)
+    hp, hc = benchmark(model.predict, freqs_hz, params)
 
-    vm = ValidateModel(trained_model)
+    vm = ValidateModel(model)
 
     hp_teob = hp_teob[::n_downsample]
     hc_teob = hc_teob[::n_downsample]
@@ -78,10 +96,10 @@ def test_model_nn_prediction(trained_model, benchmark, number_of_sample_points):
     # The model used here uses quite few training data, so we are not able to
     # achieve very small mismatches.
     # TODO is the mismatch found here too high?
-    assert vm.mismatch(hp, hp_teob, frequencies=freqs_hz) < 1e-1
-    assert vm.mismatch(hc, hc_teob, frequencies=freqs_hz) < 1e-1
+    assert vm.mismatch(hp, hp_teob, frequencies=freqs_hz) < tolerance
+    assert vm.mismatch(hc, hc_teob, frequencies=freqs_hz) < tolerance
 
     # the mismatch does not account for the magnitude of the waveforms,
     # so we check that separately.
-    assert np.allclose(abs(hp), abs(hp_teob), atol=0.0, rtol=3e-1)
-    assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=3e-1)
+    assert np.allclose(abs(hp), abs(hp_teob), atol=0.0, rtol=3 * tolerance)
+    assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=3 * tolerance)

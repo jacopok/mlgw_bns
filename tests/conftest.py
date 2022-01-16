@@ -96,6 +96,11 @@ def trained_model(generated_model):
     yield generated_model
 
 
+@pytest.fixture(scope="session")
+def default_model():
+    yield Model.default("default_model")
+
+
 @pytest.fixture
 def file():
     fname = "test_file.h5"
