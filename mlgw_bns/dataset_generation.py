@@ -283,7 +283,9 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
     def __init__(self, eobrun_callable: Callable[[dict], tuple[np.ndarray, ...]]):
         self.eobrun_callable = eobrun_callable
 
-    def effective_one_body_waveform(self, params: "WaveformParameters"):
+    def effective_one_body_waveform(
+        self, params: "WaveformParameters"
+    ) -> tuple[np.ndarray, np.ndarray]:
         r"""Generate an EOB waveform with TEOB.
 
         Examples
