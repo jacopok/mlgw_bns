@@ -1,6 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import IO, ClassVar, Optional, Union
 
@@ -100,7 +100,7 @@ class Hyperparameters:
     validation_fraction: float
     n_iter_no_change: float
 
-    max_iter: ClassVar[int] = 1000
+    max_iter: int = field(default=1000)
 
     @property
     def nn_params(self) -> dict[str, Union[int, float, str, bool, tuple[int, ...]]]:
@@ -620,6 +620,10 @@ class Model:
         if hyper is None:
             assert self.training_dataset is not None
             hyper = Hyperparameters.default(len(self.training_dataset))
+
+        # increase the number of maximum iterations by a lot:
+        # here we do not want to stop the training early.
+        hyper.max_iter *= 10
 
         self.nn = self.train_nn(hyper)
         self.hyper = hyper
