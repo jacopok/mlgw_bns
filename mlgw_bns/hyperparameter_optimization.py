@@ -156,12 +156,16 @@ class HyperparameterOptimization:
         assert self.model.training_dataset is not None
         assert self.model.training_parameters is not None
 
-        hyper = Hyperparameters.from_trial(trial, n_train_max=self.training_data_number)
-
         # train network on a subset of the data
         validation_data_number = int(
             self.hyper_validation_fraction * self.training_data_number
         )
+
+        hyper = Hyperparameters.from_trial(
+            trial, n_train_max=self.training_data_number - validation_data_number
+        )
+
+        assert hyper.n_train + validation_data_number <= self.training_data_number
 
         shuffled_indices = self.rng.choice(
             self.training_data_number, self.training_data_number, replace=False
