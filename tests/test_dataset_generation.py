@@ -56,13 +56,14 @@ def test_random_parameter_generation(dataset):
 
     u = UniformParameterGenerator(dataset=dataset)
 
-    assert next(u).almost_equal_to(
+    new_parameter_set = next(u)
+    assert new_parameter_set.almost_equal_to(
         WaveformParameters(
-            mass_ratio=1.9636394957426813,
-            lambda_1=3585.8072979230906,
-            lambda_2=2486.6021441939356,
-            chi_1=0.3841186422717332,
-            chi_2=0.07320957984815568,
+            mass_ratio=1.3060149999161021,
+            lambda_1=3355.669164496995,
+            lambda_2=1458.659021999292,
+            chi_1=0.4387661392393323,
+            chi_2=0.44998480116559636,
             dataset=dataset,
         )
     )
@@ -156,3 +157,13 @@ def test_residuals_are_not_too_large(variable_parameters, teob_generator):
     assert np.all(abs(phi_residuals[: length // 2]) < 120)
 
     # TODO can these be lowered?
+
+
+def test_parameter_generator_changes_seed(dataset):
+    """Making two parameter generators should spawn
+    different rngs with different seeds."""
+    gen1 = dataset.make_parameter_generator()
+    gen2 = dataset.make_parameter_generator()
+
+    assert gen1.rng.normal() != gen2.rng.normal()
+    assert not np.allclose(next(gen1).array, next(gen2).array)

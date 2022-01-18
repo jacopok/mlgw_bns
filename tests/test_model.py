@@ -19,7 +19,7 @@ def test_model_saving(generated_model):
     with generated_model.file_arrays as file:
         assert "downsampling/amplitude_indices" in file
         assert file["downsampling/amplitude_indices"][0] == 0
-        assert 25_000 < file["downsampling/amplitude_indices"][10] < 30_000
+        assert 20_000 < file["downsampling/amplitude_indices"][10] < 30_000
 
         assert "principal_component_analysis/eigenvalues" in file
 
@@ -42,13 +42,13 @@ def test_default_model_with_validation_mismatches(default_model):
     assert all(m < 3e-5 for m in mismatches)
 
 
-@pytest.mark.xfail
 def test_default_model_residuals(default_model):
 
     vm = ValidateModel(default_model)
 
-    true_wfs = vm.true_waveforms(32)
-    pred_wfs = vm.predicted_waveforms(32)
+    params = vm.param_set(32)
+    true_wfs = vm.true_waveforms(params)
+    pred_wfs = vm.predicted_waveforms(params)
 
     amp_errors = np.log(true_wfs.amplitudes / pred_wfs.amplitudes)
     assert np.all(abs(amp_errors) < 4e-2)
@@ -140,5 +140,5 @@ def test_model_nn_prediction(
 
     # the mismatch does not account for the magnitude of the waveforms,
     # so we check that separately.
-    assert np.allclose(abs(hp), abs(hp_teob), atol=0.0, rtol=3 * tolerance)
-    assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=3 * tolerance)
+    assert np.allclose(abs(hp), abs(hp_teob), atol=0.0, rtol=tolerance)
+    assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=tolerance)

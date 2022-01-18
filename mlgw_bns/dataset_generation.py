@@ -10,7 +10,7 @@ from typing import Any, Callable, ClassVar, Optional, Type, Union
 
 import h5py
 import numpy as np
-from numpy.random import SeedSequence, default_rng
+from numpy.random import default_rng
 from tqdm import tqdm  # type: ignore
 
 from .data_management import (
@@ -605,7 +605,9 @@ class ParameterGenerator(ABC, Iterator):
         self.dataset = dataset
 
         if seed is None:
-            self.rng = default_rng(self.dataset.seed_sequence.generate_state(1)[0])
+            self.rng = default_rng(
+                self.dataset.seed_sequence.integers(low=0, high=2 ** 63 - 1)
+            )
         else:
             self.rng = default_rng(seed)
 
@@ -657,7 +659,7 @@ class UniformParameterGenerator(ParameterGenerator):
     >>> print(type(params))
     <class 'mlgw_bns.dataset_generation.WaveformParameters'>
     >>> print(params.mass_ratio) # doctest: +NUMBER
-    1.96
+    1.306
     """
 
     def __init__(
@@ -779,7 +781,7 @@ class Dataset:
             {} if parameter_generator_kwargs is None else parameter_generator_kwargs
         )
 
-        self.seed_sequence = SeedSequence(seed)
+        self.seed_sequence = np.random.default_rng(seed=seed)
 
         self.residuals_amp: list[np.ndarray] = []
         self.residuals_phi: list[np.ndarray] = []
@@ -902,10 +904,15 @@ class Dataset:
 
         return total_mass ** 2 / AMP_SI_BASE * eta
 
-    def make_parameter_generator(self) -> ParameterGenerator:
+    def make_parameter_generator(
+        self, seed: Optional[int] = None
+    ) -> ParameterGenerator:
+        if seed is None:
+            seed = self.seed_sequence.integers(low=0, high=2 ** 63 - 1)
+
         return self.parameter_generator_class(
             dataset=self,
-            seed=self.seed_sequence.generate_state(1)[0],
+            seed=seed,
             **self.parameter_generator_kwargs,
         )
 
