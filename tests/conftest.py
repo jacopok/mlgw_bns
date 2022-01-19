@@ -86,7 +86,7 @@ def model():
 
 @pytest.fixture(scope="session")
 def generated_model(model):
-    model.generate(8, 32, 64)
+    model.generate(8, 80, 80)
     yield model
 
 
