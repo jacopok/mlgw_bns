@@ -1674,7 +1674,7 @@ jeepney = ">=0.6"
 
 [[package]]
 name = "setuptools-scm"
-version = "6.3.2"
+version = "6.4.1"
 description = "the blessed package to manage your versions by scm tags"
 category = "main"
 optional = false
@@ -1685,7 +1685,8 @@ packaging = ">=20.0"
 tomli = ">=1.0.0"
 
 [package.extras]
-toml = ["setuptools (>=42)", "tomli (>=1.0.0)"]
+test = ["pytest (>=6.2)", "virtualenv (>20)"]
+toml = ["setuptools (>=42)"]
 
 [[package]]
 name = "shellingham"
@@ -1926,7 +1927,7 @@ doc = ["reno", "sphinx", "tornado (>=4.5)"]
 name = "TEOBResumSPy"
 version = "0.0.1"
 description = "Python wrapper of TEOBResumS, an Effective-One-Body model for generic coalescing binaries"
-category = "main"
+category = "dev"
 optional = true
 python-versions = "*"
 develop = true
@@ -2149,12 +2150,12 @@ docs = ["sphinx", "jaraco.packaging (>=8.2)", "rst.linker (>=1.9)"]
 testing = ["pytest (>=6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "pytest-cov", "pytest-enabler (>=1.0.1)", "jaraco.itertools", "func-timeout", "pytest-black (>=0.3.7)", "pytest-mypy"]
 
 [extras]
-teobresums = ["TEOBResumSPy"]
+teobresums = []
 
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.7,<3.10"
-content-hash = "af5ca6e17bfe5cf846efaff63ddc9219e7c63879afa437d5fbcb8dfe8b313ed4"
+content-hash = "bd04bb3acdb56ce2d1392b1ed1be65f5a551a84b86d78af57dbdf06ee389ad83"
 
 [metadata.files]
 alabaster = [
@@ -3398,8 +3399,8 @@ secretstorage = [
     {file = "SecretStorage-3.3.1.tar.gz", hash = "sha256:fd666c51a6bf200643495a04abb261f83229dcb6fd8472ec393df7ffc8b6f195"},
 ]
 setuptools-scm = [
-    {file = "setuptools_scm-6.3.2-py3-none-any.whl", hash = "sha256:4c64444b1d49c4063ae60bfe1680f611c8b13833d556fd1d6050c0023162a119"},
-    {file = "setuptools_scm-6.3.2.tar.gz", hash = "sha256:a49aa8081eeb3514eb9728fa5040f2eaa962d6c6f4ec9c32f6c1fba88f88a0f2"},
+    {file = "setuptools_scm-6.4.1-py3-none-any.whl", hash = "sha256:93bbcc1d3e92f20eaef42df31e4b5e5a348f8cb0e48eaff3e060184a57e94b07"},
+    {file = "setuptools_scm-6.4.1.tar.gz", hash = "sha256:9bd9ff7fd5fa1cf469fe28a632336b9cfd351476c6d09379ff676d3945f669b9"},
 ]
 shellingham = [
     {file = "shellingham-1.4.0-py2.py3-none-any.whl", hash = "sha256:536b67a0697f2e4af32ab176c00a50ac2899c5a05e0d8e2dadac8e58888283f9"},
