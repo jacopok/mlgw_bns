@@ -28,7 +28,7 @@ def test_quick_model_with_validation_mismatches(trained_model):
 
     vm = ValidateModel(trained_model)
 
-    mismatches = vm.validation_mismatches(32)
+    mismatches = vm.validation_mismatches(16)
 
     assert all(m < 1e-2 for m in mismatches)
 
@@ -37,7 +37,7 @@ def test_default_model_with_validation_mismatches(default_model):
 
     vm = ValidateModel(default_model)
 
-    mismatches = vm.validation_mismatches(32)
+    mismatches = vm.validation_mismatches(16)
 
     assert all(m < 3e-5 for m in mismatches)
 
