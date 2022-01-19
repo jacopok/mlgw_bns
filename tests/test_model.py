@@ -51,8 +51,8 @@ def test_default_model_residuals(default_model):
     pred_wfs = vm.predicted_waveforms(params)
 
     amp_errors = np.log(true_wfs.amplitudes / pred_wfs.amplitudes)
-    assert np.all(abs(amp_errors) < 4e-2)
-    assert np.all(abs(amp_errors)[:, :10] < 5e-4)
+    assert np.all(abs(amp_errors) < 6e-2)
+    assert np.all(abs(amp_errors)[:, :10] < 1e-3)
 
     # TODO include phase errors, but subtracting the linear term
     # phase_errors = true_wfs.phases - pred_wfs.phases
