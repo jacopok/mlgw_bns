@@ -12,22 +12,21 @@ model = Model.default(filename='my_model')
 ```
 
 Now we can predict waveforms; in order to do so however we 
-pass the parameters through the `ExtendedWaveformParameters` class
+pass the parameters through the `ParametersWithExtrinsic` class
 (simpler APIs are planned for the future). 
 Further, we need to provide an array of frequencies in Hz at which to
 compute the waveform:
 ```python
-from mlgw_bns import ExtendedWaveformParameters
+from mlgw_bns import ParametersWithExtrinsic
 import numpy as np 
 
 frequencies = np.linspace(20., 2048., num=2000)
-params = ExtendedWaveformParameters(
+params = ParametersWithExtrinsic(
         mass_ratio=1.0,
         lambda_1=500.0,
         lambda_2=50.0,
         chi_1=0.1,
         chi_2=-0.1,
-        dataset=model.dataset,
         distance_mpc=1.0,
         inclination=0.0,
         reference_phase=0.0,

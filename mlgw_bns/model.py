@@ -33,6 +33,7 @@ from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
     PrincipalComponentTraining,
 )
+from .taylorf2 import SUN_MASS_SECONDS
 
 TRIALS_FILE = "data/best_trials.pkl"
 DEFAULT_DATASET_BASENAME = "data/default_dataset"
@@ -196,53 +197,91 @@ class Hyperparameters:
 
 
 @dataclass
-class ExtendedWaveformParameters(WaveformParameters):
-    """Subclass of :class:`WaveformParameters`.
-    This class includes all the intrinsic parameters contained
-    there, as well as certain extrinsic parameters.
-
-    It is the standard interface with which to predict waveforms
-    with the :class:`Model` class.
+class ParametersWithExtrinsic:
+    r"""Parameters for the generation of a single waveform,
+    including extrinsic parameters.
 
     Parameters
     ----------
-    distance_mpc: float
-            Distance to the compact binary, in Megaparsecs.
-    inclination: float
-            Inclination of the binary, in radians:
-            angle between its orbital angular momentum
-            and the observation direction.
-    reference_phase: float
-            Global phase to be added.
-    time_shift: float
-            Time shift, in seconds: it corresponds to a linear phase term to be added.
-    total_mass: float
+    mass_ratio : float
+            Mass ratio of the system, :math:`q = m_1 / m_2`,
+            where :math:`m_1 \geq m_2`, so :math:`q \geq 1`.
+    lambda_1 : float
+            Tidal polarizability of the larger star.
+            In papers it is typically denoted as :math:`\Lambda_1`;
+            for a definition see for example section D of
+            `this paper <http://arxiv.org/abs/1805.11579>`_.
+    lambda_2 : float
+            Tidal polarizability of the smaller star.
+    chi_1 : float
+            Aligned dimensionless spin component of the larger star.
+            The dimensionless spin is defined as
+            :math:`\chi_i = S_i / m_i^2` in
+            :math:`c = G = 1` natural units, where
+            :math:`S_i` is the :math:`z` component
+            of the dimensionful spin vector.
+            The :math:`z` axis is defined as the one which is
+            parallel to the orbital angular momentum of the binary.
+    chi_2 : float
+            Aligned spin component of the smaller star.
+    distance_mpc : float
+            Distance to the binary system, in Megaparsecs.
+    inclination : float
+            Inclination --- angle between the binary system's
+            angular momentum and the observation direction, in radians.
+    total_mass : float
             Total mass of the binary system, in solar masses.
+    reference_phase : float
+            This will be set as the phase of the first point of the waveform.
+            Defaults to 0.
+    time_shift : float
+            The waveform will be shifted in the time domain
+            by this amount (measured in seconds).
+            In the frequency domain, this means adding a linear
+            term to the phase.
+            Defaults to 0, which by convention means a configuration
+            in which the merger happens at the right edge of the
+            timeseries. This also means that, in the frequency domain,
+            the phase at high frequencies is roughly constant.
+
     """
 
+    mass_ratio: float
+    lambda_1: float
+    lambda_2: float
+    chi_1: float
+    chi_2: float
     distance_mpc: float
     inclination: float
-    reference_phase: float
-    time_shift: float
     total_mass: float
+    reference_phase: float = 0.0
+    time_shift: float = 0.0
 
-    @property
-    def mass_sum_seconds(self) -> float:
-        """Return the total mass of the system, :attr:`total_mass`,
-        measured in seconds (:math:`GM / c^3`)."""
-
-        return self.dataset.mass_sum_seconds * (
-            self.dataset.total_mass / self.total_mass
+    def intrinsic(self, dataset: Dataset) -> WaveformParameters:
+        return WaveformParameters(
+            mass_ratio=self.mass_ratio,
+            lambda_1=self.lambda_1,
+            lambda_2=self.lambda_2,
+            chi_1=self.chi_1,
+            chi_2=self.chi_2,
+            dataset=dataset,
         )
 
     @property
-    def teobresums(self) -> dict[str, Union[float, int]]:
+    def mass_sum_seconds(self) -> float:
+        return self.total_mass * SUN_MASS_SECONDS
+
+    def teobresums_dict(self, dataset: Dataset) -> dict[str, Union[float, int]]:
         """Parameter dictionary in a format compatible with
         TEOBResumS.
 
         The parameters are all converted to natural units.
         """
-        base_dict = super().teobresums
+        base_dict = self.intrinsic(dataset).teobresums
+        frequency_rescaling = dataset.total_mass / self.total_mass
+        base_dict["initial_frequency"] *= frequency_rescaling
+        base_dict["srate_interp"] *= frequency_rescaling
+        base_dict["df"] *= frequency_rescaling
 
         return {
             **base_dict,
@@ -252,7 +291,8 @@ class ExtendedWaveformParameters(WaveformParameters):
                 "inclination": self.inclination,
             },
         }
-        # TODO figure out if it is possible to also pass the phase and the time shift.
+        # TODO figure out if it is possible to also pass
+        # the phase and the time shift to TEOB.
 
 
 class Model:
@@ -684,7 +724,7 @@ class Model:
             residuals, params, self.downsampling_indices
         )
 
-    def predict(self, frequencies: np.ndarray, params: ExtendedWaveformParameters):
+    def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
         """Calculate the waveforms in the plus and cross polarizations,
         accounting for extrinsic parameters
 
@@ -692,19 +732,21 @@ class Model:
         ----------
         frequencies : np.ndarray
                 Frequencies where to compute the waveform, in Hz.
-        params : ExtendedWaveformParameters
-                Parameters, both intrinsic and extrinsic.
+        params : ParametersWithExtrinsic
+                Parameters for the waveform, both intrinsic and extrinsic.
 
         Returns
         -------
         hp, hc (complex np.ndarray)
-                Plus and cross-polarized waveforms.
+                Cartesian plus and cross-polarized waveforms, computed
+                at the given frequencies, measured in 1/Hz.
 
         """
         assert self.downsampling_indices is not None
 
+        intrinsic_params = params.intrinsic(self.dataset)
         waveforms = self.predict_waveforms_bulk(
-            ParameterSet.from_list_of_waveform_parameters([params])
+            ParameterSet.from_list_of_waveform_parameters([intrinsic_params])
         )
 
         phase_shift = (
@@ -723,7 +765,7 @@ class Model:
             self.downsampling_indices,
         )
 
-        pre = self.dataset.mlgw_bns_prefactor(params.eta, params.total_mass)
+        pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
         cosi = np.cos(params.inclination)
         pre_plus = (1 + cosi ** 2) / 2 * pre / params.distance_mpc
         pre_cross = cosi * pre * (-1j) / params.distance_mpc
