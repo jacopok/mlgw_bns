@@ -3,7 +3,7 @@ import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 
 from mlgw_bns.dataset_generation import TEOBResumSGenerator
-from mlgw_bns.model import ExtendedWaveformParameters, Model
+from mlgw_bns.model import Model, ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 
 
@@ -82,13 +82,12 @@ def test_model_nn_prediction(
     """
     model = request.getfixturevalue(model_name)
 
-    params = ExtendedWaveformParameters(
+    params = ParametersWithExtrinsic(
         mass_ratio=1.0,
         lambda_1=500.0,
         lambda_2=50.0,
         chi_1=0.1,
         chi_2=-0.1,
-        dataset=model.dataset,
         distance_mpc=1.0,
         inclination=0.0,
         reference_phase=0.0,
@@ -96,7 +95,7 @@ def test_model_nn_prediction(
         total_mass=2.8,
     )
 
-    teob_dict = params.teobresums
+    teob_dict = params.teobresums_dict(model.dataset)
     teob_dict["use_geometric_units"] = 0
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
     teob_dict["srate_interp"] /= params.mass_sum_seconds

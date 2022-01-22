@@ -10,7 +10,7 @@ Model for waveform generation
 .. autoclass:: mlgw_bns.model.Hyperparameters
     :members:
 
-.. autoclass:: mlgw_bns.model.ExtendedWaveformParameters
+.. autoclass:: mlgw_bns.model.ParametersWithExtrinsic
     :members:
 
 
