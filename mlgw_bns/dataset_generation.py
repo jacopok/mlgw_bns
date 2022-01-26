@@ -302,14 +302,13 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
 
         par_dict: dict = params.teobresums
 
-        n_additional = 256
-
         # tweak initial frequency backward by a few samples
         # this is needed because of a bug in TEOBResumS
         # causing the phase evolution not to behave properly
         # at the beginning of integration
         # TODO remove this once the TEOB bug is fixed
 
+        n_additional = 256
         f_0 = par_dict["initial_frequency"]
         delta_f = par_dict["df"]
         new_f0 = f_0 - delta_f * n_additional
