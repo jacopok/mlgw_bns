@@ -16,7 +16,7 @@ without the `--no-dev` option.
 We write a script with the following imports:
 ```python
 from mlgw_bns import Model
-from mlgw_bns.model import ExtendedWaveformParameters
+from mlgw_bns.model import ParametersWithExtrinsic
 
 import cProfile
 import pstats
@@ -42,26 +42,27 @@ m.load()
 ```
 if the model was already generated previously, or 
 ```python
-m = Model('first_test')
+m = Model('your_model_name')
 m.generate()
 m.set_hyper_and_train_nn()
 ```
-where the default values for the size of the generated dataset are used.
+where the default values for the size of the generated dataset are used, or 
+```python
+m = Model.default('your_model_name')
+```
+to make use of the default model provided with the package.
 
 We also need a set of parameters for the generated waveform: 
 an example set is given here.
 ```python
-params = ExtendedWaveformParameters(
+params = ParametersWithExtrinsic(
     mass_ratio=1.0,
     lambda_1=500,
     lambda_2=50,
     chi_1=0.1,
     chi_2=-0.1,
-    dataset=m.dataset,
     distance_mpc=1.0,
     inclination=0.0,
-    reference_phase=0.0,
-    time_shift=0.0,
     total_mass=2.8,
 )
 ```
