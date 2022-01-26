@@ -66,9 +66,7 @@ class ValidateModel:
 
     def predicted_waveforms(self, param_set: ParameterSet) -> FDWaveforms:
 
-        return self.model.predict_waveforms_bulk(
-            param_set, self.model.nn, self.model.hyper
-        )
+        return self.model.predict_waveforms_bulk(param_set, self.model.nn)
 
     def validation_mismatches(
         self,
