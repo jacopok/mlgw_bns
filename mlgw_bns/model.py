@@ -1,8 +1,8 @@
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import IO, ClassVar, Optional, Union
+from typing import IO, ClassVar, Optional, Type, Union
 
 import h5py
 import joblib  # type: ignore
@@ -10,7 +10,6 @@ import numpy as np
 import optuna
 import pkg_resources
 from numba import njit  # type: ignore
-from sklearn.neural_network import MLPRegressor  # type: ignore
 from sklearn.preprocessing import StandardScaler  # type: ignore
 
 from .data_management import (
@@ -29,171 +28,14 @@ from .dataset_generation import (
     WaveformParameters,
 )
 from .downsampling_interpolation import DownsamplingTraining, GreedyDownsamplingTraining
+from .neural_network import Hyperparameters, NeuralNetwork, SklearnNetwork
 from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
     PrincipalComponentTraining,
 )
 from .taylorf2 import SUN_MASS_SECONDS
 
-TRIALS_FILE = "data/best_trials.pkl"
 DEFAULT_DATASET_BASENAME = "data/default_dataset"
-
-
-@dataclass
-class Hyperparameters:
-    r"""Dataclass containing the parameters which are passed to
-    the neural network for training, as well as a few more.
-
-    Parameters
-    ----------
-    pc_exponent: float
-            Exponent to be used in the normalization of the
-            principal components: the network learns to reconstruct
-            :math:`x_i \lambda_i^\alpha`, where
-            :math:`x_i` are the principal-component
-            representation of a waveform, while
-            :math:`\lambda_i` are the eigenvalues of the PCA
-            and finally :math:`\alpha` is this parameter.
-    n_train: float
-            Number of waveforms to use in the training.
-    hidden_layer_sizes: tuple[int, ...]
-            Sizes of the layers in the neural network.
-            For more details, refer to the documentation
-            of the :class:`MLPRegressor`.
-    activation: str
-            Activation function.
-            For more details, refer to the documentation
-            of the :class:`MLPRegressor`.
-    alpha: float
-            Regularization parameter.
-            For more details, refer to the documentation
-            of the :class:`MLPRegressor`.
-    batch_size: int
-            For more details, refer to the documentation
-            of the :class:`MLPRegressor`.
-    learning_rate_init: float
-            For more details, refer to the documentation
-            of the :class:`MLPRegressor`.
-    tol: float
-            For more details, refer to the documentation
-            of the :class:`MLPRegressor`.
-    validation_fraction: float
-            For more details, refer to the documentation
-            of the :class:`MLPRegressor`.
-    n_iter_no_change: float
-            For more details, refer to the documentation
-            of the :class:`MLPRegressor`.
-    """
-
-    # controls how much weight is give to higher principal components
-    pc_exponent: float
-
-    # number of training data points to use
-    n_train: int
-
-    # parameters for the sklearn neural network
-    hidden_layer_sizes: tuple[int, ...]
-    activation: str
-    alpha: float
-    batch_size: int
-    learning_rate_init: float
-    tol: float
-    validation_fraction: float
-    n_iter_no_change: float
-
-    max_iter: int = field(default=1000)
-
-    @property
-    def nn_params(self) -> dict[str, Union[int, float, str, bool, tuple[int, ...]]]:
-        """Return a dictionary which can be readily unpacked
-        and used to initialize a :class:`MLPRegressor`.
-        """
-
-        return {
-            "max_iter": self.max_iter,
-            "hidden_layer_sizes": self.hidden_layer_sizes,
-            "activation": self.activation,
-            "alpha": self.alpha,
-            "batch_size": self.batch_size,
-            "learning_rate_init": self.learning_rate_init,
-            "tol": self.tol,
-            "validation_fraction": self.validation_fraction,
-            "n_iter_no_change": self.n_iter_no_change,
-            "early_stopping": True,
-            "shuffle": True,
-        }
-
-    @classmethod
-    def from_trial(cls, trial: optuna.Trial, n_train_max: int):
-        """Generate the hyperparameter set starting from an
-        :class:`optuna.Trial`.
-
-        Parameters
-        ----------
-        trial : optuna.Trial
-                Used to generate the parameters.
-        n_train_max : int
-                Upper bound for the attribute :attr:`n_train`.
-        """
-
-        n_layers = trial.suggest_int("n_layers", 2, 4)
-
-        layers = tuple(
-            trial.suggest_int(f"size_layer_{i}", 10, 100) for i in range(n_layers)
-        )
-
-        return cls(
-            hidden_layer_sizes=layers,
-            activation=str(
-                trial.suggest_categorical("activation", ["relu", "tanh", "logistic"])
-            ),
-            alpha=trial.suggest_loguniform("alpha", 1e-6, 1e-1),  # Default: 1e-4
-            batch_size=trial.suggest_int("batch_size", 100, 200),  # Default: 200
-            learning_rate_init=trial.suggest_loguniform(
-                "learning_rate_init", 2e-4, 5e-2
-            ),  # Default: 1e-3
-            tol=trial.suggest_loguniform("tol", 1e-15, 1e-7),  # default: 1e-4
-            validation_fraction=trial.suggest_uniform("validation_fraction", 0.05, 0.2),
-            n_iter_no_change=trial.suggest_int(
-                "n_iter_no_change", 40, 100, log=True
-            ),  # default: 10
-            pc_exponent=trial.suggest_loguniform("pc_exponent", 1e-3, 1),
-            n_train=trial.suggest_int("n_train", 50, n_train_max),
-        )
-
-    @classmethod
-    def from_frozen_trial(cls, frozen_trial: optuna.trial.FrozenTrial):
-
-        params = frozen_trial.params
-        n_layers = params.pop("n_layers")
-
-        layers = [params.pop(f"size_layer_{i}") for i in range(n_layers)]
-        params["hidden_layer_sizes"] = tuple(layers)
-
-        return cls(**params)
-
-    @classmethod
-    def default(cls, training_waveform_number: Optional[int] = None):
-
-        try:
-            if training_waveform_number is not None:
-                best_trials = retrieve_best_trials_list()
-                return best_trial_under_n(best_trials, training_waveform_number)
-        except (FileNotFoundError, IndexError):
-            pass
-
-        return cls(
-            hidden_layer_sizes=(50, 50),
-            activation="relu",
-            alpha=1e-4,
-            batch_size=200,
-            learning_rate_init=1e-3,
-            tol=1e-9,
-            n_iter_no_change=50,
-            validation_fraction=0.1,
-            pc_exponent=0.2,
-            n_train=200,
-        )
 
 
 @dataclass
@@ -337,6 +179,7 @@ class Model:
         pca_components_number: int = 30,
         waveform_generator: Optional[WaveformGenerator] = None,
         downsampling_training: Optional[DownsamplingTraining] = None,
+        nn_kind: Type[NeuralNetwork] = SklearnNetwork,
     ):
 
         self.filename = filename
@@ -366,8 +209,7 @@ class Model:
 
         self.pca_components_number = pca_components_number
 
-        self.nn: Optional[MLPRegressor] = None
-        self.hyper: Hyperparameters = Hyperparameters.default()
+        self.nn: Optional[NeuralNetwork] = None
 
         self.training_dataset: Optional[Residuals] = None
         self.training_parameters: Optional[ParameterSet] = None
@@ -375,15 +217,16 @@ class Model:
         self.pca_data: Optional[PrincipalComponentData] = None
         self.downsampling_indices: Optional[DownsamplingIndices] = None
 
+        self.nn_kind = nn_kind
+
     @classmethod
     def default(cls, filename: str):
         model = cls(DEFAULT_DATASET_BASENAME)
 
         stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
-        stream_hyper = pkg_resources.resource_stream(__name__, model.filename_hyper)
         stream_nn = pkg_resources.resource_stream(__name__, model.filename_nn)
 
-        model.load(streams=(stream_arrays, stream_hyper, stream_nn))
+        model.load(streams=(stream_arrays, stream_nn))
 
         model.filename = filename
 
@@ -513,13 +356,10 @@ class Model:
 
     def save(self, include_training_data: bool = True) -> None:
         self.save_arrays(include_training_data)
-        joblib.dump(self.hyper, self.filename_hyper)
         if self.nn is not None:
-            joblib.dump(self.nn, self.filename_nn)
+            self.nn.save(self.filename_nn)
 
-    def load(
-        self, streams: Optional[tuple[IO[bytes], IO[bytes], IO[bytes]]] = None
-    ) -> None:
+    def load(self, streams: Optional[tuple[IO[bytes], IO[bytes]]] = None) -> None:
         """Load model from the files present in the current folder.
 
         Parameters
@@ -531,15 +371,13 @@ class Model:
 
         if streams is not None:
             filename_arrays: Union[IO[bytes], str]
-            filename_hyper: Union[IO[bytes], str]
             filename_nn: Union[IO[bytes], str]
 
-            filename_arrays, filename_hyper, filename_nn = streams
+            filename_arrays, filename_nn = streams
             file_arrays = h5py.File(filename_arrays, mode="r")
             ignore_warnings = True
         else:
             file_arrays = self.file_arrays
-            filename_hyper = self.filename_hyper
             filename_nn = self.filename_nn
             ignore_warnings = False
 
@@ -559,8 +397,7 @@ class Model:
         )
 
         try:
-            self.hyper = joblib.load(filename_hyper)
-            self.nn = joblib.load(filename_nn)
+            self.nn = self.nn_kind.from_file(filename_nn)
         except FileNotFoundError:
             logging.warn("No trained network or hyperparmeters found.")
 
@@ -611,7 +448,7 @@ class Model:
 
     def train_nn(
         self, hyper: Hyperparameters, indices: Union[list[int], slice] = slice(None)
-    ) -> MLPRegressor:
+    ) -> NeuralNetwork:
         """Train a
 
         Parameters
@@ -626,7 +463,7 @@ class Model:
 
         Returns
         -------
-        MLPRegressor
+        NeuralNetwork
             Trained network.
         """
         assert self.training_parameters is not None
@@ -641,9 +478,9 @@ class Model:
             * (self.pca_data.eigenvalues ** hyper.pc_exponent)[np.newaxis, :]
         )
 
-        return MLPRegressor(**hyper.nn_params).fit(
-            scaled_params, training_residuals[indices]
-        )
+        nn = self.nn_kind(hyper)
+        nn.fit(scaled_params, training_residuals[indices])
+        return nn
 
     def set_hyper_and_train_nn(self, hyper: Optional[Hyperparameters] = None) -> None:
         """Train the network according to the hyperparameters given,
@@ -666,10 +503,9 @@ class Model:
         hyper.max_iter *= 10
 
         self.nn = self.train_nn(hyper)
-        self.hyper = hyper
 
     def predict_residuals_bulk(
-        self, params: ParameterSet, nn: MLPRegressor, hyper: Hyperparameters
+        self, params: ParameterSet, nn: NeuralNetwork
     ) -> Residuals:
         """Make a prediction for a set of different parameters,
         using a network provided as a parameter.
@@ -678,10 +514,8 @@ class Model:
         ----------
         params : ParameterSet
             Parameters of the residuals to reconstruct.
-        nn : MLPRegressor
+        nn : NeuralNetwork
             Neural network to use for the reconstruction
-        hyper : Hyperparameters
-            Used just for the :attr:`Hyperparameters.pc_exponent` attribute.
 
         Returns
         -------
@@ -697,7 +531,7 @@ class Model:
         scaled_pca_components = nn.predict(scaled_params)
 
         combined_residuals = self.pca_model.reconstruct_data(
-            scaled_pca_components / (self.pca_data.eigenvalues ** hyper.pc_exponent),
+            scaled_pca_components / (self.pca_data.eigenvalues ** nn.hyper.pc_exponent),
             self.pca_data,
         )
 
@@ -708,17 +542,14 @@ class Model:
     def predict_waveforms_bulk(
         self,
         params: ParameterSet,
-        nn: Optional[MLPRegressor] = None,
-        hyper: Optional[Hyperparameters] = None,
+        nn: Optional[NeuralNetwork] = None,
     ) -> FDWaveforms:
 
         if nn is None:
             nn = self.nn
+        assert nn is not None
 
-        if hyper is None:
-            hyper = self.hyper
-
-        residuals = self.predict_residuals_bulk(params, nn, hyper)
+        residuals = self.predict_residuals_bulk(params, nn)
 
         return self.dataset.recompose_residuals(
             residuals, params, self.downsampling_indices
@@ -804,66 +635,6 @@ def compute_polarizations(
     hp = pre_plus * waveform
     hc = pre_cross * waveform
     return hp, hc
-
-
-def retrieve_best_trials_list() -> list[optuna.trial.FrozenTrial]:
-    """Read the list of best trials which is provided
-    with the package.
-
-    This list's location can be found at the location
-    defined by ``TRIALS_FILE``;
-    if one wishes to modify it, a new one can be generated
-    with the method :meth:`save_best_trials_to_file` of the
-    class :class:`mlgw_bns.hyperparameter_optimization.HyperparameterOptimization`
-    after an optimization job has been run.
-
-    The current trials provided are the result of about 30 hours
-    of optimization on a laptop.
-
-    Returns
-    -------
-    list[optuna.trial.FrozenTrial]
-        List of the trials in the Pareto front of an optimization.
-    """
-
-    stream = pkg_resources.resource_stream(__name__, TRIALS_FILE)
-    return joblib.load(stream)
-
-
-def best_trial_under_n(
-    best_trials: list[optuna.trial.FrozenTrial], training_number: int
-) -> Hyperparameters:
-    """Utility function to retrieve
-    a set of hyperparameters starting from a list of optimization trials.
-    The best trial in terms of accuracy is returned.
-
-    Parameters
-    ----------
-    best_trials : list[optuna.trial.FrozenTrial]
-        List of trials in the Pareto front of an optimization run.
-        A default value for such a list is the one provided by
-        :func:`retrieve_best_trials_list`.
-    training_number : int
-        Return the best trial obtained while using less than this number
-        of training waveforms.
-
-    Returns
-    -------
-    Hyperparameters
-        Hyperparameters corresponding to the best trial found.
-    """
-
-    accuracy = lambda trial: trial.values[0]
-
-    # take the most accurate trial
-    # which used less training data than the given
-    # training number
-    best_trial = sorted(
-        [trial for trial in best_trials if trial.params["n_train"] <= training_number],
-        key=accuracy,
-    )[0]
-
-    return Hyperparameters.from_frozen_trial(best_trial)
 
 
 def cartesian_waveforms_at_frequencies(

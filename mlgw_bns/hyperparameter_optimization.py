@@ -15,7 +15,8 @@ from optuna.visualization import (
 from sklearn.neural_network import MLPRegressor  # type: ignore
 
 from .data_management import Residuals
-from .model import Hyperparameters, Model, best_trial_under_n
+from .model import Hyperparameters, Model
+from .neural_network import best_trial_under_n
 
 
 class HyperparameterOptimization:
@@ -183,7 +184,7 @@ class HyperparameterOptimization:
 
         # validate on another subset of the data
         predicted_residuals = self.model.predict_residuals_bulk(
-            self.model.training_parameters[validation_indices], nn, hyper
+            self.model.training_parameters[validation_indices], nn
         )
 
         accuracy = self.residuals_difference(
