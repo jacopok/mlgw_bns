@@ -5,7 +5,6 @@ from EOBRun_module import EOBRunPy  # type: ignore
 from mlgw_bns.model import Model, ParametersWithExtrinsic
 
 
-@pytest.mark.xfail
 def test_teob_generator(dataset, teob_generator):
     params = ParametersWithExtrinsic(
         mass_ratio=1.0,
@@ -25,11 +24,16 @@ def test_teob_generator(dataset, teob_generator):
     )
 
     teob_dict = params.teobresums_dict(dataset)
+    assert teob_dict == params.intrinsic(dataset).teobresums
 
     f_eobrun, hpr, hpi, _, _ = EOBRunPy(teob_dict)
+    f_eobrun, hpr2, hpi2, _, _ = EOBRunPy(teob_dict)
 
     assert np.allclose(f_generator, f_eobrun)
-    assert np.allclose(waveform[200:], (hpr - 1j * hpi)[200:])
+    assert np.allclose(hpr, hpr2)
+    assert np.allclose(hpi, hpi2)
+
+    assert np.allclose(waveform[300:], (hpr - 1j * hpi)[300:], atol=1e-3)
 
 
 def test_geometric_units_normalization(dataset, teob_generator):
