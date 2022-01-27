@@ -14,7 +14,8 @@ TRIALS_FILE = "data/best_trials.pkl"
 @dataclass
 class Hyperparameters:
     r"""Dataclass containing the parameters which are passed to
-    the neural network for training, as well as a few more.
+    the neural network for training, as well as a few more
+    (:attr:`pc_exponent`) and (:attr:`n_train`).
 
     Parameters
     ----------
@@ -169,6 +170,10 @@ class Hyperparameters:
 
 
 class NeuralNetwork(ABC):
+    """Abstract class for a wrapper around
+    a generic neural network.
+    """
+
     def __init__(self, hyper: Hyperparameters):
         self.hyper = hyper
 
@@ -222,6 +227,10 @@ class NeuralNetwork(ABC):
 
 
 class SklearnNetwork(NeuralNetwork):
+    """Wrapper for a MLPRegressor, the regressor provided by
+    the library `scikit-learn <https://scikit-learn.org/stable/>`_.
+    """
+
     def __init__(self, hyper: Hyperparameters, nn: Optional[MLPRegressor] = None):
         super().__init__(hyper=hyper)
         self.nn = MLPRegressor(**hyper.nn_params) if nn is None else nn

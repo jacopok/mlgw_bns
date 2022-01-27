@@ -68,11 +68,23 @@ class ValidateModel:
 
         return self.model.predict_waveforms_bulk(param_set, self.model.nn)
 
+    def post_newtonian_waveforms(self, param_set: ParameterSet) -> FDWaveforms:
+
+        assert self.model.nn is not None
+        residuals = self.model.predict_residuals_bulk(param_set, self.model.nn)
+        residuals.amplitude_residuals[:] = 0
+        residuals.phase_residuals[:] = 0
+
+        return self.model.dataset.recompose_residuals(
+            residuals, param_set, self.model.downsampling_indices
+        )
+
     def validation_mismatches(
         self,
         number_of_validation_waveforms: int,
         seed: Optional[int] = None,
         true_waveforms: Optional[FDWaveforms] = None,
+        zero_residuals: bool = False,
     ) -> list[float]:
         """Validate the model by computing the mismatch between
         theoretical waveforms and waveforms reconstructed by the model.
@@ -94,7 +106,10 @@ class ValidateModel:
         if true_waveforms is None:
             true_waveforms = self.true_waveforms(param_set)
 
-        predicted_waveforms = self.predicted_waveforms(param_set)
+        if zero_residuals:
+            predicted_waveforms = self.post_newtonian_waveforms(param_set)
+        else:
+            predicted_waveforms = self.predicted_waveforms(param_set)
 
         return self.mismatch_array(true_waveforms, predicted_waveforms)
 
