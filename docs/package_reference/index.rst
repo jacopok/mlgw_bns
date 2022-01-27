@@ -10,5 +10,6 @@ Package reference
    downsampling_interpolation
    data_management
    principal_component_analysis
+   neural_network
    hyperparameter_optimization
    model_validation
