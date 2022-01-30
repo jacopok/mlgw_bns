@@ -169,6 +169,9 @@ class Model:
             Training algorithm for the downsampling;
             by default None, which means the greedy algorithm
             implemented in :class:`GreedyDownsamplingTraining` is used.
+    nn_kind : Type[NeuralNetwork]
+            Neural network implementation to use,
+            defaults to :class:`SklearnNetwork`.
     """
 
     def __init__(
