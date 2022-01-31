@@ -577,26 +577,44 @@ class Model:
 
         """
         assert self.downsampling_indices is not None
+        assert self.nn is not None
+
+        # TODO test with different total mass!
 
         intrinsic_params = params.intrinsic(self.dataset)
-        waveforms = self.predict_waveforms_bulk(
-            ParameterSet.from_list_of_waveform_parameters([intrinsic_params])
+
+        residuals = self.predict_residuals_bulk(
+            ParameterSet.from_list_of_waveform_parameters([intrinsic_params]), self.nn
         )
 
-        phase_shift = (
-            params.reference_phase
-            + (2 * np.pi * params.time_shift)
-            * self.dataset.frequencies_hz[self.downsampling_indices.phase_indices]
+        amp_residuals = self.downsampling_training.resample(
+            self.dataset.frequencies_hz[self.downsampling_indices.amplitude_indices],
+            frequencies,
+            residuals.amplitude_residuals[0],
         )
 
-        waveforms.phases[0] += phase_shift
+        phi_residuals = self.downsampling_training.resample(
+            self.dataset.frequencies_hz[self.downsampling_indices.phase_indices],
+            frequencies,
+            residuals.phase_residuals[0],
+        )
 
-        cartesian_waveforms = cartesian_waveforms_at_frequencies(
-            waveforms,
-            frequencies * params.mass_sum_seconds,
-            self.dataset,
-            self.downsampling_training,
-            self.downsampling_indices,
+        pn_amplitude = self.dataset.waveform_generator.post_newtonian_amplitude(
+            intrinsic_params, frequencies * params.mass_sum_seconds
+        )
+
+        pn_phase = self.dataset.waveform_generator.post_newtonian_phase(
+            intrinsic_params, frequencies * params.mass_sum_seconds
+        )
+
+        cartesian_waveform = compute_cartesian_waveform(
+            amp_residuals,
+            pn_amplitude,
+            phi_residuals,
+            pn_phase,
+            params.reference_phase,
+            params.time_shift,
+            frequencies,
         )
 
         pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
@@ -604,7 +622,7 @@ class Model:
         pre_plus = (1 + cosi ** 2) / 2 * pre / params.distance_mpc
         pre_cross = cosi * pre * (-1j) / params.distance_mpc
 
-        return compute_polarizations(cartesian_waveforms[0], pre_plus, pre_cross)
+        return compute_polarizations(cartesian_waveform, pre_plus, pre_cross)
 
 
 @njit
@@ -688,24 +706,54 @@ def cartesian_waveforms_at_frequencies(
         ]
     )
 
-    return combine_amplitude_phase(amps, phis)
+    return amps * np.exp(1j * phis)
 
 
 @njit
-def combine_amplitude_phase(amp: np.ndarray, phi: np.ndarray) -> np.ndarray:
-    r"""Starting from arrays of amplitude :math:`A` and phase :math:`\phi`,
-    return the cartesian waveform :math:`A e^{i \phi}`.
+def compute_cartesian_waveform(
+    amplitude_residuals: np.ndarray,
+    amp_pn: np.ndarray,
+    phi_residuals: np.ndarray,
+    phi_pn: np.ndarray,
+    reference_phase: float,
+    time_shift: float,
+    frequencies: np.ndarray,
+) -> np.ndarray:
+    r"""Compute the Cartesian form of the waveform, starting
+    from the residuals, the post-Newtonian baseline,
+    and the parameters to add a linear term to the phase.
 
+    This function is separated out so that it can be
     Parameters
     ----------
-    amp : np.ndarray
-        Amplitude array.
-    phi : np.ndarray
-        Phase array.
+    amplitude_residuals : np.ndarray
+        Amplitude residuals, in the form :math:`\log (A / A_{\text{PN}})`.
+    amp_pn : np.ndarray
+        Post-Newtonian baseline amplitude.
+    phi_residuals : np.ndarray
+        Phase residuals.
+    phi_pn : np.ndarray
+        Post-Newtonian baseline phase
+    reference_phase : float
+        Overall phase to add.
+    time_shift : float
+        Time-domain shift in seconds, corresponds to
+        a linear term added to the phase.
+    frequencies : np.ndarray
+        Reference frequencies, in Hz.
 
     Returns
     -------
     np.ndarray
-        Cartesian waveform.
+        Cartesian waveform, :math:`h = A e^{i \phi}`.
     """
+
+    amp = np.exp(amplitude_residuals) * amp_pn
+    phi = (
+        phi_residuals
+        + phi_pn
+        + reference_phase
+        + (2 * np.pi * time_shift) * frequencies
+    )
+
     return amp * np.exp(1j * phi)
