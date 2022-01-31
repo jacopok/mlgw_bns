@@ -757,13 +757,6 @@ class Dataset:
     # total mass of the binary, in solar masses
     total_mass: float = 2.8
 
-    arrays_to_save: list[str] = [
-        "amplitude_residuals",
-        "phase_residuals",
-        "frequencies",
-    ]
-    # TODO document this
-
     def __init__(
         self,
         initial_frequency_hz: float,
