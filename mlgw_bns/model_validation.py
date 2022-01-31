@@ -202,6 +202,7 @@ class ValidateModel:
                 min(self.frequencies) < frequencies,
                 frequencies < max(self.frequencies) - 2 * self.model.dataset.delta_f_hz,
             )
+
             psd_values = self.psd_at_frequencies(frequencies[mask])
             frequencies = frequencies[mask]
             waveform_1 = waveform_1[mask]

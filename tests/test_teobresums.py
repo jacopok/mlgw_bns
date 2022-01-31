@@ -6,7 +6,6 @@ from mlgw_bns.dataset_generation import ParameterSet
 from mlgw_bns.model import Model, ParametersWithExtrinsic
 
 
-@pytest.mark.xfail
 def test_teob_generator(dataset, teob_generator):
     params = ParametersWithExtrinsic(
         mass_ratio=1.0,
