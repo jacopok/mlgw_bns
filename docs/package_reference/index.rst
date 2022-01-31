@@ -1,7 +1,3 @@
-*****************
-Package reference
-*****************
-
 .. toctree::
    :maxdepth: 2
 
