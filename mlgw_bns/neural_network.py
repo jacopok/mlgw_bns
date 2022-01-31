@@ -6,7 +6,10 @@ import joblib  # type: ignore
 import numpy as np
 import optuna
 import pkg_resources
+import torch
+import torch.utils.data as Data
 from sklearn.neural_network import MLPRegressor  # type: ignore
+from torch.autograd import Variable
 
 TRIALS_FILE = "data/best_trials.pkl"
 
@@ -240,6 +243,98 @@ class SklearnNetwork(NeuralNetwork):
 
     def predict(self, x_data: np.ndarray) -> np.ndarray:
         return self.nn.predict(x_data)
+
+    def save(self, filename: str):
+        joblib.dump((self.hyper, self.nn), filename)
+
+    @classmethod
+    def from_file(cls, filename: Union[IO[bytes], str]):
+        return cls(*joblib.load(filename))
+
+
+class TorchNetwork(NeuralNetwork):
+    """Wrapper for a network using pytorch."""
+
+    def __init__(
+        self,
+        hyper: Hyperparameters,
+        nn: Optional[torch.nn.modules.container.Sequential] = None,
+    ) -> None:
+        super().__init__(hyper=hyper)
+
+        self.nn = nn if nn is not None else self.make_nn()
+
+    def make_nn(
+        self, size_in: int = 5, size_out: int = 30
+    ) -> torch.nn.modules.container.Sequential:
+        activations = {
+            "logistic": torch.nn.LogSigmoid(),
+            "tanh": torch.nn.Tanh(),
+            "relu": torch.nn.ReLU(),
+        }
+        activation = activations[self.hyper.activation]
+
+        sizes_in = (size_in,) + self.hyper.hidden_layer_sizes
+        sizes_out = self.hyper.hidden_layer_sizes + (size_out,)
+
+        return torch.nn.Sequential(
+            *(
+                layer
+                for s_in, s_out in zip(sizes_in, sizes_out)
+                for layer in (activation, torch.nn.Linear(s_in, s_out))
+            )
+        )
+
+    def fit(self, x_data: np.ndarray, y_data: np.ndarray) -> None:
+        # TODO: add validation
+        # from pytorch ignite maybe?
+        # https://pytorch.org/ignite/generated/ignite.handlers.early_stopping.EarlyStopping.html
+
+        x, y = Variable(x_data), Variable(y_data)
+
+        torch_dataset = Data.TensorDataset(x, y)
+
+        loader_iterable = iter(
+            Data.DataLoader(
+                dataset=torch_dataset, batch_size=self.hyper.batch_size, shuffle=True
+            )
+        )
+
+        optimizer = torch.optim.Adam(
+            self.nn.parameters(),
+            lr=self.hyper.learning_rate_init,
+            weight_decay=self.hyper.alpha,
+        )
+
+        loss_func = torch.nn.MSELoss()
+
+        n_iters_no_improvement = 0
+        previous_loss = np.inf
+
+        while n_iters_no_improvement < self.hyper.n_iter_no_change:
+            batch_x, batch_y = next(loader_iterable)
+
+            b_x = Variable(batch_x)
+            b_y = Variable(batch_y)
+
+            prediction = self.nn(b_x)
+
+            loss = loss_func(prediction, b_y)
+
+            optimizer.zero_grad()  # clear gradients for next train
+            loss.backward()  # backpropagation, compute gradients
+            optimizer.step()  # apply gradients
+
+            loss_improvement = previous_loss - loss.item()
+            if abs(loss_improvement) > self.hyper.tol:
+                n_iters_no_improvement = 0
+            else:
+                n_iters_no_improvement += 1
+
+    def predict(self, x_data: np.ndarray) -> np.ndarray:
+        x = Variable(x_data)
+
+        return self.nn(x).numpy()
 
     def save(self, filename: str):
         joblib.dump((self.hyper, self.nn), filename)
