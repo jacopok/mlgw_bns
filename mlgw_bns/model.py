@@ -934,4 +934,4 @@ def combine_amplitude_phase(amp: np.ndarray, phi: np.ndarray) -> np.ndarray:
     np.ndarray
         Cartesian waveform.
     """
-    return amp * np.exp(-1j * phi)
+    return amp * np.exp(1j * phi)
