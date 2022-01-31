@@ -12,7 +12,6 @@ from optuna.visualization import (
     plot_param_importances,
     plot_pareto_front,
 )
-from sklearn.neural_network import MLPRegressor  # type: ignore
 
 from .data_management import Residuals
 from .model import Hyperparameters, Model
@@ -281,7 +280,9 @@ class HyperparameterOptimization:
             logging.info("Saved to file.")
 
     def plot_pareto(self) -> None:
-        """Plot the Pareto front of the bivariate optimization."""
+        """Plot the Pareto front of the bivariate optimization,
+        making use of the function :func:`optuna.visualization.plot_pareto_front`."""
+
         fig = plot_pareto_front(
             self.study,
             target_names=[
