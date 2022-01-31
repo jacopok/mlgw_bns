@@ -2,11 +2,15 @@ import numpy as np
 import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 
-from mlgw_bns.dataset_generation import TEOBResumSGenerator
-from mlgw_bns.model import Model, ParametersWithExtrinsic
+from mlgw_bns.dataset_generation import ParameterSet, TEOBResumSGenerator
+from mlgw_bns.model import (
+    Model,
+    ParametersWithExtrinsic,
+    cartesian_waveforms_at_frequencies,
+)
 from mlgw_bns.model_validation import ValidateModel
 
-DEFAULT_MODEL_MAX_MISMATCH = 3e-5
+DEFAULT_MODEL_MAX_MISMATCH = 1e-5
 TRAINED_MODEL_MAX_MISMATCH = 1e-2
 
 
@@ -74,7 +78,10 @@ def test_default_model_residuals(default_model):
 )
 @pytest.mark.parametrize(
     "model_name, tolerance_mismatch, tolerance_amp",
-    [("trained_model", 1e-2, 5e-2), ("default_model", 3e-5, 2e-3)],
+    [
+        ("trained_model", TRAINED_MODEL_MAX_MISMATCH, 1e-1),
+        ("default_model", DEFAULT_MODEL_MAX_MISMATCH, 2e-3),
+    ],
 )
 def test_model_nn_prediction(
     model_name,
@@ -159,5 +166,5 @@ def test_model_nn_prediction(
         rtol=tolerance_amp,
     )
 
-    assert np.allclose(abs(hp), abs(hp_teob), atol=0.0, rtol=tolerance_amp * 10)
-    assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=tolerance_amp * 10)
+    assert np.allclose(abs(hp), abs(hp_teob), atol=0.0, rtol=tolerance_amp * 20)
+    assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=tolerance_amp * 20)
