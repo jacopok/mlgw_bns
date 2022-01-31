@@ -165,5 +165,24 @@ def test_parameter_generator_changes_seed(dataset):
     gen1 = dataset.make_parameter_generator()
     gen2 = dataset.make_parameter_generator()
 
+    # a normal distribution, but it could be anything
     assert gen1.rng.normal() != gen2.rng.normal()
+    # more importantly, the parameters generated should be the same
     assert not np.allclose(next(gen1).array, next(gen2).array)
+
+
+def test_true_waveforms_in_validation(dataset, parameters):
+
+    param_set = ParameterSet.from_list_of_waveform_parameters([parameters])
+    waveforms = dataset.generate_waveforms_from_params(param_set)
+    cartesian_wf_from_polar = waveforms.amplitudes[0] * np.exp(1j * waveforms.phases[0])
+
+    f, cartesian_wf_direct = dataset.waveform_generator.effective_one_body_waveform(
+        parameters
+    )
+
+    assert np.allclose(abs(cartesian_wf_direct), abs(cartesian_wf_from_polar))
+    assert np.allclose(
+        np.unwrap(np.angle(cartesian_wf_direct)) - np.angle(cartesian_wf_direct[0]),
+        np.unwrap(np.angle(cartesian_wf_from_polar)),
+    )
