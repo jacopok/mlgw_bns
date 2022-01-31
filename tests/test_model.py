@@ -6,6 +6,9 @@ from mlgw_bns.dataset_generation import TEOBResumSGenerator
 from mlgw_bns.model import Model, ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 
+DEFAULT_MODEL_MAX_MISMATCH = 3e-5
+TRAINED_MODEL_MAX_MISMATCH = 1e-2
+
 
 def test_validating_model(generated_model):
 
@@ -30,7 +33,7 @@ def test_quick_model_with_validation_mismatches(trained_model):
 
     mismatches = vm.validation_mismatches(16)
 
-    assert all(m < 1e-2 for m in mismatches)
+    assert all(m < TRAINED_MODEL_MAX_MISMATCH for m in mismatches)
 
 
 def test_default_model_with_validation_mismatches(default_model):
@@ -39,7 +42,7 @@ def test_default_model_with_validation_mismatches(default_model):
 
     mismatches = vm.validation_mismatches(16)
 
-    assert all(m < 3e-5 for m in mismatches)
+    assert all(m < DEFAULT_MODEL_MAX_MISMATCH for m in mismatches)
 
 
 def test_default_model_residuals(default_model):
@@ -63,19 +66,23 @@ def test_default_model_residuals(default_model):
     # assert all(abs(phase_errors) < 1e-2)
 
 
-@pytest.mark.xfail
+# @pytest.mark.xfail
 @pytest.mark.benchmark(group="model-prediction")
 @pytest.mark.parametrize(
-    # "number_of_sample_points",
-    # [16384]
     "number_of_sample_points",
     [128, 256, 512, 1024, 2048, 4096, 8192, 16384],
 )
 @pytest.mark.parametrize(
-    "model_name, tolerance", [("trained_model", 1e-2), ("default_model", 1e-4)]
+    "model_name, tolerance_mismatch, tolerance_amp",
+    [("trained_model", 1e-2, 5e-2), ("default_model", 3e-5, 2e-3)],
 )
 def test_model_nn_prediction(
-    model_name, tolerance, request, benchmark, number_of_sample_points
+    model_name,
+    tolerance_mismatch,
+    tolerance_amp,
+    request,
+    benchmark,
+    number_of_sample_points,
 ):
     """Test whether the prediction for the plus and cross polarizations
     provided by the model matches the value given by
@@ -101,14 +108,13 @@ def test_model_nn_prediction(
     teob_dict["srate_interp"] /= params.mass_sum_seconds
     teob_dict["df"] /= params.mass_sum_seconds
 
-    n_additional = 256
-
     # tweak initial frequency backward by a few samples
     # this is needed because of a bug in TEOBResumS
     # causing the phase evolution not to behave properly
     # at the beginning of integration
     # TODO remove this once the TEOB bug is fixed
 
+    n_additional = 256
     f_0 = teob_dict["initial_frequency"]
     delta_f = teob_dict["df"]
     new_f0 = f_0 - delta_f * n_additional
@@ -134,10 +140,24 @@ def test_model_nn_prediction(
     # The model used here uses quite few training data, so we are not able to
     # achieve very small mismatches.
     # TODO is the mismatch found here too high?
-    assert vm.mismatch(hp, hp_teob, frequencies=freqs_hz) < tolerance
-    assert vm.mismatch(hc, hc_teob, frequencies=freqs_hz) < tolerance
+    assert vm.mismatch(hp, hp_teob, frequencies=freqs_hz) < tolerance_mismatch
+    assert vm.mismatch(hc, hc_teob, frequencies=freqs_hz) < tolerance_mismatch
 
     # the mismatch does not account for the magnitude of the waveforms,
     # so we check that separately.
-    assert np.allclose(abs(hp), abs(hp_teob), atol=0.0, rtol=tolerance)
-    assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=tolerance)
+    assert np.allclose(
+        abs(hp)[: number_of_sample_points // 4],
+        abs(hp_teob)[: number_of_sample_points // 4],
+        atol=0.0,
+        rtol=tolerance_amp,
+    )
+
+    assert np.allclose(
+        abs(hc)[: number_of_sample_points // 4],
+        abs(hc_teob)[: number_of_sample_points // 4],
+        atol=0.0,
+        rtol=tolerance_amp,
+    )
+
+    assert np.allclose(abs(hp), abs(hp_teob), atol=0.0, rtol=tolerance_amp * 10)
+    assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=tolerance_amp * 10)
