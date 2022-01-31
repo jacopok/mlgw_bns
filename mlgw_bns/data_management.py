@@ -1,7 +1,15 @@
 """Management of data which can be saved 
 in an h5 file.
 
-The idea of these data structures is to """
+The idea of these data structures is to
+provide a framework so that a lot of heterogeneous 
+data can be saved to the _same_ h5 file coherently, 
+as a separate group. 
+
+Each subclass of :class:`SavableData` has a default group name
+which will become the name of the h5 file group in which 
+that data is saved. 
+"""
 from __future__ import annotations
 
 import logging
@@ -21,8 +29,6 @@ class SavableData:
     """Generic container for data which might need to be saved to file.
 
     Subclasses should also be decorated with ``@dataclass``.
-
-
     """
 
     @property
@@ -119,6 +125,23 @@ class SavableData:
 
 @dataclass
 class DownsamplingIndices(SavableData):
+    """Indices to be used to select a subset of frequencies
+    at which the waveform's amplitude and phase
+    can be sampled while retaining a good degree of accuracy.
+
+    The corresponding frequencies are the ones obtained
+    when slicing the "standard frequency array" at those indices.
+
+    This array can be obtained by accessing the ``frequencies``
+    (natural units) or ``frequencies_hz`` (SI units) property
+    of a :class:`Dataset` instance.
+
+    It is an equally-spaced frequency array, starting at
+    an initial frequency, finishing at half of the time-domain
+    interpolation rate, with a step equal to the inverse of the
+    length of the time-domain waveform.
+    """
+
     amplitude_indices: list[int]
     phase_indices: list[int]
 
