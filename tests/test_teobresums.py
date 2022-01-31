@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 
+from mlgw_bns.dataset_generation import ParameterSet
 from mlgw_bns.model import Model, ParametersWithExtrinsic
 
 
@@ -26,14 +27,20 @@ def test_teob_generator(dataset, teob_generator):
     teob_dict = params.teobresums_dict(dataset)
     assert teob_dict == params.intrinsic(dataset).teobresums
 
+    n_additional = 256
+    f_0 = teob_dict["initial_frequency"]
+    delta_f = teob_dict["df"]
+    new_f0 = f_0 - delta_f * n_additional
+    teob_dict["initial_frequency"] = new_f0
+
     f_eobrun, hpr, hpi, _, _ = EOBRunPy(teob_dict)
     f_eobrun, hpr2, hpi2, _, _ = EOBRunPy(teob_dict)
 
-    assert np.allclose(f_generator, f_eobrun)
+    assert np.allclose(f_generator, f_eobrun[n_additional:])
     assert np.allclose(hpr, hpr2)
     assert np.allclose(hpi, hpi2)
 
-    assert np.allclose(waveform[300:], (hpr - 1j * hpi)[300:], atol=1e-3)
+    assert np.allclose(waveform, (hpr - 1j * hpi)[n_additional:])
 
 
 def test_geometric_units_normalization(dataset, teob_generator):
