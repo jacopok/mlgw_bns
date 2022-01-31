@@ -14,4 +14,4 @@ Model for waveform generation
 
 .. autofunction:: mlgw_bns.model.cartesian_waveforms_at_frequencies
 
-.. autofunction:: mlgw_bns.model.combine_amplitude_phase
+.. autofunction:: mlgw_bns.model.compute_cartesian_waveform
