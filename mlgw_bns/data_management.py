@@ -254,7 +254,7 @@ class Residuals(SavableData):
                 The linear term is chosen so that the first
                 phase residual is zero, and so is the one corresponding
                 to this fraction of the frequencies.
-                Defaults to .1.
+                Defaults to 0.2.
         """
 
         number_of_points = self.phase_residuals.shape[1]
