@@ -31,7 +31,7 @@ class ValidateModel:
 
         self.model = model
 
-        self.pds_name: str = psd_name
+        self.psd_name: str = psd_name
         self.psd: pycbc.types.FrequencySeries = pycbc.psd.from_string(
             psd_name,
             length=len(model.dataset.frequencies) // downsample_by,
@@ -83,7 +83,11 @@ class ValidateModel:
         ----------
         number_of_validation_waveforms : int
             How many validation waveforms to use.
-        true_waveforms: Optional[FDW]
+        true_waveforms: FDWaveforms, optional
+            True waveforms to compare to.
+            This parameter should be used in order to not recompute
+            the true waveforms each time when comparing different models;
+            be wary of the
 
         Returns
         -------
