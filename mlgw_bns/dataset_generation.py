@@ -352,6 +352,10 @@ class WaveformParameters:
             parallel to the orbital angular momentum of the binary.
     chi_2 : float
             Aligned spin component of the smaller star.
+    dataset : Dataset
+            Reference dataset, which includes information
+            required for the generation of the waveform,
+            such as the initial frequency or the reference total mass.
 
     Class Attributes
     ----------------
@@ -562,7 +566,7 @@ class ParameterSet(SavableData):
         parameter_generator : ParameterGenerator
             To generate the tuples.
         number_of_parameter_tuples : int
-            How many tuples to generate
+            How many tuples to generate.
         """
 
         param_array = np.array(
