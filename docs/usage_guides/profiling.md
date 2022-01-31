@@ -73,7 +73,7 @@ the standard, FFT-grid frequency set is provided by
 Its only issue is that it is very dense, so we can downsample by a certain amount, 
 for example defining
 ```python
-m.dataset.frequencies_hz[::1024]
+frequencies = m.dataset.frequencies_hz[::1024]
 ```
 
 We are almost ready to profile: 
