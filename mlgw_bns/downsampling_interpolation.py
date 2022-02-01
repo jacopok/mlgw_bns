@@ -8,6 +8,7 @@ To provide an alternate method, just subclass
 :class:`DownsamplingTraining`.
 """
 
+from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple
