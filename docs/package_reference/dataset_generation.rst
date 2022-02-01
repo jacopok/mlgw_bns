@@ -6,6 +6,9 @@ Management of a training and validation dataset
 .. autoclass:: mlgw_bns.dataset_generation.WaveformParameters
     :members:
 
+.. autoclass:: mlgw_bns.dataset_generation.ParameterSet
+    :members:
+
 .. autoclass:: mlgw_bns.dataset_generation.Dataset
     :members:
     
