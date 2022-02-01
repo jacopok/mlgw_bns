@@ -263,9 +263,9 @@ class TorchNetwork(NeuralNetwork):
         hyper: Hyperparameters,
         nn: Optional["torch.nn.modules.container.Sequential"] = None,
     ) -> None:
-        import torch
-        import torch.utils.data as Data
-        from torch.autograd import Variable
+        import torch  # type : ignore
+        import torch.utils.data as Data  # type : ignore
+        from torch.autograd import Variable  # type : ignore
 
         super().__init__(hyper=hyper)
 
