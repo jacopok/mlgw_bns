@@ -724,6 +724,8 @@ def compute_cartesian_waveform(
     and the parameters to add a linear term to the phase.
 
     This function is separated out so that it can be
+    decorated with :func:`numba.njit`.
+
     Parameters
     ----------
     amplitude_residuals : np.ndarray
