@@ -35,22 +35,8 @@ def profile(func, *args, **kwargs):
 ```
 
 Now, we are ready to start profiling: 
-we need a trained model, so we can either do
-```python 
-m = Model('your_model_name')
-m.load()
-```
-if the model was already generated previously, or 
-```python
-m = Model('your_model_name')
-m.generate()
-m.set_hyper_and_train_nn()
-```
-where the default values for the size of the generated dataset are used, or 
-```python
-m = Model.default('your_model_name')
-```
-to make use of the default model provided with the package.
+we need a trained model, which we can obtain as outlined in [](new_model).
+Let us call our model `m`.
 
 We also need a set of parameters for the generated waveform: 
 an example set is given here.
