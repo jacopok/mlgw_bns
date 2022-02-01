@@ -273,7 +273,10 @@ class BarePostNewtonianGenerator(WaveformGenerator):
         return phase - phase[0]
 
     def effective_one_body_waveform(self, params: "WaveformParameters"):
-        return NotImplemented
+        raise NotImplementedError(
+            "This generator does not include the possibility "
+            "to generate effective one body waveforms"
+        )
 
 
 class TEOBResumSGenerator(BarePostNewtonianGenerator):
@@ -499,7 +502,15 @@ class WaveformParameters:
         }
 
     @property
-    def array(self):
+    def array(self) -> np.ndarray:
+        r"""Represent the parameters as a numpy array.
+
+        Returns
+        -------
+        np.ndarray
+            Array representation of the parameters, specifically
+            :math:`[q, \Lambda_1, \Lambda_2, \chi_1, \chi_2]`.
+        """
         return np.array(
             [self.mass_ratio, self.lambda_1, self.lambda_2, self.chi_1, self.chi_2]
         )
@@ -508,6 +519,9 @@ class WaveformParameters:
 @dataclass
 class ParameterSet(SavableData):
     """Dataclass which contains an array of parameters for waveform generation.
+
+    The meaning of each row of parameters is the same which is described
+    in :meth:`WaveformParameters.array`.
 
     Parameters
     ----------
