@@ -23,7 +23,6 @@ sortedcontainers = "^2.4.0"
 joblib = "^1.1.0"
 plotly = "^5.5.0"
 types-setuptools = "^57.4.7"
-myst-parser = "^0.15.2"
 torch = {version="^1.10.2", optional=true}
 
 [tool.poetry.extras]
@@ -31,6 +30,7 @@ teobresums = ["TEOBResumSPy"]
 torch = ["torch"]
 
 [tool.poetry.dev-dependencies]
+myst-parser = "^0.15.2"
 TEOBResumSPy = {path='../teobresums/Python', develop=true, optional=true}
 pytest = "^6.1.2"
 tox = "^3.20.1"
