@@ -4,6 +4,8 @@ The classes defined here are meant to be lightweight: they do not store
 the data, instead deferring its management to the higher-level :class:`Model` class.
 """
 
+from __future__ import annotations
+
 import logging  # type: ignore
 
 import numpy as np
