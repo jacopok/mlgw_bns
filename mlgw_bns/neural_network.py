@@ -1,15 +1,18 @@
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import IO, Optional, Union
+from typing import IO, TYPE_CHECKING, Optional, Union
 
 import joblib  # type: ignore
 import numpy as np
 import optuna
 import pkg_resources
-import torch
-import torch.utils.data as Data
 from sklearn.neural_network import MLPRegressor  # type: ignore
-from torch.autograd import Variable
+
+if TYPE_CHECKING:
+    import torch  # type: ignore
+    import torch.utils.data as Data  # type: ignore
+    from torch.autograd import Variable  # type: ignore
 
 TRIALS_FILE = "data/best_trials.pkl"
 
@@ -258,15 +261,19 @@ class TorchNetwork(NeuralNetwork):
     def __init__(
         self,
         hyper: Hyperparameters,
-        nn: Optional[torch.nn.modules.container.Sequential] = None,
+        nn: Optional["torch.nn.modules.container.Sequential"] = None,
     ) -> None:
+        import torch
+        import torch.utils.data as Data
+        from torch.autograd import Variable
+
         super().__init__(hyper=hyper)
 
         self.nn = nn if nn is not None else self.make_nn()
 
     def make_nn(
         self, size_in: int = 5, size_out: int = 30
-    ) -> torch.nn.modules.container.Sequential:
+    ) -> "torch.nn.modules.container.Sequential":
         activations = {
             "logistic": torch.nn.LogSigmoid(),
             "tanh": torch.nn.Tanh(),
