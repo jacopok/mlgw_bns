@@ -239,6 +239,24 @@ class Residuals(SavableData):
             combined_residuals[:, :amp_points], combined_residuals[:, -phase_points:]
         )
 
+    @classmethod
+    def from_two_waveform_datasets(
+        cls, waveforms_1: FDWaveforms, waveforms_2: FDWaveforms
+    ):
+        """Create a dataset of residuals
+        corresponding to the difference between the two given datasets.
+
+        Parameters
+        ----------
+        waveforms_1 : FDWaveforms
+        waveforms_2 : FDWaveforms
+
+        """
+        return cls(
+            np.log(waveforms_1.amplitudes / waveforms_2.amplitudes),
+            waveforms_1.phases - waveforms_2.phases,
+        )
+
     def flatten_phase(
         self, frequencies: np.ndarray, first_section_flat: float = 0.2
     ) -> None:
@@ -321,11 +339,11 @@ class FDWaveforms(SavableData):
     Parameters
     ----------
     amplitudes: np.ndarray
-            Amplitude residuals.
+            Amplitude of the waveforms.
             An array with shape
             ``(n_waveforms, n_samples_amp)``.
     phases: np.ndarray
-            Phase residuals.
+            Phases of the waveforms.
             An array with shape
             ``(n_waveforms, n_samples_phi)``.
 
