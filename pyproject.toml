@@ -30,12 +30,11 @@ readthedocs-sphinx-search = {version="^0.1.1", optional=true}
 myst-parser = {version="^0.15.2", optional=true}
 
 [tool.poetry.extras]
-teobresums = ["TEOBResumSPy"]
 torch = ["torch"]
 docs = ["Sphinx", "sphinx-rtd-theme", "readthedocs-sphinx-search", "myst-parser"]
 
 [tool.poetry.dev-dependencies]
-TEOBResumSPy = {path='../teobresums/Python', develop=true, optional=true}
+TEOBResumSPy = {path='../teobresums/Python', develop=true}
 pytest = "^6.1.2"
 tox = "^3.20.1"
 black = "^21.11b1"
