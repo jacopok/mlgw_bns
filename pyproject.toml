@@ -23,6 +23,7 @@ sortedcontainers = "^2.4.0"
 joblib = "^1.1.0"
 plotly = "^5.5.0"
 types-setuptools = "^57.4.7"
+myst-parser = "^0.15.2"
 torch = {version="^1.10.2", optional=true}
 
 [tool.poetry.extras]
@@ -42,7 +43,6 @@ virtualenv = "^20.10.0"
 ipython = "^7.30.1"
 Sphinx = "^4.3.1"
 sphinx-rtd-theme = "^1.0.0"
-myst-parser = "^0.15.2"
 pytest-cov = "^3.0.0"
 pytest-benchmark = "^3.4.1"
 isort = "^5.10.1"
