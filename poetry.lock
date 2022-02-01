@@ -2,13 +2,13 @@
 name = "alabaster"
 version = "0.7.12"
 description = "A configurable sidebar-enabled Sphinx theme"
-category = "dev"
+category = "main"
 optional = false
 python-versions = "*"
 
 [[package]]
 name = "alembic"
-version = "1.7.5"
+version = "1.7.6"
 description = "A database migration tool for SQLAlchemy."
 category = "main"
 optional = false
@@ -97,7 +97,7 @@ python-versions = ">=3.6"
 name = "babel"
 version = "2.9.1"
 description = "Internationalization utilities"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
 
@@ -442,7 +442,7 @@ python-versions = "*"
 name = "docutils"
 version = "0.17.1"
 description = "Docutils -- Python Documentation Utilities"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 
@@ -460,7 +460,7 @@ testing = ["covdefaults (>=1.2.0)", "coverage (>=4)", "pytest (>=4)", "pytest-co
 
 [[package]]
 name = "fonttools"
-version = "4.29.0"
+version = "4.29.1"
 description = "Tools to manipulate font files"
 category = "main"
 optional = false
@@ -568,7 +568,7 @@ python-versions = ">=3.5"
 name = "imagesize"
 version = "1.3.0"
 description = "Getting image size from png/jpeg/jpeg2000/gif file"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
 
@@ -838,7 +838,7 @@ lingua = ["lingua"]
 name = "markdown-it-py"
 version = "1.1.0"
 description = "Python port of markdown-it. Markdown parsing, done right!"
-category = "dev"
+category = "main"
 optional = false
 python-versions = "~=3.6"
 
@@ -904,7 +904,7 @@ python-versions = "*"
 name = "mdit-py-plugins"
 version = "0.2.8"
 description = "Collection of plugins for markdown-it-py"
-category = "dev"
+category = "main"
 optional = false
 python-versions = "~=3.6"
 
@@ -986,7 +986,7 @@ python-versions = "*"
 name = "myst-parser"
 version = "0.15.2"
 description = "An extended commonmark compliant parser, with bridges to docutils & sphinx."
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.6"
 
@@ -1393,7 +1393,7 @@ test = ["pytest", "pytest-doctestplus (>=0.7)"]
 name = "pygments"
 version = "2.11.2"
 description = "Pygments is a syntax highlighting package written in Python."
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.5"
 
@@ -1561,7 +1561,7 @@ six = ">=1.5"
 name = "pytz"
 version = "2021.3"
 description = "World timezone definitions, modern and historical"
-category = "dev"
+category = "main"
 optional = false
 python-versions = "*"
 
@@ -1637,7 +1637,7 @@ jupyter = ["ipywidgets (>=7.5.1,<8.0.0)"]
 
 [[package]]
 name = "scalene"
-version = "1.5.0"
+version = "1.5.1"
 description = "Scalene: A high-resolution, low-overhead CPU, GPU, and memory profiler for Python"
 category = "dev"
 optional = false
@@ -1739,7 +1739,7 @@ tornado = ">=2.0"
 name = "snowballstemmer"
 version = "2.2.0"
 description = "This package provides 29 stemmers for 28 languages generated from Snowball algorithms."
-category = "dev"
+category = "main"
 optional = false
 python-versions = "*"
 
@@ -1763,7 +1763,7 @@ python-versions = ">=3.6"
 name = "sphinx"
 version = "4.3.2"
 description = "Python documentation generator"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.6"
 
@@ -1809,7 +1809,7 @@ dev = ["transifex-client", "sphinxcontrib-httpdomain", "bump2version"]
 name = "sphinxcontrib-applehelp"
 version = "1.0.2"
 description = "sphinxcontrib-applehelp is a sphinx extension which outputs Apple help books"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.5"
 
@@ -1821,7 +1821,7 @@ test = ["pytest"]
 name = "sphinxcontrib-devhelp"
 version = "1.0.2"
 description = "sphinxcontrib-devhelp is a sphinx extension which outputs Devhelp document."
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.5"
 
@@ -1833,7 +1833,7 @@ test = ["pytest"]
 name = "sphinxcontrib-htmlhelp"
 version = "2.0.0"
 description = "sphinxcontrib-htmlhelp is a sphinx extension which renders HTML help files"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.6"
 
@@ -1845,7 +1845,7 @@ test = ["pytest", "html5lib"]
 name = "sphinxcontrib-jsmath"
 version = "1.0.1"
 description = "A sphinx extension which renders display math in HTML via JavaScript"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.5"
 
@@ -1856,7 +1856,7 @@ test = ["pytest", "flake8", "mypy"]
 name = "sphinxcontrib-qthelp"
 version = "1.0.3"
 description = "sphinxcontrib-qthelp is a sphinx extension which outputs QtHelp document."
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.5"
 
@@ -1868,7 +1868,7 @@ test = ["pytest"]
 name = "sphinxcontrib-serializinghtml"
 version = "1.1.5"
 description = "sphinxcontrib-serializinghtml is a sphinx extension which outputs \"serialized\" HTML files (json and pickle)."
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.5"
 
@@ -1982,7 +1982,7 @@ python-versions = ">=3.6"
 
 [[package]]
 name = "tomlkit"
-version = "0.8.0"
+version = "0.9.0"
 description = "Style preserving TOML library"
 category = "dev"
 optional = false
@@ -2187,7 +2187,7 @@ torch = ["torch"]
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.7,<3.10"
-content-hash = "ae93a163af83913d41f6bfc7395ae6891c370056b7dd69e858a3516173a15730"
+content-hash = "414e06abe1cf397d0546d0104c701b697bb9c0596e3f7d1801673f13dfe0ac26"
 
 [metadata.files]
 alabaster = [
@@ -2195,8 +2195,8 @@ alabaster = [
     {file = "alabaster-0.7.12.tar.gz", hash = "sha256:a661d72d58e6ea8a57f7a86e37d86716863ee5e92788398526d58b26a4e4dc02"},
 ]
 alembic = [
-    {file = "alembic-1.7.5-py3-none-any.whl", hash = "sha256:a9dde941534e3d7573d9644e8ea62a2953541e27bc1793e166f60b777ae098b4"},
-    {file = "alembic-1.7.5.tar.gz", hash = "sha256:7c328694a2e68f03ee971e63c3bd885846470373a5b532cf2c9f1601c413b153"},
+    {file = "alembic-1.7.6-py3-none-any.whl", hash = "sha256:ad842f2c3ab5c5d4861232730779c05e33db4ba880a08b85eb505e87c01095bc"},
+    {file = "alembic-1.7.6.tar.gz", hash = "sha256:6c0c05e9768a896d804387e20b299880fe01bc56484246b0dffe8075d6d3d847"},
 ]
 appnope = [
     {file = "appnope-0.1.2-py2.py3-none-any.whl", hash = "sha256:93aa393e9d6c54c5cd570ccadd8edad61ea0c4b9ea7a01409020c9aa019eb442"},
@@ -2503,8 +2503,8 @@ filelock = [
     {file = "filelock-3.4.2.tar.gz", hash = "sha256:38b4f4c989f9d06d44524df1b24bd19e167d851f19b50bf3e3559952dddc5b80"},
 ]
 fonttools = [
-    {file = "fonttools-4.29.0-py3-none-any.whl", hash = "sha256:ed9496e5650b977a697c50ac99c8e8331f9eae3f99e5ae649623359103306dfe"},
-    {file = "fonttools-4.29.0.zip", hash = "sha256:f4834250db2c9855c3385459579dbb5cdf74349ab059ea0e619359b65ae72037"},
+    {file = "fonttools-4.29.1-py3-none-any.whl", hash = "sha256:1933415e0fbdf068815cb1baaa1f159e17830215f7e8624e5731122761627557"},
+    {file = "fonttools-4.29.1.zip", hash = "sha256:2b18a172120e32128a80efee04cff487d5d140fe7d817deb648b2eee023a40e4"},
 ]
 glob2 = [
     {file = "glob2-0.7.tar.gz", hash = "sha256:85c3dbd07c8aa26d63d7aacee34fa86e9a91a3873bc30bf62ec46e531f92ab8c"},
@@ -3386,18 +3386,18 @@ rich = [
     {file = "rich-11.1.0.tar.gz", hash = "sha256:43e03d8eec12e21beaecc22c828a41c4247356414a12d5879834863d4ad53816"},
 ]
 scalene = [
-    {file = "scalene-1.5.0-cp310-cp310-macosx_10_15_universal2.whl", hash = "sha256:0c8333f8e6e34d433961147fb1342c19e25f4e699d292bc8434fafa11db18113"},
-    {file = "scalene-1.5.0-cp310-cp310-manylinux_2_24_x86_64.whl", hash = "sha256:000efce68721c34cee0b75bdba4e8b5f3aee85e30598515ee6ce1da129226c3e"},
-    {file = "scalene-1.5.0-cp310-cp310-win_amd64.whl", hash = "sha256:bb80a3a14663feff508fef48a572e36fb3c700d1756975b6f976cc2e4415450f"},
-    {file = "scalene-1.5.0-cp37-cp37m-macosx_10_14_universal2.whl", hash = "sha256:deaec2b282288cebf6e1960170aa239d221f79cd3048b983ca97f8f0a83af95b"},
-    {file = "scalene-1.5.0-cp37-cp37m-manylinux_2_24_x86_64.whl", hash = "sha256:96252e51886b2ddab2e9a314c94828f4acb8fc8d89fffffcaa41b23b66ef432c"},
-    {file = "scalene-1.5.0-cp38-cp38-macosx_10_14_universal2.whl", hash = "sha256:250608198e7e92a229ef8db5900c6a00300921df1e2257bd93a63fd07b7d3cb8"},
-    {file = "scalene-1.5.0-cp38-cp38-manylinux_2_24_x86_64.whl", hash = "sha256:5b3aacd8518c9477d35dd7fdeac4f6a04d69d05288da580d33ffd288a44e8a65"},
-    {file = "scalene-1.5.0-cp38-cp38-win_amd64.whl", hash = "sha256:9a38f0507416d96a083bc35468846df454da41cbfe48a2fdcd123d86b4b23d68"},
-    {file = "scalene-1.5.0-cp39-cp39-macosx_10_15_universal2.whl", hash = "sha256:5458f0697777723b1909760cc3136e23e0c6a17e7eaffb3f2d65a0bb9161106d"},
-    {file = "scalene-1.5.0-cp39-cp39-manylinux_2_24_x86_64.whl", hash = "sha256:344d56c32e03e61f464fe52aa467b29f363888ad38d158be2ee194f0a03350d3"},
-    {file = "scalene-1.5.0-cp39-cp39-win_amd64.whl", hash = "sha256:0170eb40f481ad1a3b09d143c78cb3ace2d0d5d3b27ad48ad0883ecb74a30800"},
-    {file = "scalene-1.5.0.tar.gz", hash = "sha256:7d5544320839940526053a309fabdd017a4b196edc250c97c1384cc9ec295a38"},
+    {file = "scalene-1.5.1-cp310-cp310-macosx_10_15_universal2.whl", hash = "sha256:d57a1e4a4a8c094edb032a18f6234665f10a4bacc53dca259fb5a4a46c16d785"},
+    {file = "scalene-1.5.1-cp310-cp310-manylinux_2_24_x86_64.whl", hash = "sha256:4af6f7a885ce73e634ae5ecf2eba7424c15200c4f1b404357008ece40e1c9327"},
+    {file = "scalene-1.5.1-cp310-cp310-win_amd64.whl", hash = "sha256:6835673f86d59ec267fd625825fec55c4cfaa4bbf34c048e46c15b6331741cae"},
+    {file = "scalene-1.5.1-cp37-cp37m-macosx_10_14_universal2.whl", hash = "sha256:bde640fa6d14d04770ac6e4580cdf5e806f90ab0b90262791ca4aad59abd3d56"},
+    {file = "scalene-1.5.1-cp37-cp37m-manylinux_2_24_x86_64.whl", hash = "sha256:1442b629d05752a6c9a439bb9195417eb4c34ecc7b92b587f10a70816e68ff4f"},
+    {file = "scalene-1.5.1-cp38-cp38-macosx_10_14_universal2.whl", hash = "sha256:acf0113e6766e57a0423a470614b74eab6ece4be078f31492ffd5926c94a946d"},
+    {file = "scalene-1.5.1-cp38-cp38-manylinux_2_24_x86_64.whl", hash = "sha256:1986d259d1658c9a7fcd5522fb3e9718ee0c577a414dd72be46c53a81348b2ae"},
+    {file = "scalene-1.5.1-cp38-cp38-win_amd64.whl", hash = "sha256:f5b490b0b9306e4cde5899302d0e1c36dbb2e68f130e19a73e3f27f15e695d08"},
+    {file = "scalene-1.5.1-cp39-cp39-macosx_10_15_universal2.whl", hash = "sha256:07135fd500299d57cb77c7477284801752f7d5f5ebd0ad140bbd4254db01e874"},
+    {file = "scalene-1.5.1-cp39-cp39-manylinux_2_24_x86_64.whl", hash = "sha256:bcd5d7f22174d7665c4760dce0255053b895fa3b726773d5160a1aea9ebbdd69"},
+    {file = "scalene-1.5.1-cp39-cp39-win_amd64.whl", hash = "sha256:a3a63f5ed1f45d0ee00381c66f60c33b510ae5f1920c265a4b91247e553218c6"},
+    {file = "scalene-1.5.1.tar.gz", hash = "sha256:aa2772983907f057a824461d78d67b12a72f80a76645c8ace57c67c6715363df"},
 ]
 scikit-learn = [
     {file = "scikit-learn-1.0.2.tar.gz", hash = "sha256:b5870959a5484b614f26d31ca4c17524b1b0317522199dc985c3b4256e030767"},
@@ -3592,8 +3592,8 @@ tomli = [
     {file = "tomli-1.2.3.tar.gz", hash = "sha256:05b6166bff487dc068d322585c7ea4ef78deed501cc124060e0f238e89a9231f"},
 ]
 tomlkit = [
-    {file = "tomlkit-0.8.0-py3-none-any.whl", hash = "sha256:b824e3466f1d475b2b5f1c392954c6cb7ea04d64354ff7300dc7c14257dc85db"},
-    {file = "tomlkit-0.8.0.tar.gz", hash = "sha256:29e84a855712dfe0e88a48f6d05c21118dbafb283bb2eed614d46f80deb8e9a1"},
+    {file = "tomlkit-0.9.0-py3-none-any.whl", hash = "sha256:c1b0fc73abd4f1e77c29ea4061ca0f2e11cbfb77342e17df3d3fdd496fc3f899"},
+    {file = "tomlkit-0.9.0.tar.gz", hash = "sha256:5a83672c565f78f5fc8f1e44e5f2726446cc6b765113efd21d03e9331747d9ab"},
 ]
 torch = [
     {file = "torch-1.10.2-cp310-cp310-manylinux2014_aarch64.whl", hash = "sha256:8f3fd2e3ffc3bb867133fdf7fbcc8a0bb2e62a5c0696396f51856f5abf9045a8"},
