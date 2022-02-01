@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mlgw_bns"
-version = "0.3.0"
+version = "0.4.1"
 description = "Accelerating gravitational wave template generation with machine learning."
 license = "GNU GPL3"
 authors = ["Jacopo Tissino <jacopo@tissino.it>"]
@@ -23,10 +23,11 @@ sortedcontainers = "^2.4.0"
 joblib = "^1.1.0"
 plotly = "^5.5.0"
 types-setuptools = "^57.4.7"
-torch = "^1.10.2"
+torch = {version="^1.10.2", optional=true}
 
 [tool.poetry.extras]
 teobresums = ["TEOBResumSPy"]
+torch = ["torch"]
 
 [tool.poetry.dev-dependencies]
 TEOBResumSPy = {path='../teobresums/Python', develop=true, optional=true}
