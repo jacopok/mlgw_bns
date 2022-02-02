@@ -115,7 +115,7 @@ class ParametersWithExtrinsic:
     def mass_sum_seconds(self) -> float:
         return self.total_mass * SUN_MASS_SECONDS
 
-    def teobresums_dict(self, dataset: Dataset) -> dict[str, Union[float, int]]:
+    def teobresums_dict(self, dataset: Dataset) -> dict[str, Union[float, int, str]]:
         """Parameter dictionary in a format compatible with
         TEOBResumS.
 
@@ -123,6 +123,11 @@ class ParametersWithExtrinsic:
         """
         base_dict = self.intrinsic(dataset).teobresums
         frequency_rescaling = dataset.total_mass / self.total_mass
+
+        assert isinstance(base_dict["initial_frequency"], float)
+        assert isinstance(base_dict["srate_interp"], float)
+        assert isinstance(base_dict["df"], float)
+
         base_dict["initial_frequency"] *= frequency_rescaling
         base_dict["srate_interp"] *= frequency_rescaling
         base_dict["df"] *= frequency_rescaling

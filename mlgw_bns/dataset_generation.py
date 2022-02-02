@@ -432,7 +432,7 @@ class WaveformParameters:
         return compute_delta_lambda(self.m_1, self.m_2, self.lambda_1, self.lambda_2)
 
     @property
-    def teobresums(self) -> dict[str, Union[float, int]]:
+    def teobresums(self) -> dict[str, Union[float, int, str]]:
         """Parameter dictionary in a format compatible with
         TEOBResumS.
 
@@ -448,16 +448,15 @@ class WaveformParameters:
             "distance": 1.0,
             "initial_frequency": self.dataset.initial_frequency_hz
             * self.dataset.mass_sum_seconds,
-            "use_geometric_units": 1,
-            "interp_uniform_grid": 0,
+            "use_geometric_units": "yes",
+            "interp_uniform_grid": "no",
             "domain": 1,  # Fourier domain
             "srate_interp": self.dataset.srate_hz * self.dataset.mass_sum_seconds,
             "df": self.dataset.delta_f_hz * self.dataset.mass_sum_seconds,
             "interp_FD_waveform": 1,
             "inclination": 0.0,
-            "output_hpc": 0,
-            "output_dynamics": 0,
-            "time_shift_FD": 1,
+            "output_hpc": "no",
+            "time_shift_FD": "yes",
         }
 
     def taylor_f2(
