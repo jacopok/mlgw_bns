@@ -23,7 +23,7 @@ try_model_validation.py
 !mlgw_bns/data/best_trials.pkl
 mlgw_bns/data_management.py
 *.pdf
-prediction.prof
+*.prof
 profile_model_prediction.py
 !mlgw_bns/data/default_dataset_arrays.h5
 !mlgw_bns/data/default_dataset_nn.pkl
