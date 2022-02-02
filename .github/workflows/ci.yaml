@@ -18,7 +18,6 @@ jobs:
         cd ..
         git clone https://bitbucket.org/eob_ihes/teobresums/
         cd teobresums/Python
-        mv TEOBResumSWrap_setup.py setup.py
         echo "[build-system]" >> pyproject.toml
         echo "requires = [\"numpy>=1.17\", \"setuptools\"]" >> pyproject.toml
         cd ../..

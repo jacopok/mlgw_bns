@@ -2182,13 +2182,12 @@ testing = ["pytest (>=6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "pytest-
 
 [extras]
 docs = ["Sphinx", "sphinx-rtd-theme", "readthedocs-sphinx-search", "myst-parser"]
-teobresums = []
 torch = ["torch"]
 
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.7,<3.10"
-content-hash = "9afac419f4a334b13244fda9c25afd09096adf5534636e7a4053e37011632503"
+content-hash = "b1cf0ed2fe85542b1023331c10c4895769d7ab0c6c0aab7a35dbacebf5e99814"
 
 [metadata.files]
 alabaster = [
