@@ -110,7 +110,7 @@ def test_model_nn_prediction(
     )
 
     teob_dict = params.teobresums_dict(model.dataset)
-    teob_dict["use_geometric_units"] = 0
+    teob_dict["use_geometric_units"] = "no"
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
     teob_dict["srate_interp"] /= params.mass_sum_seconds
     teob_dict["df"] /= params.mass_sum_seconds

@@ -65,7 +65,7 @@ def test_geometric_units_normalization(dataset, teob_generator):
     f, hpr, hpi, _, _ = EOBRunPy(teob_dict)
     wf = hpr - 1j * hpi
 
-    teob_dict["use_geometric_units"] = 0
+    teob_dict["use_geometric_units"] = "no"
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
     teob_dict["srate_interp"] /= params.mass_sum_seconds
     teob_dict["df"] /= params.mass_sum_seconds

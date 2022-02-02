@@ -38,18 +38,20 @@ def test_waveform_parameters_teobresums_output(parameters):
         "M": 2.8,
         "distance": 1.0,
         "initial_frequency": 0.00027582749319999996,
-        "use_geometric_units": 1,
-        "interp_uniform_grid": 0,
+        "use_geometric_units": "yes",
+        "interp_uniform_grid": "no",
         "domain": 1,
         "srate_interp": 0.056489470607359996,
         "df": 5.3872557265624996e-08,
-        "interp_FD_waveform": 1,
+        "interp_FD_waveform": 1,  # change this to "yes" as well? is it ignored?
         "inclination": 0.0,
-        "output_hpc": 0,
-        "output_dynamics": 0,
-        "time_shift_FD": 1,
+        "output_hpc": "no",
+        "time_shift_FD": "yes",
     }.items():
-        assert np.isclose(val, parameters.teobresums[key])
+        if isinstance(val, float):
+            assert np.isclose(val, parameters.teobresums[key])
+        else:
+            assert val == parameters.teobresums[key]
 
 
 def test_random_parameter_generation(dataset):
