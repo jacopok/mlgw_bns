@@ -19,14 +19,27 @@ Welcome to ``mlgw_bns``'s documentation!
 .. toctree::
    :maxdepth: 2
    :caption: Usage guides
-      
-   usage_guides/index
+   :name: usage_guides
+
+   usage_guides/install
+   usage_guides/overview.md
+   usage_guides/profiling.md
+   usage_guides/validating_results.md
+   usage_guides/optimization.md
 
 .. toctree::
    :maxdepth: 2
    :caption: Package reference
-
-   package_reference/index
+   :name: package_reference
+   
+   package_reference/model
+   package_reference/dataset_generation
+   package_reference/downsampling_interpolation
+   package_reference/data_management
+   package_reference/principal_component_analysis
+   package_reference/neural_network
+   package_reference/hyperparameter_optimization
+   package_reference/model_validation
    
 Indices and tables
 ==================
