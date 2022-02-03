@@ -49,6 +49,9 @@ m.generate()
 m.set_hyper_and_train_nn()
 ```
 
+For this to work `mlgw_bns` must be able to import 
+`EOBRun_module`.
+
 We can then save this model to file with `m.save()`; afterwards we
 will be able to recover it with 
 ```python 
