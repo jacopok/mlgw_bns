@@ -12,8 +12,7 @@ the accuracy then steadily drops as more training waveforms are used.
 Currently, the only model used for training is [`TEOBResumS`](http://arxiv.org/abs/1806.01772),
 but it is planned to introduce the possibility to use others.
 
-The documentation is currently hosted [here](https://jacopok.github.io/index.html); 
-in the future it will be moved to a better place and inserted into the CI pipeline.
+The documentation can be found [here](https://mlgw-bns.readthedocs.io/en/latest).
 
 ![dependencygraph](mlgw_bns.svg)
 
