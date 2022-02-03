@@ -19,65 +19,12 @@ in the future it will be moved to a better place and inserted into the CI pipeli
 
 ## Installation
 
-When the package will be published hopefully it will look like
+To install the package, use
 ```bash
-pip install mlgw_bns
-```
-but for now one should clone this repo, install poetry and run 
-```bash
-poetry install
-```
-in the project folder.
-
-For this to work, the `TEOBResumS` repository must be installed in the same folder 
-as `mlgw_bns`:
-
-```
-some_folder/
-|--- mlgw_bns/
-    |--- mlgw_bns/
-    |--- docs/
-    |--- tests/
-    |--- ...
-|--- teobresums/
-    |--- Python/
-    |--- C/ 
-    |--- ...
+pip install mlgw-bns
 ```
 
-## Usage
-
-To make sure everything is working properly one can run a pipeline
-```bash
-poetry run tox
-```
-which will install all missing dependencies, 
-run tests and also build the documentation locally, in the folder `docs/html/`;
-one can access it starting from `index.html`.
-
-To only run the tests, do 
-```bash
-poetry run pytest
-```
-
-To only build the documentation, do
-```bash
-poetry run sphinx-build docs docs/html
-```
-
-Make a pretty dependency graph with 
-```bash
-poetry run pydeps mlgw_bns/
-```
-
-To make an html page showing the test coverage of the code, do
-```bash
-poetry run coverage html
-```
-
-There are pre-commit hooks which will clean up the code, 
-format everything with `black`, check that there are no large files,
-check that the typing is correct with `mypy`. 
+For more details see [the documentation](https://mlgw-bns.readthedocs.io/en/latest/usage_guides/install.html).
 
 ## Inner workings
 
