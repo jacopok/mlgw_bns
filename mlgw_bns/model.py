@@ -586,7 +586,70 @@ class Model:
         assert self.downsampling_indices is not None
         assert self.nn is not None
 
-        # TODO test with different total mass!
+        intrinsic_params = params.intrinsic(self.dataset)
+
+        residuals = self.predict_residuals_bulk(
+            ParameterSet.from_list_of_waveform_parameters([intrinsic_params]), self.nn
+        )
+
+        pn_amplitude = self.dataset.waveform_generator.post_newtonian_amplitude(
+            intrinsic_params,
+            self.dataset.frequencies[self.downsampling_indices.amplitude_indices],
+        )
+        pn_phase = self.dataset.waveform_generator.post_newtonian_phase(
+            intrinsic_params,
+            self.dataset.frequencies[self.downsampling_indices.phase_indices],
+        )
+
+        amp_ds = combine_residuals_amp(residuals.amplitude_residuals[0], pn_amplitude)
+        phi_ds = combine_residuals_phi(residuals.phase_residuals[0], pn_phase)
+
+        amp = self.downsampling_training.resample(
+            self.dataset.frequencies_hz[self.downsampling_indices.amplitude_indices],
+            frequencies,
+            amp_ds,
+        )
+        phi = (
+            self.downsampling_training.resample(
+                self.dataset.frequencies_hz[self.downsampling_indices.phase_indices],
+                frequencies,
+                phi_ds,
+            )
+            + params.reference_phase
+            + (2 * np.pi * params.time_shift) * frequencies
+        )
+
+        cartesian_waveform = combine_amp_phase(amp, phi)
+
+        pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
+        cosi = np.cos(params.inclination)
+        pre_plus = (1 + cosi ** 2) / 2 * pre / params.distance_mpc
+        pre_cross = cosi * pre * (-1j) / params.distance_mpc
+
+        return compute_polarizations(cartesian_waveform, pre_plus, pre_cross)
+
+
+class ModelPredictingInverted(Model):
+    def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
+        """Calculate the waveforms in the plus and cross polarizations,
+        accounting for extrinsic parameters
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+                Frequencies where to compute the waveform, in Hz.
+        params : ParametersWithExtrinsic
+                Parameters for the waveform, both intrinsic and extrinsic.
+
+        Returns
+        -------
+        hp, hc (complex np.ndarray)
+                Cartesian plus and cross-polarized waveforms, computed
+                at the given frequencies, measured in 1/Hz.
+
+        """
+        assert self.downsampling_indices is not None
+        assert self.nn is not None
 
         intrinsic_params = params.intrinsic(self.dataset)
 
@@ -599,7 +662,6 @@ class Model:
             frequencies,
             residuals.amplitude_residuals[0],
         )
-
         phi_residuals = self.downsampling_training.resample(
             self.dataset.frequencies_hz[self.downsampling_indices.phase_indices],
             frequencies,
@@ -609,7 +671,6 @@ class Model:
         pn_amplitude = self.dataset.waveform_generator.post_newtonian_amplitude(
             intrinsic_params, frequencies * params.mass_sum_seconds
         )
-
         pn_phase = self.dataset.waveform_generator.post_newtonian_phase(
             intrinsic_params, frequencies * params.mass_sum_seconds
         )
@@ -630,6 +691,27 @@ class Model:
         pre_cross = cosi * pre * (-1j) / params.distance_mpc
 
         return compute_polarizations(cartesian_waveform, pre_plus, pre_cross)
+
+
+###### TEMP FUNCTIONS
+
+
+@njit
+def combine_amp_phase(amp, phase):
+    return amp * np.exp(1j * phase)
+
+
+@njit
+def combine_residuals_amp(amp, amp_pn):
+    return amp_pn * np.exp(amp)
+
+
+@njit
+def combine_residuals_phi(phi, phi_pn):
+    return phi_pn + phi
+
+
+###### END TEMP FUNCTIONS
 
 
 @njit

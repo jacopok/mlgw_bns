@@ -1062,6 +1062,20 @@ class Dataset:
         parameters: ParameterSet,
         downsampling_indices: Optional[DownsamplingIndices] = None,
     ) -> FDWaveforms:
+        """Generate full effective-one-body waveforms
+        at each of the parameters in the given parameter set.
+
+        Parameters
+        ----------
+        parameters : ParameterSet
+            Parameters of the waveforms to generate
+        downsampling_indices : DownsamplingIndices, optional
+            Indices to downsample the waveforms at, by default None
+
+        Returns
+        -------
+        FDWaveforms
+        """
 
         if downsampling_indices is None:
             amp_indices: Union[slice, list[int]] = slice(None)
