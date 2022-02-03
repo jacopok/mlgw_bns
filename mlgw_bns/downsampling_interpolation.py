@@ -256,6 +256,42 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
                 Indices for amplitude and phase, respectively.
         """
 
+        from .dataset_generation import ParameterSet
+
+        generator = self.dataset.make_parameter_generator()
+        param_set = ParameterSet.from_parameter_generator(
+            generator, training_dataset_size
+        )
+
+        waveforms = self.dataset.generate_waveforms_from_params(param_set)
+        frequencies = self.dataset.frequencies
+
+        amp_indices = self.find_indices(
+            frequencies, waveforms.amplitudes[:training_dataset_size]
+        )
+        phi_indices = self.find_indices(
+            frequencies, waveforms.phases[:training_dataset_size]
+        )
+
+        return DownsamplingIndices(amp_indices, phi_indices)
+
+
+class GreedyDownsamplingTrainingWithResiduals(GreedyDownsamplingTraining):
+    def train(self, training_dataset_size: int) -> DownsamplingIndices:
+        """Compute a close-to-optimal set of indices at which to sample
+        waveforms, so that the reconstruction stays below a certain tolerance.
+
+        Parameters
+        ----------
+        training_dataset_size : int
+            Number of waveforms to generate and with which to train.
+
+        Returns
+        -------
+        tuple[list[int], list[int]]
+                Indices for amplitude and phase, respectively.
+        """
+
         frequencies, _, residuals = self.dataset.generate_residuals(
             size=training_dataset_size
         )

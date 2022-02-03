@@ -26,7 +26,11 @@ def test_model_saving(generated_model):
     with generated_model.file_arrays as file:
         assert "downsampling/amplitude_indices" in file
         assert file["downsampling/amplitude_indices"][0] == 0
-        assert 20_000 < file["downsampling/amplitude_indices"][10] < 30_000
+
+        assert 50 < file["downsampling/amplitude_indices"][10] < 1000
+
+        # this holds when training on residuals
+        # assert 20_000 < file["downsampling/amplitude_indices"][10] < 30_000
 
         assert "principal_component_analysis/eigenvalues" in file
 
