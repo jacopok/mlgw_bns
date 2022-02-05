@@ -16,7 +16,7 @@ from .model import Model, cartesian_waveforms_at_frequencies
 
 
 class ValidateModel:
-    """Functionality for the validation of a model.
+    r"""Functionality for the validation of a model.
 
     Parameters
     ----------
@@ -28,7 +28,7 @@ class ValidateModel:
             The name should correspond to one of the PSDs provided by
             `pycbc <https://pycbc.org/pycbc/latest/html/pycbc.psd.html>`_.
             Defaults to "EinsteinTelescopeP1600143".
-            # TODO: check whether this is compatible with
+            TODO: check whether this is compatible with
             the `official ET sensitivities <http://www.et-gw.eu/index.php/etsensitivities>`_.
     downsample_by: int
             Factor by which to increase the spacing in the frequencies
@@ -63,28 +63,97 @@ class ValidateModel:
         self.psd_values = self.psd[mask]
 
     def psd_at_frequencies(self, frequencies: np.ndarray) -> np.ndarray:
+        """Compute the given PSD
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to compute the PSD, in Hz.
+
+        Returns
+        -------
+        np.ndarray
+            Values of the PSD, :math:`S_n(f_i)`.
+        """
         return np.array([self.psd.at_frequency(freq) for freq in frequencies])
 
     def param_set(
-        self, number_of_waveforms: int, seed: Optional[int] = None
+        self, number_of_parameter_tuples: int, seed: Optional[int] = None
     ) -> ParameterSet:
+        """Generate a random set of parameters, using the
+        parameter generator in :attr:`model.dataset`.
+
+        Parameters
+        ----------
+        number_of_parameter_tuples : int
+            How many tuples of parameters to generate
+        seed : int, optional
+            Seed used to initialize the parameter generator.
+            By default None, which means the seed is computed
+            from the dataset's default RNG.
+
+        Returns
+        -------
+        ParameterSet
+            A set of uniform parameter tuples
+        """
+
         parameter_generator = self.model.dataset.make_parameter_generator(seed)
 
         return ParameterSet.from_parameter_generator(
-            parameter_generator, number_of_waveforms
+            parameter_generator, number_of_parameter_tuples
         )
 
     def true_waveforms(self, param_set: ParameterSet) -> FDWaveforms:
+        """Waveforms corresponding to the given parameter set,
+        computed according to the EOB generator.
+
+        Parameters
+        ----------
+        param_set : ParameterSet
+            Parameters at which to generate the waveforms.
+
+        Returns
+        -------
+        FDWaveforms
+            EOB waveforms at the given parameters.
+        """
 
         return self.model.dataset.generate_waveforms_from_params(
             param_set, self.model.downsampling_indices
         )
 
     def predicted_waveforms(self, param_set: ParameterSet) -> FDWaveforms:
+        """Waveforms corresponding to the given parameter set,
+        reconstruced by the :attr:`model`.
+
+        Parameters
+        ----------
+        param_set : ParameterSet
+            Parameters at which to generate the waveforms.
+
+        Returns
+        -------
+        FDWaveforms
+            Reconstructed waveforms at the given parameters.
+        """
 
         return self.model.predict_waveforms_bulk(param_set, self.model.nn)
 
     def post_newtonian_waveforms(self, param_set: ParameterSet) -> FDWaveforms:
+        """Waveforms corresponding to the given parameter set,
+        computed according to the post-Newtonian baseline.
+
+        Parameters
+        ----------
+        param_set : ParameterSet
+            Parameters at which to generate the waveforms.
+
+        Returns
+        -------
+        FDWaveforms
+            PN Waveforms at the given parameters.
+        """
 
         assert self.model.nn is not None
         residuals = self.model.predict_residuals_bulk(param_set, self.model.nn)
@@ -113,7 +182,14 @@ class ValidateModel:
             True waveforms to compare to.
             This parameter should be used in order to not recompute
             the true waveforms each time when comparing different models;
-            be wary of the
+            do not use the same waveforms for different models,
+            since the downsampling indices may be different.
+            Defaults to None, which means the true waveforms are recomputed.
+        zero_residuals: bool
+            Whether to set the residuals to zero, meaning that
+            the model is not used at all, instead just comparing
+            the EOB waveforms to the PN baseline.
+            Defaults to False.
 
         Returns
         -------
@@ -180,8 +256,9 @@ class ValidateModel:
         waveform_1: np.ndarray,
         waveform_2: np.ndarray,
         frequencies: Optional[np.ndarray] = None,
+        max_delta_t: float = 0.1,
     ) -> float:
-        """Compute the mismatch between two Cartesian waveforms.
+        r"""Compute the mismatch between two Cartesian waveforms.
 
         The mismatch between waveforms :math:`a` and :math:`b` is defined as the
         minimum value of :math:`1 - (a|b) / \sqrt{(a|a)(b|b)}`, where
@@ -193,6 +270,8 @@ class ValidateModel:
         since that one is not accurate enough, see
         `this issue <https://github.com/gwastro/pycbc/issues/3817>`_.
 
+        The implementation here uses scipy's `scalar minimizer <https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize_scalar.html>`_ to find the minimum of the mismatch.
+
         Parameters
         ----------
         waveform_1 : np.ndarray
@@ -203,6 +282,10 @@ class ValidateModel:
             Frequencies at which the two waveforms are sampled, in Hz.
             If None (default), it is assumed that the waveforms are sampled at
             the attribute :attr:`frequencies` of this object.
+        max_delta_t: float
+            Maximum time shift for the two waveforms which are being compared,
+            in seconds.
+            Defaults to 0.1.
         """
 
         if frequencies is None:
@@ -237,5 +320,7 @@ class ValidateModel:
             offset = np.exp(2j * np.pi * (frequencies * t_c))
             return -product(waveform_1, waveform_2 * offset)
 
-        res = minimize_scalar(to_minimize, method="brent", bracket=(-0.1, 0.1))
+        res = minimize_scalar(
+            to_minimize, method="brent", bracket=(-max_delta_t, max_delta_t)
+        )
         return 1 - (-res.fun) / norm
