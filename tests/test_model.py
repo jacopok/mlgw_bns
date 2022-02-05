@@ -13,6 +13,13 @@ from mlgw_bns.model_validation import ValidateModel
 DEFAULT_MODEL_MAX_MISMATCH = 1e-5
 TRAINED_MODEL_MAX_MISMATCH = 1e-2
 
+# if the maximum mismatch is 1e-2,
+# the average mismatch should be this many times
+# smaller than the maximum mismatch;
+# so, if this is 20 then the average
+# mismatch will need to be smaller than 5e-4
+AVERAGE_MISMATCH_REDUCTION_FACTOR = 20
+
 
 def test_validating_model(generated_model):
 
@@ -42,6 +49,9 @@ def test_quick_model_with_validation_mismatches(trained_model):
     mismatches = vm.validation_mismatches(16)
 
     assert all(m < TRAINED_MODEL_MAX_MISMATCH for m in mismatches)
+    assert np.average(np.log(mismatches)) < np.log(
+        TRAINED_MODEL_MAX_MISMATCH / AVERAGE_MISMATCH_REDUCTION_FACTOR
+    )
 
 
 def test_default_model_with_validation_mismatches(default_model):
@@ -51,6 +61,9 @@ def test_default_model_with_validation_mismatches(default_model):
     mismatches = vm.validation_mismatches(16)
 
     assert all(m < DEFAULT_MODEL_MAX_MISMATCH for m in mismatches)
+    assert np.average(np.log(mismatches)) < np.log(
+        DEFAULT_MODEL_MAX_MISMATCH / AVERAGE_MISMATCH_REDUCTION_FACTOR
+    )
 
 
 def test_default_model_residuals(default_model):
