@@ -18,16 +18,30 @@ from .model import Model, cartesian_waveforms_at_frequencies
 class ValidateModel:
     """Functionality for the validation of a model.
 
-    Includes:
-    - mismatch computation between model and reference
-    - noise psd management
-    - computation of reconstruction residuals
+    Parameters
+    ----------
+    model: Model
+            Model to validate.
+    psd_name: str
+            Name of the power spectral density to use in the computation
+            of the mismatches.
+            The name should correspond to one of the PSDs provided by
+            `pycbc <https://pycbc.org/pycbc/latest/html/pycbc.psd.html>`_.
+            Defaults to "EinsteinTelescopeP1600143".
+            # TODO: check whether this is compatible with
+            the `official ET sensitivities <http://www.et-gw.eu/index.php/etsensitivities>`_.
+    downsample_by: int
+            Factor by which to increase the spacing in the frequencies
+            used for the computation of the PSD and mismatches, compared
+            to the "standard FFT grid" with spacing
+            :math:`\Delta f = 1/ T`.
+            Defaults to 256.
     """
 
     def __init__(
         self,
         model: Model,
-        psd_name: str = "aLIGOZeroDetLowPower",
+        psd_name: str = "EinsteinTelescopeP1600143",
         downsample_by: int = 256,
     ):
 
