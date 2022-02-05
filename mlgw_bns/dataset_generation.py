@@ -764,9 +764,6 @@ class Dataset:
             Defaults to 2.8; this does not typically need to be changed.
     """
 
-    # TODO
-    # saving to file to be managed with https://docs.h5py.org/en/stable/quick.html
-
     # total mass of the binary, in solar masses
     total_mass: float = 2.8
 
@@ -916,6 +913,18 @@ class Dataset:
     def make_parameter_generator(
         self, seed: Optional[int] = None
     ) -> ParameterGenerator:
+        """Make a new parameter generator,
+        of the type determined by :attr:`parameter_generator_class`.
+
+        Parameters
+        ----------
+        seed : int, optional
+            Seed for the RNG inside the parameter generator, by default None
+
+        Returns
+        -------
+        ParameterGenerators
+        """
         if seed is None:
             seed = self.seed_sequence.integers(low=0, high=2 ** 63 - 1)
 
