@@ -120,14 +120,19 @@ class WaveformGenerator(ABC):
 
     @abstractmethod
     def effective_one_body_waveform(
-        self, params: "WaveformParameters"
+        self, params: "WaveformParameters", frequencies: Optional[list[float]] = None
     ) -> tuple[np.ndarray, np.ndarray]:
-        r"""Waveform
+        r"""Waveform computed according to the comparatively slower
+        effective-one-body method.
 
         Parameters
         ----------
         params : WaveformParameters
                 Parameters of the binary system for which to generate the waveform.
+        frequencies : list[float], optional
+                Frequencies at which to compute the waveform, in natural units.
+                Defaults to None, which means the EOB generator will choose
+                the frequencies at which to compute the waveform.
 
         Returns
         -------
@@ -143,6 +148,7 @@ class WaveformGenerator(ABC):
     def generate_residuals(
         self,
         params: "WaveformParameters",
+        frequencies: Optional[list[float]] = None,
         downsampling_indices: Optional[DownsamplingIndices] = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Compute the residuals of the :func:`effective_one_body_waveform`
@@ -156,6 +162,14 @@ class WaveformGenerator(ABC):
         ----------
         params : WaveformParameters
                 Parameters for which to compute the residuals.
+        frequencies : list[float], optional
+                Frequencies at which to compute the residuals,
+                in natural units.
+                If this parameter is given, the downsampling_indices
+                should index this frequency array.
+                Defaults to None, meaning that the frequencies computed
+                by the :meth:`effective_one_body_waveform` method
+                are used.
         downsampling_indices : Optional[DownsamplingIndices]
                 Indices at which to compute the residuals.
                 If not provided (default) the waveform is given at
@@ -169,7 +183,7 @@ class WaveformGenerator(ABC):
         (
             frequencies_eob,
             waveform_eob,
-        ) = self.effective_one_body_waveform(params)
+        ) = self.effective_one_body_waveform(params, frequencies)
 
         amplitude_eob, phase_eob = phase_unwrapping(waveform_eob)
 
@@ -272,7 +286,9 @@ class BarePostNewtonianGenerator(WaveformGenerator):
 
         return phase - phase[0]
 
-    def effective_one_body_waveform(self, params: "WaveformParameters"):
+    def effective_one_body_waveform(
+        self, params: "WaveformParameters", frequencies: Optional[list[float]] = None
+    ):
         raise NotImplementedError(
             "This generator does not include the possibility "
             "to generate effective one body waveforms"
@@ -287,7 +303,7 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         self.eobrun_callable = eobrun_callable
 
     def effective_one_body_waveform(
-        self, params: "WaveformParameters"
+        self, params: "WaveformParameters", frequencies: Optional[list[float]] = None
     ) -> tuple[np.ndarray, np.ndarray]:
         r"""Generate an EOB waveform with TEOB.
 
@@ -317,11 +333,31 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         new_f0 = f_0 - delta_f * n_additional
         par_dict["initial_frequency"] = new_f0
 
+        to_slice = (
+            slice(-len(frequencies), None)
+            if frequencies is not None
+            else slice(n_additional, None)
+        )
+
+        if frequencies is not None:
+            frequencies = list(
+                np.insert(
+                    frequencies,
+                    0,
+                    np.arange(f_0 - delta_f * n_additional, f_0, step=delta_f),
+                )
+            )
+            par_dict.pop("df")
+            par_dict["interp_freqs"] = "yes"
+            par_dict["freqs"] = frequencies
+
         f_spa, rhpf, ihpf, _, _ = self.eobrun_callable(par_dict)
 
-        f_spa = f_spa[n_additional:]
+        f_spa = f_spa[to_slice]
+        # f_spa = f_spa
 
-        waveform = (rhpf - 1j * ihpf)[n_additional:]
+        waveform = (rhpf - 1j * ihpf)[to_slice]
+        # waveform = rhpf - 1j * ihpf
 
         return (f_spa, waveform)
 
@@ -764,7 +800,6 @@ class Dataset:
             Defaults to 2.8; this does not typically need to be changed.
     """
 
-    # total mass of the binary, in solar masses
     total_mass: float = 2.8
 
     def __init__(
@@ -819,6 +854,7 @@ class Dataset:
         """Frequency array corresponding to this dataset,
         in Hz.
         """
+
         return np.arange(
             self.initial_frequency_hz,
             self.srate_hz / 2 + self.delta_f_hz,
@@ -987,7 +1023,9 @@ class Dataset:
             (
                 amp_residuals[i],
                 phi_residuals[i],
-            ) = self.waveform_generator.generate_residuals(params, downsampling_indices)
+            ) = self.waveform_generator.generate_residuals(
+                params, list(self.frequencies), downsampling_indices
+            )
 
             parameter_array[i] = params.array
 
@@ -1099,7 +1137,9 @@ class Dataset:
         phis = []
 
         for par in tqdm(waveform_param_list, unit="waveforms"):
-            _, cartesian_wf = self.waveform_generator.effective_one_body_waveform(par)
+            _, cartesian_wf = self.waveform_generator.effective_one_body_waveform(
+                par, list(self.frequencies)
+            )
             amp, phi = phase_unwrapping(cartesian_wf)
             amps.append(amp[amp_indices])
             phis.append(phi[phi_indices])
