@@ -34,6 +34,7 @@ Welcome to ``mlgw_bns``'s documentation!
    
    package_reference/model
    package_reference/dataset_generation
+   package_reference/multibanding.rst
    package_reference/downsampling_interpolation
    package_reference/data_management
    package_reference/principal_component_analysis
