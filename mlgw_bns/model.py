@@ -561,15 +561,35 @@ class Model:
         )
 
     def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
-        """Calculate the waveforms in the plus and cross polarizations,
+        r"""Calculate the waveforms in the plus and cross polarizations,
         accounting for extrinsic parameters
 
         Parameters
         ----------
         frequencies : np.ndarray
                 Frequencies where to compute the waveform, in Hz.
+
+                These should always be within the range in which the
+                model has been trained, and be careful!
+                The model is always trained with a specific initial frequency
+                :math:`f_0`, and a final frequency :math:`f_1`,
+                and it is trained to reconstruct the dependence
+                of the waveform on :math:`M_0 f`, where :math:`M_0` is
+                some standard mass, typically :math:`2.8M_\sun`.
+
+                Now, this means that the model can only predict in the range
+                :math:`M_0 f_0 \leq M f \leq M_0 f_1`;
+                when :math:`M` differs significantly from :math:`M_0`
+                this will be quite a different range from :math:`[f_0, f_1]`.
+
+
         params : ParametersWithExtrinsic
                 Parameters for the waveform, both intrinsic and extrinsic.
+
+        Raises
+        ------
+        AssertionError
+                When the frequencies given are either too high or too low.
 
         Returns
         -------
@@ -580,6 +600,13 @@ class Model:
         """
         assert self.downsampling_indices is not None
         assert self.nn is not None
+
+        rescaled_frequencies = frequencies * (
+            params.total_mass / self.dataset.total_mass
+        )
+
+        assert min(rescaled_frequencies) >= self.dataset.initial_frequency_hz
+        assert max(rescaled_frequencies) <= self.dataset.srate_hz / 2.0
 
         intrinsic_params = params.intrinsic(self.dataset)
 
@@ -598,10 +625,6 @@ class Model:
 
         amp_ds = combine_residuals_amp(residuals.amplitude_residuals[0], pn_amplitude)
         phi_ds = combine_residuals_phi(residuals.phase_residuals[0], pn_phase)
-
-        rescaled_frequencies = frequencies * (
-            params.total_mass / self.dataset.total_mass
-        )
 
         amp = self.downsampling_training.resample(
             self.dataset.frequencies_hz[self.downsampling_indices.amplitude_indices],
