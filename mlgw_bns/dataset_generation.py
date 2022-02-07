@@ -20,6 +20,7 @@ from .data_management import (
     SavableData,
     phase_unwrapping,
 )
+from .multibanding import reduced_frequency_array
 
 # from .downsampling_interpolation import DownsamplingTraining
 from .taylorf2 import (
@@ -52,10 +53,8 @@ class WaveformGenerator(ABC):
 
     Users may wish to leave the Post-Newtonian model already implemented here
     and only switch TEOBResumS to another waveform template:
-    the easiest way to accomplish this is to subclass TEOBResumSGenerator
+    the easiest way to accomplish this is to subclass :class:`BarePostNewtonianGenerator`
     and only override its :meth:`effective_one_body_waveform` method.
-
-
     """
 
     @abstractmethod
@@ -749,6 +748,7 @@ class Dataset:
     # TODO: the name of this class is misleading,
     as it contains all information contained to generate
     the dataset but not the data itself.
+    (but I cannot think of a better one, maybe DatasetMeta?)
 
     The amplitude residuals are defined as
     :math:`\log(A _{\text{EOB}} / A_{\text{PN}})`,
@@ -781,11 +781,22 @@ class Dataset:
             needs to reference the dataset and therefure must be created after it.
             Defaults to UniformParameterGenerator.
     parameter_generator_kwargs : dict[str, Any]
-
+            Arguments for the creation of the parameter generator.
     seed : int
             Seed for the random number generator used when generating
             waveforms for the training.
             Defaults to 42.
+    multibanding: bool
+            Whether to use multibanding for the default frequency array.
+            If True, the frequency array is computed according to
+            :func:`reduced_frequency_array`;
+            if False, the frequency array is the "default FFT" one
+            with spacing :attr:`delta_f_hz`.
+            Defaults to False.
+    f_pivot_hz: float
+            Pivot frequency for the multibanding in Hz, only used if
+            :attr:`multibanding` is True.
+            Defaults to 30.
 
     Examples
     --------
@@ -811,6 +822,8 @@ class Dataset:
         parameter_generator_class: Type[ParameterGenerator] = UniformParameterGenerator,
         parameter_generator_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 42,
+        multibanding: bool = False,
+        f_pivot_hz: float = 30.0,
     ):
 
         self.initial_frequency_hz = initial_frequency_hz
@@ -826,6 +839,9 @@ class Dataset:
 
         self.residuals_amp: list[np.ndarray] = []
         self.residuals_phi: list[np.ndarray] = []
+
+        self.multibanding = multibanding
+        self.f_pivot_hz = f_pivot_hz
 
     def __repr__(self) -> str:
         return (
@@ -854,12 +870,18 @@ class Dataset:
         """Frequency array corresponding to this dataset,
         in Hz.
         """
-
-        return np.arange(
-            self.initial_frequency_hz,
-            self.srate_hz / 2 + self.delta_f_hz,
-            self.delta_f_hz,
-        )
+        if self.multibanding:
+            return reduced_frequency_array(
+                self.initial_frequency_hz,
+                self.srate_hz / 2 + self.delta_f_hz,
+                self.f_pivot_hz,
+            )
+        else:
+            return np.arange(
+                self.initial_frequency_hz,
+                self.srate_hz / 2 + self.delta_f_hz,
+                self.delta_f_hz,
+            )
 
     def optimal_df_hz(
         self, power_of_two: bool = True, margin_percent: float = 8.0
