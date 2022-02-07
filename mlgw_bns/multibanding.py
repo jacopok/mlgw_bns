@@ -27,14 +27,15 @@ def seglen_from_freq(
             Total mass of the binary,
             in solar masses.
             Defaults to 2.8.
-    maximum_mass_ratio: float
+    maximum_mass_ratio: float, optional
             Maximum allowed mass ratio in the dataset;
             this is used to give an upper bound on the seglen.
+            Defaults to 2.
 
     Returns
     -------
     seglen : float
-            Approximate duration of the BNS waveform, in seconds.
+            Approximate duration of the CBC waveform, in seconds.
     """
 
     eta = maximum_mass_ratio / (1 + maximum_mass_ratio) ** 2
