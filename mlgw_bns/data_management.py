@@ -333,8 +333,8 @@ class PrincipalComponentData(SavableData):
 
 @dataclass
 class FDWaveforms(SavableData):
-    """Dataclass which contains a set of sample frequencies
-    as well as the amplitude and phase of frequency-domain waveforms.
+    """Dataclass which contains the amplitude and phase
+    of a set of frequency-domain waveforms.
 
     Parameters
     ----------
