@@ -135,4 +135,4 @@ def low_frequency_grid(f_min: float, f_max: float):
         f_min_reduced,
         step=1 / seglen_from_freq(1) * (5 / 3) / EXTRA_FACTOR,
     )
-    return grid ** (-3 / 5)
+    return sorted(grid ** (-3 / 5))

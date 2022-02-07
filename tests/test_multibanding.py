@@ -35,3 +35,8 @@ def test_reduced_frequency_array_histogram_works():
     assert np.allclose(
         hist[10:], seglen_from_freq(40.0) * EXTRA_FACTOR, rtol=2e-2, atol=1.0
     )
+
+
+def test_reduced_frequency_array_is_sorted():
+    arr = reduced_frequency_array(30.0, 100.0, 40.0)
+    assert np.allclose(arr, sorted(arr))

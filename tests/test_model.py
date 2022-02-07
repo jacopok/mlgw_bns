@@ -163,7 +163,6 @@ def test_model_nn_prediction(
 
     # The model used here uses quite few training data, so we are not able to
     # achieve very small mismatches.
-    # TODO is the mismatch found here too high?
     assert vm.mismatch(hp, hp_teob, frequencies=freqs_hz) < tolerance_mismatch
     assert vm.mismatch(hc, hc_teob, frequencies=freqs_hz) < tolerance_mismatch
 
@@ -185,3 +184,88 @@ def test_model_nn_prediction(
 
     assert np.allclose(abs(hp), abs(hp_teob), atol=0.0, rtol=tolerance_amp * 20)
     assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=tolerance_amp * 20)
+
+
+@pytest.mark.parametrize(
+    "model_name, tolerance_mismatch, tolerance_amp",
+    [
+        ("trained_model", TRAINED_MODEL_MAX_MISMATCH, 1e-1),
+        ("default_model", DEFAULT_MODEL_MAX_MISMATCH, 2e-3),
+    ],
+)
+@pytest.mark.parametrize("seed", list(range(2)))
+def test_model_nn_prediction_random_extrinsic(
+    request, model_name, tolerance_mismatch, tolerance_amp, seed
+):
+    model = request.getfixturevalue(model_name)
+
+    params = random_parameters(model, seed)
+
+    teob_dict = params.teobresums_dict(model.dataset)
+
+    teob_dict["use_geometric_units"] = "no"
+    teob_dict["initial_frequency"] /= params.mass_sum_seconds
+    teob_dict["srate_interp"] /= params.mass_sum_seconds
+    teob_dict["df"] /= params.mass_sum_seconds
+
+    # tweak initial frequency backward by a few samples
+    # this is needed because of a bug in TEOBResumS
+    # causing the phase evolution not to behave properly
+    # at the beginning of integration
+    # TODO remove this once the TEOB bug is fixed
+
+    n_additional = 256
+    f_0 = teob_dict["initial_frequency"]
+    delta_f = teob_dict["df"]
+    new_f0 = f_0 - delta_f * n_additional
+    teob_dict["initial_frequency"] = new_f0
+
+    freqs_hz, rhp_teob, ihp_teob, rhc_teob, ihc_teob = EOBRunPy(teob_dict)
+
+    hp_teob = (rhp_teob - 1j * ihp_teob)[n_additional:]
+    hc_teob = (rhc_teob - 1j * ihc_teob)[n_additional:]
+    freqs_hz = freqs_hz[n_additional:]
+
+    hp, hc = model.predict(freqs_hz, params)
+
+    vm = ValidateModel(model)
+
+    # The model used here uses quite few training data, so we are not able to
+    # achieve very small mismatches.
+    assert vm.mismatch(hp, hp_teob, frequencies=freqs_hz) < tolerance_mismatch
+    assert vm.mismatch(hc, hc_teob, frequencies=freqs_hz) < tolerance_mismatch
+
+    # the mismatch does not account for the magnitude of the waveforms,
+    # so we check that separately.
+    assert np.allclose(
+        abs(hp)[: len(hp) // 4],
+        abs(hp_teob)[: len(hp) // 4],
+        atol=0.0,
+        rtol=tolerance_amp,
+    )
+
+    assert np.allclose(
+        abs(hc)[: len(hp) // 4],
+        abs(hc_teob)[: len(hp) // 4],
+        atol=0.0,
+        rtol=tolerance_amp,
+    )
+
+    assert np.allclose(abs(hp), abs(hp_teob), atol=0.0, rtol=tolerance_amp * 20)
+    assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=tolerance_amp * 20)
+
+
+def random_parameters(model: Model, seed: int) -> ParametersWithExtrinsic:
+    param_generator = model.dataset.make_parameter_generator(seed)
+    intrinsic_params = next(param_generator)
+
+    return ParametersWithExtrinsic(
+        mass_ratio=intrinsic_params.mass_ratio,
+        lambda_1=intrinsic_params.lambda_1,
+        lambda_2=intrinsic_params.lambda_2,
+        chi_1=intrinsic_params.chi_1,
+        chi_2=intrinsic_params.chi_2,
+        distance_mpc=10 ** param_generator.rng.uniform(-1, 4),
+        inclination=param_generator.rng.uniform(-np.pi, np.pi),
+        total_mass=param_generator.rng.uniform(1, 3),
+    )
