@@ -122,15 +122,6 @@ class ParametersWithExtrinsic:
         The parameters are all converted to natural units.
         """
         base_dict = self.intrinsic(dataset).teobresums
-        frequency_rescaling = dataset.total_mass / self.total_mass
-
-        assert isinstance(base_dict["initial_frequency"], float)
-        assert isinstance(base_dict["srate_interp"], float)
-        assert isinstance(base_dict["df"], float)
-
-        base_dict["initial_frequency"] *= frequency_rescaling
-        base_dict["srate_interp"] *= frequency_rescaling
-        base_dict["df"] *= frequency_rescaling
 
         return {
             **base_dict,
@@ -187,6 +178,7 @@ class Model:
         initial_frequency_hz: float = 20.0,
         srate_hz: float = 4096.0,
         pca_components_number: int = 30,
+        multibanding: bool = False,
         waveform_generator: Optional[WaveformGenerator] = None,
         downsampling_training: Optional[DownsamplingTraining] = None,
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
@@ -207,7 +199,10 @@ class Model:
             self.waveform_generator = waveform_generator
 
         self.dataset = Dataset(
-            initial_frequency_hz, srate_hz, waveform_generator=self.waveform_generator
+            initial_frequency_hz,
+            srate_hz,
+            waveform_generator=self.waveform_generator,
+            multibanding=multibanding,
         )
 
         if downsampling_training is None:
@@ -604,15 +599,20 @@ class Model:
         amp_ds = combine_residuals_amp(residuals.amplitude_residuals[0], pn_amplitude)
         phi_ds = combine_residuals_phi(residuals.phase_residuals[0], pn_phase)
 
+        rescaled_frequencies = frequencies * (
+            params.total_mass / self.dataset.total_mass
+        )
+
         amp = self.downsampling_training.resample(
             self.dataset.frequencies_hz[self.downsampling_indices.amplitude_indices],
-            frequencies,
+            rescaled_frequencies,
             amp_ds,
         )
+
         phi = (
             self.downsampling_training.resample(
                 self.dataset.frequencies_hz[self.downsampling_indices.phase_indices],
-                frequencies,
+                rescaled_frequencies,
                 phi_ds,
             )
             + params.reference_phase
@@ -693,25 +693,64 @@ class ModelPredictingInverted(Model):
         return compute_polarizations(cartesian_waveform, pre_plus, pre_cross)
 
 
-###### TEMP FUNCTIONS
-
-
 @njit
-def combine_amp_phase(amp, phase):
+def combine_amp_phase(amp: np.ndarray, phase: np.ndarray) -> np.ndarray:
+    """Combine amplitude and phase arrays into a Cartesian waveform,
+    according to
+    :math:`h = A e^{i \phi}`.
+
+    This function is separated out just so that it can be decorated with ``@njit``.
+
+    Parameters
+    ----------
+    amp : np.ndarray
+    phase : np.ndarray
+
+    Returns
+    -------
+    np.ndarray
+    """
     return amp * np.exp(1j * phase)
 
 
 @njit
-def combine_residuals_amp(amp, amp_pn):
+def combine_residuals_amp(amp: np.ndarray, amp_pn: np.ndarray) -> np.ndarray:
+    r"""Combine amplitude residuals with their Post-Newtonian counterparts,
+    according to
+    :math:`A = A_{PN} e^{\Delta A}`.
+
+    This function is separated out just so that it can be decorated with ``@njit``.
+
+    Parameters
+    ----------
+    amp : np.ndarray
+    amp_pn : np.ndarray
+
+    Returns
+    -------
+    np.ndarray
+    """
     return amp_pn * np.exp(amp)
 
 
 @njit
-def combine_residuals_phi(phi, phi_pn):
+def combine_residuals_phi(phi: np.ndarray, phi_pn: np.ndarray) -> np.ndarray:
+    """Combine amplitude residuals with their Post-Newtonian counterparts,
+    according to
+    :math:`\phi = \phi_{PN} + \Delta \phi`.
+
+    This function is separated out just so that it can be decorated with ``@njit``.
+
+    Parameters
+    ----------
+    phi : np.ndarray
+    phi_pn : np.ndarray
+
+    Returns
+    -------
+    np.ndarray
+    """
     return phi_pn + phi
-
-
-###### END TEMP FUNCTIONS
 
 
 @njit
