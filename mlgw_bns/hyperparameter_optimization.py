@@ -176,7 +176,7 @@ class HyperparameterOptimization:
         validation_indices = shuffled_indices[-validation_data_number:]
 
         start_time = perf_counter()
-        nn = self.model.train_nn(hyper, training_indices)
+        nn = self.model.train_nn(hyper, list(training_indices))
         end_time = perf_counter()
 
         effective_time = (
@@ -189,7 +189,7 @@ class HyperparameterOptimization:
         )
 
         accuracy = self.residuals_difference(
-            self.model.training_dataset[validation_indices], predicted_residuals
+            self.model.training_dataset[list(validation_indices)], predicted_residuals
         )
 
         return np.log10(accuracy), np.log10(effective_time)
