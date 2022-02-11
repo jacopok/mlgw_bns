@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
-from functools import cached_property
+from functools import lru_cache
 from typing import Any, Callable, ClassVar, Optional, Type, Union
 
 import h5py
@@ -858,18 +858,26 @@ class Dataset:
             int((self.srate_hz / 2 - self.initial_frequency_hz) / self.delta_f_hz) + 1
         )
 
-    @cached_property
+    @property
     def frequencies(self) -> np.ndarray:
         """Frequency array corresponding to this dataset,
         in natural units.
         """
+        return self._frequencies()
+
+    @lru_cache(maxsize=1)
+    def _frequencies(self):
         return self.hz_to_natural_units(self.frequencies_hz)
 
-    @cached_property
+    @property
     def frequencies_hz(self) -> np.ndarray:
         """Frequency array corresponding to this dataset,
         in Hz.
         """
+        return self._frequencies_hz()
+
+    @lru_cache(maxsize=1)
+    def _frequencies_hz(self):
         if self.multibanding:
             return reduced_frequency_array(
                 self.initial_frequency_hz,
