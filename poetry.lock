@@ -413,7 +413,7 @@ python-versions = ">=2.6, !=3.0.*, !=3.1.*, !=3.2.*"
 
 [[package]]
 name = "decopatch"
-version = "1.4.8"
+version = "1.4.9"
 description = "Create decorators easily in python."
 category = "dev"
 optional = false
@@ -547,7 +547,7 @@ lxml = ["lxml"]
 
 [[package]]
 name = "identify"
-version = "2.4.8"
+version = "2.4.9"
 description = "File identification library for Python"
 category = "dev"
 optional = false
@@ -938,7 +938,7 @@ python-versions = "*"
 
 [[package]]
 name = "mutmut"
-version = "2.2.0"
+version = "2.4.0"
 description = "mutation testing for Python 3"
 category = "dev"
 optional = false
@@ -950,6 +950,7 @@ glob2 = "*"
 junit-xml = "1.8"
 parso = "*"
 pony = "*"
+toml = "*"
 
 [package.extras]
 coverage = ["coverage"]
@@ -1124,7 +1125,7 @@ python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,>=2.7"
 
 [[package]]
 name = "pbr"
-version = "5.8.0"
+version = "5.8.1"
 description = "Python Build Reasonableness"
 category = "main"
 optional = false
@@ -1170,7 +1171,7 @@ testing = ["coverage", "nose"]
 
 [[package]]
 name = "platformdirs"
-version = "2.4.1"
+version = "2.5.0"
 description = "A small Python module for determining appropriate platform-specific dirs, e.g. a \"user data dir\"."
 category = "dev"
 optional = false
@@ -1182,7 +1183,7 @@ test = ["appdirs (==1.4.4)", "pytest (>=6)", "pytest-cov (>=2.7)", "pytest-mock 
 
 [[package]]
 name = "plotly"
-version = "5.5.0"
+version = "5.6.0"
 description = "An open-source, interactive data visualization library for Python"
 category = "main"
 optional = false
@@ -1287,7 +1288,7 @@ tests = ["pytest", "pytest-cov", "pytest-lazy-fixture"]
 
 [[package]]
 name = "prompt-toolkit"
-version = "3.0.26"
+version = "3.0.27"
 description = "Library for building powerful interactive command lines in Python"
 category = "dev"
 optional = false
@@ -1521,7 +1522,7 @@ histogram = ["pygal", "pygaljs"]
 
 [[package]]
 name = "pytest-cases"
-version = "3.6.8"
+version = "3.6.9"
 description = "Separate test code from test cases in pytest."
 category = "dev"
 optional = false
@@ -1620,7 +1621,7 @@ requests = ">=2.0.1,<3.0.0"
 
 [[package]]
 name = "rich"
-version = "11.1.0"
+version = "11.2.0"
 description = "Render rich text, tables, progress bars, syntax highlighting, markdown and more to the terminal"
 category = "dev"
 optional = false
@@ -1982,7 +1983,7 @@ python-versions = ">=3.6"
 
 [[package]]
 name = "tomlkit"
-version = "0.9.0"
+version = "0.9.2"
 description = "Style preserving TOML library"
 category = "dev"
 optional = false
@@ -2062,6 +2063,17 @@ tox = ">=3.8.0,<4.0.0"
 poetry = ["poetry (>=1.0.0,<2.0.0)"]
 
 [[package]]
+name = "tox-pyenv"
+version = "1.1.0"
+description = "tox plugin that makes tox use `pyenv which` to find python executables"
+category = "dev"
+optional = false
+python-versions = "*"
+
+[package.dependencies]
+tox = ">=2.0"
+
+[[package]]
 name = "tqdm"
 version = "4.62.3"
 description = "Fast, Extensible Progress Meter"
@@ -2098,7 +2110,7 @@ python-versions = "*"
 
 [[package]]
 name = "types-setuptools"
-version = "57.4.8"
+version = "57.4.9"
 description = "Typing stubs for setuptools"
 category = "main"
 optional = false
@@ -2127,7 +2139,7 @@ socks = ["PySocks (>=1.5.6,!=1.5.7,<2.0)"]
 
 [[package]]
 name = "virtualenv"
-version = "20.13.0"
+version = "20.13.1"
 description = "Virtual Python Environment builder"
 category = "dev"
 optional = false
@@ -2187,7 +2199,7 @@ torch = ["torch"]
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.7,<3.10"
-content-hash = "9cfd299a9e087d3ee2f9899de0407c6bb5dd8cbe34a31c6f395425b678bbf704"
+content-hash = "b1403fb93ba8d75227f231b15602f6fee84e26c1808401ae20bc97afcb98796d"
 
 [metadata.files]
 alabaster = [
@@ -2480,8 +2492,8 @@ cython = [
     {file = "Cython-0.29.27.tar.gz", hash = "sha256:c6a442504db906dfc13a480e96850cced994ecdc076bcf492c43515b78f70da2"},
 ]
 decopatch = [
-    {file = "decopatch-1.4.8-py2.py3-none-any.whl", hash = "sha256:29a74d5d753423b188d5b537532da4f4b88e33ddccb95a8a20a5eff5b13265d4"},
-    {file = "decopatch-1.4.8.tar.gz", hash = "sha256:c66b0815f15db04de7bb52b0b276432b76b7346fe7046f28033f48a14340d144"},
+    {file = "decopatch-1.4.9-py2.py3-none-any.whl", hash = "sha256:cd9a49f749c26ea8e5fc567b0ccc04f61fb83ebd6eea0834e426f327399a7757"},
+    {file = "decopatch-1.4.9.tar.gz", hash = "sha256:b5882c8cf0d5b01d218b4e04f6762d07b3287420ea509706f59971c3d6fec56f"},
 ]
 decorator = [
     {file = "decorator-5.1.1-py3-none-any.whl", hash = "sha256:b8c3f85900b9dc423225913c5aace94729fe1fa9763b38939a95226f02d37186"},
@@ -2585,8 +2597,8 @@ html5lib = [
     {file = "html5lib-1.1.tar.gz", hash = "sha256:b2e5b40261e20f354d198eae92afc10d750afb487ed5e50f9c4eaf07c184146f"},
 ]
 identify = [
-    {file = "identify-2.4.8-py2.py3-none-any.whl", hash = "sha256:a55bdd671b6063eb837af938c250ec00bba6e610454265133b0d2db7ae718d0f"},
-    {file = "identify-2.4.8.tar.gz", hash = "sha256:97e839c1779f07011b84c92af183e1883d9745d532d83412cca1ca76d3808c1c"},
+    {file = "identify-2.4.9-py2.py3-none-any.whl", hash = "sha256:bff7c4959d68510bc28b99d664b6a623e36c6eadc933f89a4e0a9ddff9b4fee4"},
+    {file = "identify-2.4.9.tar.gz", hash = "sha256:e926ae3b3dc142b6a7a9c65433eb14ccac751b724ee255f7c2ed3b5970d764fb"},
 ]
 idna = [
     {file = "idna-3.3-py3-none-any.whl", hash = "sha256:84d9dd047ffa80596e0f246e2eab0b391788b0503584e8945f2368256d2735ff"},
@@ -2944,7 +2956,7 @@ msgpack = [
     {file = "msgpack-1.0.3.tar.gz", hash = "sha256:51fdc7fb93615286428ee7758cecc2f374d5ff363bdd884c7ea622a7a327a81e"},
 ]
 mutmut = [
-    {file = "mutmut-2.2.0.tar.gz", hash = "sha256:d78bb3324a4da736c31c9fb19c197290ededaca76c8eac2c2e40e70b59f38720"},
+    {file = "mutmut-2.4.0.tar.gz", hash = "sha256:5ab05ffc04ed98c98d5da982a6d425875db5ca59cb7835ef55d1d694aea7d2f2"},
 ]
 mypy = [
     {file = "mypy-0.910-cp35-cp35m-macosx_10_9_x86_64.whl", hash = "sha256:a155d80ea6cee511a3694b108c4494a39f42de11ee4e61e72bc424c490e46457"},
@@ -3070,8 +3082,8 @@ pathspec = [
     {file = "pathspec-0.9.0.tar.gz", hash = "sha256:e564499435a2673d586f6b2130bb5b95f04a3ba06f81b8f895b651a3c76aabb1"},
 ]
 pbr = [
-    {file = "pbr-5.8.0-py2.py3-none-any.whl", hash = "sha256:176e8560eaf61e127817ef93d8a844803abb27a4d4637f0ff3bb783129be2e0a"},
-    {file = "pbr-5.8.0.tar.gz", hash = "sha256:672d8ebee84921862110f23fcec2acea191ef58543d34dfe9ef3d9f13c31cddf"},
+    {file = "pbr-5.8.1-py2.py3-none-any.whl", hash = "sha256:27108648368782d07bbf1cb468ad2e2eeef29086affd14087a6d04b7de8af4ec"},
+    {file = "pbr-5.8.1.tar.gz", hash = "sha256:66bc5a34912f408bb3925bf21231cb6f59206267b7f63f3503ef865c1a292e25"},
 ]
 pexpect = [
     {file = "pexpect-4.8.0-py2.py3-none-any.whl", hash = "sha256:0b48a55dcb3c05f3329815901ea4fc1537514d6ba867a152b581d69ae3710937"},
@@ -3123,12 +3135,12 @@ pkginfo = [
     {file = "pkginfo-1.8.2.tar.gz", hash = "sha256:542e0d0b6750e2e21c20179803e40ab50598d8066d51097a0e382cba9eb02bff"},
 ]
 platformdirs = [
-    {file = "platformdirs-2.4.1-py3-none-any.whl", hash = "sha256:1d7385c7db91728b83efd0ca99a5afb296cab9d0ed8313a45ed8ba17967ecfca"},
-    {file = "platformdirs-2.4.1.tar.gz", hash = "sha256:440633ddfebcc36264232365d7840a970e75e1018d15b4327d11f91909045fda"},
+    {file = "platformdirs-2.5.0-py3-none-any.whl", hash = "sha256:30671902352e97b1eafd74ade8e4a694782bd3471685e78c32d0fdfd3aa7e7bb"},
+    {file = "platformdirs-2.5.0.tar.gz", hash = "sha256:8ec11dfba28ecc0715eb5fb0147a87b1bf325f349f3da9aab2cd6b50b96b692b"},
 ]
 plotly = [
-    {file = "plotly-5.5.0-py2.py3-none-any.whl", hash = "sha256:bc7d19272560f73fe4c2c989c31b00774a35d3a76891fab0b72c17616862d0e0"},
-    {file = "plotly-5.5.0.tar.gz", hash = "sha256:20b8a1a0f0434f9b8d10eb7caa66e947a9a1d698e5a53d40d447bbc0d2ae41f0"},
+    {file = "plotly-5.6.0-py2.py3-none-any.whl", hash = "sha256:20277d211ea0e00e2a86d31e9f865a1ab45a7b17576f3bb865992ecbf15db093"},
+    {file = "plotly-5.6.0.tar.gz", hash = "sha256:d86e44ebde38f4753dff982ab9b5e03cf872aab8fdf53a403e999ed378154331"},
 ]
 pluggy = [
     {file = "pluggy-1.0.0-py2.py3-none-any.whl", hash = "sha256:74134bbf457f031a36d68416e1509f34bd5ccc019f0bcc952c7b909d06b37bd3"},
@@ -3155,8 +3167,8 @@ prettytable = [
     {file = "prettytable-3.0.0.tar.gz", hash = "sha256:69fe75d78ac8651e16dd61265b9e19626df5d630ae294fc31687aa6037b97a58"},
 ]
 prompt-toolkit = [
-    {file = "prompt_toolkit-3.0.26-py3-none-any.whl", hash = "sha256:4bcf119be2200c17ed0d518872ef922f1de336eb6d1ddbd1e089ceb6447d97c6"},
-    {file = "prompt_toolkit-3.0.26.tar.gz", hash = "sha256:a51d41a6a45fd9def54365bca8f0402c8f182f2b6f7e29c74d55faeb9fb38ac4"},
+    {file = "prompt_toolkit-3.0.27-py3-none-any.whl", hash = "sha256:cb7dae7d2c59188c85a1d6c944fad19aded6a26bd9c8ae115a4e1c20eb90b713"},
+    {file = "prompt_toolkit-3.0.27.tar.gz", hash = "sha256:f2b6a8067a4fb959d3677d1ed764cc4e63e0f6f565b9a4fc7edc2b18bf80217b"},
 ]
 ptyprocess = [
     {file = "ptyprocess-0.7.0-py2.py3-none-any.whl", hash = "sha256:4b41f3967fce3af57cc7e94b888626c18bf37a083e3651ca8feeb66d492fef35"},
@@ -3315,8 +3327,8 @@ pytest-benchmark = [
     {file = "pytest_benchmark-3.4.1-py2.py3-none-any.whl", hash = "sha256:36d2b08c4882f6f997fd3126a3d6dfd70f3249cde178ed8bbc0b73db7c20f809"},
 ]
 pytest-cases = [
-    {file = "pytest-cases-3.6.8.tar.gz", hash = "sha256:d423e87b30e1080cc162d86c72bfa35861cccfe3539125e81c68ba142ab974bc"},
-    {file = "pytest_cases-3.6.8-py2.py3-none-any.whl", hash = "sha256:247b8d572a1003b0c90c114394df2980ed757574c8529f38e3a66b68f0caeadf"},
+    {file = "pytest-cases-3.6.9.tar.gz", hash = "sha256:05ff5f6af8651dc1a3f277f52714e4323a68f213327c11e03028a539c20bd929"},
+    {file = "pytest_cases-3.6.9-py2.py3-none-any.whl", hash = "sha256:38fda5ed75ff3218b1ccb59a2a11381682b62f556299c26c7af1837f04618f41"},
 ]
 pytest-cov = [
     {file = "pytest-cov-3.0.0.tar.gz", hash = "sha256:e7f0f5b1617d2210a2cabc266dfe2f4c75a8d32fb89eafb7ad9d06f6d076d470"},
@@ -3382,8 +3394,8 @@ requests-toolbelt = [
     {file = "requests_toolbelt-0.9.1-py2.py3-none-any.whl", hash = "sha256:380606e1d10dc85c3bd47bf5a6095f815ec007be7a8b69c878507068df059e6f"},
 ]
 rich = [
-    {file = "rich-11.1.0-py3-none-any.whl", hash = "sha256:365ebcdbfb3aa8d4b0ed2490e0fbf7b886a39d14eb7ea5fb7aece950835e1eed"},
-    {file = "rich-11.1.0.tar.gz", hash = "sha256:43e03d8eec12e21beaecc22c828a41c4247356414a12d5879834863d4ad53816"},
+    {file = "rich-11.2.0-py3-none-any.whl", hash = "sha256:d5f49ad91fb343efcae45a2b2df04a9755e863e50413623ab8c9e74f05aee52b"},
+    {file = "rich-11.2.0.tar.gz", hash = "sha256:1a6266a5738115017bb64a66c59c717e7aa047b3ae49a011ede4abdeffc6536e"},
 ]
 scalene = [
     {file = "scalene-1.5.3-cp310-cp310-macosx_10_15_universal2.whl", hash = "sha256:42b7f635babc23dc4a4d9600013969bb2fbc2011442a5468081f7f79c01cda5c"},
@@ -3592,8 +3604,8 @@ tomli = [
     {file = "tomli-1.2.3.tar.gz", hash = "sha256:05b6166bff487dc068d322585c7ea4ef78deed501cc124060e0f238e89a9231f"},
 ]
 tomlkit = [
-    {file = "tomlkit-0.9.0-py3-none-any.whl", hash = "sha256:c1b0fc73abd4f1e77c29ea4061ca0f2e11cbfb77342e17df3d3fdd496fc3f899"},
-    {file = "tomlkit-0.9.0.tar.gz", hash = "sha256:5a83672c565f78f5fc8f1e44e5f2726446cc6b765113efd21d03e9331747d9ab"},
+    {file = "tomlkit-0.9.2-py3-none-any.whl", hash = "sha256:daf4f9c5f2fbf6b861d6adfc51940b98dee36c13e1d88749a6dc9fb280fff304"},
+    {file = "tomlkit-0.9.2.tar.gz", hash = "sha256:ebd982d61446af95a1e082b103e250cb9e6d152eae2581d4a07d31a70b34ab0f"},
 ]
 torch = [
     {file = "torch-1.10.2-cp310-cp310-manylinux2014_aarch64.whl", hash = "sha256:8f3fd2e3ffc3bb867133fdf7fbcc8a0bb2e62a5c0696396f51856f5abf9045a8"},
@@ -3671,6 +3683,10 @@ tox-poetry-installer = [
     {file = "tox-poetry-installer-0.8.3.tar.gz", hash = "sha256:04b6c7d368b67ef3cc4409e275b26eef3564a6487259bd9cc671587f5aaf4b4f"},
     {file = "tox_poetry_installer-0.8.3-py3-none-any.whl", hash = "sha256:4cefad997ef5b8533811ceb5308b5cb6e6d6997af377c0b7d03b2dd43179c235"},
 ]
+tox-pyenv = [
+    {file = "tox-pyenv-1.1.0.tar.gz", hash = "sha256:916c2213577aec0b3b5452c5bfb32fd077f3a3196f50a81ad57d7ef3fc2599e4"},
+    {file = "tox_pyenv-1.1.0-py2.py3-none-any.whl", hash = "sha256:e470c18af115fe52eeff95e7e3cdd0793613eca19709966fc2724b79d55246cb"},
+]
 tqdm = [
     {file = "tqdm-4.62.3-py2.py3-none-any.whl", hash = "sha256:8dd278a422499cd6b727e6ae4061c40b48fce8b76d1ccbf5d34fca9b7f925b0c"},
     {file = "tqdm-4.62.3.tar.gz", hash = "sha256:d359de7217506c9851b7869f3708d8ee53ed70a1b8edbba4dbcb47442592920d"},
@@ -3712,8 +3728,8 @@ typed-ast = [
     {file = "typed_ast-1.4.3.tar.gz", hash = "sha256:fb1bbeac803adea29cedd70781399c99138358c26d05fcbd23c13016b7f5ec65"},
 ]
 types-setuptools = [
-    {file = "types-setuptools-57.4.8.tar.gz", hash = "sha256:d5545f2ab3dad24f5cb1c01ba74c1acb7407ab31b2618d423158fc84085160f1"},
-    {file = "types_setuptools-57.4.8-py3-none-any.whl", hash = "sha256:af8480491f9894e6081fb568811978fd7ac87434cab122a0605a32be08d98dbe"},
+    {file = "types-setuptools-57.4.9.tar.gz", hash = "sha256:536ef74744f8e1e4be4fc719887f886e74e4cf3c792b4a06984320be4df450b5"},
+    {file = "types_setuptools-57.4.9-py3-none-any.whl", hash = "sha256:948dc6863373750e2cd0b223a84f1fb608414cde5e55cf38ea657b93aeb411d2"},
 ]
 typing-extensions = [
     {file = "typing_extensions-4.0.1-py3-none-any.whl", hash = "sha256:7f001e5ac290a0c0401508864c7ec868be4e701886d5b573a9528ed3973d9d3b"},
@@ -3724,8 +3740,8 @@ urllib3 = [
     {file = "urllib3-1.26.8.tar.gz", hash = "sha256:0e7c33d9a63e7ddfcb86780aac87befc2fbddf46c58dbb487e0855f7ceec283c"},
 ]
 virtualenv = [
-    {file = "virtualenv-20.13.0-py2.py3-none-any.whl", hash = "sha256:339f16c4a86b44240ba7223d0f93a7887c3ca04b5f9c8129da7958447d079b09"},
-    {file = "virtualenv-20.13.0.tar.gz", hash = "sha256:d8458cf8d59d0ea495ad9b34c2599487f8a7772d796f9910858376d1600dd2dd"},
+    {file = "virtualenv-20.13.1-py2.py3-none-any.whl", hash = "sha256:45e1d053cad4cd453181ae877c4ffc053546ae99e7dd049b9ff1d9be7491abf7"},
+    {file = "virtualenv-20.13.1.tar.gz", hash = "sha256:e0621bcbf4160e4e1030f05065c8834b4e93f4fcc223255db2a823440aca9c14"},
 ]
 wcwidth = [
     {file = "wcwidth-0.2.5-py2.py3-none-any.whl", hash = "sha256:beb4802a9cebb9144e99086eff703a642a13d6a0052920003a230f3294bbe784"},
