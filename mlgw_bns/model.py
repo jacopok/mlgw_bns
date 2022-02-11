@@ -575,7 +575,7 @@ class Model:
                 :math:`f_0`, and a final frequency :math:`f_1`,
                 and it is trained to reconstruct the dependence
                 of the waveform on :math:`M_0 f`, where :math:`M_0` is
-                some standard mass, typically :math:`2.8M_\sun`.
+                some standard mass, typically :math:`2.8M_{\odot}`.
 
                 Now, this means that the model can only predict in the range
                 :math:`M_0 f_0 \leq M f \leq M_0 f_1`;
