@@ -266,12 +266,8 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
         waveforms = self.dataset.generate_waveforms_from_params(param_set)
         frequencies = self.dataset.frequencies
 
-        amp_indices = self.find_indices(
-            frequencies, waveforms.amplitudes[:training_dataset_size]
-        )
-        phi_indices = self.find_indices(
-            frequencies, waveforms.phases[:training_dataset_size]
-        )
+        amp_indices = self.find_indices(frequencies, list(waveforms.amplitudes))
+        phi_indices = self.find_indices(frequencies, list(waveforms.phases))
 
         return DownsamplingIndices(amp_indices, phi_indices)
 
