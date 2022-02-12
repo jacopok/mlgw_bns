@@ -24,6 +24,7 @@ from .data_management import (
 from .dataset_generation import (
     BarePostNewtonianGenerator,
     Dataset,
+    ParameterGenerator,
     ParameterSet,
     TEOBResumSGenerator,
     WaveformGenerator,
@@ -170,6 +171,18 @@ class Model:
     nn_kind : Type[NeuralNetwork]
             Neural network implementation to use,
             defaults to :class:`SklearnNetwork`.
+    parameter_generator_kwargs: dict[str, tuple[float, float]], optional
+            Dictionary of keyword arguments to be used when initializing
+            a :class:`ParameterGenerator`.
+            It should be a map of strings to tuples, in the form
+            {'q_range': (1., 3.)}.
+
+            Options include
+            ``q_range``,
+            ``lambda1_range``,
+            ``lambda2_range``,
+            ``chi1_range``,
+            ``chi2_range``.
     """
 
     def __init__(
@@ -182,6 +195,7 @@ class Model:
         waveform_generator: Optional[WaveformGenerator] = None,
         downsampling_training: Optional[DownsamplingTraining] = None,
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
+        parameter_generator_kwargs: Optional[dict[str, tuple[float, float]]] = None,
     ):
 
         self.filename = filename
@@ -203,6 +217,7 @@ class Model:
             srate_hz,
             waveform_generator=self.waveform_generator,
             multibanding=multibanding,
+            parameter_generator_kwargs=parameter_generator_kwargs,
         )
 
         if downsampling_training is None:
