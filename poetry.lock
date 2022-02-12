@@ -218,7 +218,7 @@ python-versions = ">=3.6.1"
 
 [[package]]
 name = "charset-normalizer"
-version = "2.0.11"
+version = "2.0.12"
 description = "The Real First Universal Charset Detector. Open, modern and actively maintained alternative to Chardet."
 category = "main"
 optional = false
@@ -1638,7 +1638,7 @@ jupyter = ["ipywidgets (>=7.5.1,<8.0.0)"]
 
 [[package]]
 name = "scalene"
-version = "1.5.3"
+version = "1.5.4"
 description = "Scalene: A high-resolution, low-overhead CPU, GPU, and memory profiler for Python"
 category = "dev"
 optional = false
@@ -2063,17 +2063,6 @@ tox = ">=3.8.0,<4.0.0"
 poetry = ["poetry (>=1.0.0,<2.0.0)"]
 
 [[package]]
-name = "tox-pyenv"
-version = "1.1.0"
-description = "tox plugin that makes tox use `pyenv which` to find python executables"
-category = "dev"
-optional = false
-python-versions = "*"
-
-[package.dependencies]
-tox = ">=2.0"
-
-[[package]]
 name = "tqdm"
 version = "4.62.3"
 description = "Fast, Extensible Progress Meter"
@@ -2199,7 +2188,7 @@ torch = ["torch"]
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.7,<3.10"
-content-hash = "b1403fb93ba8d75227f231b15602f6fee84e26c1808401ae20bc97afcb98796d"
+content-hash = "9cfd299a9e087d3ee2f9899de0407c6bb5dd8cbe34a31c6f395425b678bbf704"
 
 [metadata.files]
 alabaster = [
@@ -2337,8 +2326,8 @@ cfgv = [
     {file = "cfgv-3.3.1.tar.gz", hash = "sha256:f5a830efb9ce7a445376bb66ec94c638a9787422f96264c98edc6bdeed8ab736"},
 ]
 charset-normalizer = [
-    {file = "charset-normalizer-2.0.11.tar.gz", hash = "sha256:98398a9d69ee80548c762ba991a4728bfc3836768ed226b3945908d1a688371c"},
-    {file = "charset_normalizer-2.0.11-py3-none-any.whl", hash = "sha256:2842d8f5e82a1f6aa437380934d5e1cd4fcf2003b06fed6940769c164a480a45"},
+    {file = "charset-normalizer-2.0.12.tar.gz", hash = "sha256:2857e29ff0d34db842cd7ca3230549d1a697f96ee6d3fb071cfa6c7393832597"},
+    {file = "charset_normalizer-2.0.12-py3-none-any.whl", hash = "sha256:6881edbebdb17b39b4eaaa821b438bf6eddffb4468cf344f09f89def34a8b1df"},
 ]
 cleo = [
     {file = "cleo-0.8.1-py2.py3-none-any.whl", hash = "sha256:141cda6dc94a92343be626bb87a0b6c86ae291dfc732a57bf04310d4b4201753"},
@@ -3398,18 +3387,18 @@ rich = [
     {file = "rich-11.2.0.tar.gz", hash = "sha256:1a6266a5738115017bb64a66c59c717e7aa047b3ae49a011ede4abdeffc6536e"},
 ]
 scalene = [
-    {file = "scalene-1.5.3-cp310-cp310-macosx_10_15_universal2.whl", hash = "sha256:42b7f635babc23dc4a4d9600013969bb2fbc2011442a5468081f7f79c01cda5c"},
-    {file = "scalene-1.5.3-cp310-cp310-manylinux_2_24_x86_64.whl", hash = "sha256:ec2d70057d9591202ee6ac38b5b57a54f2af560486106d0a833a25a863b20ac8"},
-    {file = "scalene-1.5.3-cp310-cp310-win_amd64.whl", hash = "sha256:26490f19a260fa22286bade97e16a6bbf897d94950bae8712ad3d72b2274f004"},
-    {file = "scalene-1.5.3-cp37-cp37m-macosx_10_14_universal2.whl", hash = "sha256:ee347c9f8a26e88b895ed5f386146321663df1d34bcd5a0e579665b0db129db0"},
-    {file = "scalene-1.5.3-cp37-cp37m-manylinux_2_24_x86_64.whl", hash = "sha256:f269c353067ad1cf9443a788a8ae40cffe97ce7fc2897a3073defadd2a29d73e"},
-    {file = "scalene-1.5.3-cp38-cp38-macosx_10_14_universal2.whl", hash = "sha256:da68dac107ee438798d6caba6315987cf5a46b37d9c75f892e51754b22b2178b"},
-    {file = "scalene-1.5.3-cp38-cp38-manylinux_2_24_x86_64.whl", hash = "sha256:e5234178939e09a8da7d12ba9d4a6bf529da1463ffc3530677033052ccc93dbb"},
-    {file = "scalene-1.5.3-cp38-cp38-win_amd64.whl", hash = "sha256:8b4ae0c691588dcb24f83661312fa3565aebfadcb89ded7a8c79e221b2c1ad8e"},
-    {file = "scalene-1.5.3-cp39-cp39-macosx_10_15_universal2.whl", hash = "sha256:cfdd0606b556c8270bc0cb67a299c513b16f764db3575c5305c02de40d2cb75d"},
-    {file = "scalene-1.5.3-cp39-cp39-manylinux_2_24_x86_64.whl", hash = "sha256:77f24cf3e4b224d251afd7048ea269e969faba82294bf3518aefb0adc27cfa7a"},
-    {file = "scalene-1.5.3-cp39-cp39-win_amd64.whl", hash = "sha256:366801345d2c4b607a70f5728e6518eec6c5ab5dd68568fad73d4d47088fa5e9"},
-    {file = "scalene-1.5.3.tar.gz", hash = "sha256:9c3a28df418e6f9f617f0c374d517dd8e92b76aab508786d1d3223a22a2af487"},
+    {file = "scalene-1.5.4-cp310-cp310-macosx_10_15_universal2.whl", hash = "sha256:2e9ccf3e1fd12fbd44f056f881582e5bf79f19938d2ce0c158bc12e945accd62"},
+    {file = "scalene-1.5.4-cp310-cp310-manylinux_2_24_x86_64.whl", hash = "sha256:1904c615a0616d0a7b507e5507be5da606b519c80831630b12daae6b45da3c7e"},
+    {file = "scalene-1.5.4-cp310-cp310-win_amd64.whl", hash = "sha256:8f83f1618d7c261fb7603ec1cec6f85f726f8f1c0b648368c235418cba5045fc"},
+    {file = "scalene-1.5.4-cp37-cp37m-macosx_10_14_universal2.whl", hash = "sha256:3079c12d62954ff9a3099411fe381221e0da75e4f74679a6782a1e4c84acc79d"},
+    {file = "scalene-1.5.4-cp37-cp37m-manylinux_2_24_x86_64.whl", hash = "sha256:040e9544705f05baa28c2719a4970032a30b22328d737eb4f2370d02b96d11d7"},
+    {file = "scalene-1.5.4-cp38-cp38-macosx_10_14_universal2.whl", hash = "sha256:9e1cc7d5ca2a13eb8c47ee4b039eb130427f3a61669519d894f7967badcd1d38"},
+    {file = "scalene-1.5.4-cp38-cp38-manylinux_2_24_x86_64.whl", hash = "sha256:eaddd1f25e2f0c9a7ef27b2504a32bb1ab1d6329d9dac1a75d89a052cb1692d3"},
+    {file = "scalene-1.5.4-cp38-cp38-win_amd64.whl", hash = "sha256:170d8e869e696c216d92219c9ab3e04125c63d20c4738000bbb4098d5053d181"},
+    {file = "scalene-1.5.4-cp39-cp39-macosx_10_15_universal2.whl", hash = "sha256:f93dd3ddb3e2e752544a059520bc82a66019832bd4380ee4230aed665751052b"},
+    {file = "scalene-1.5.4-cp39-cp39-manylinux_2_24_x86_64.whl", hash = "sha256:b8875464f721ab84d350841ddbcf8f3649501d90ce5b7680b9e5a701d6d3bba7"},
+    {file = "scalene-1.5.4-cp39-cp39-win_amd64.whl", hash = "sha256:a3918b01a77eb240e72fb6d6d3cf7277c970aac1c88d7a79e24f0f42b2af15ef"},
+    {file = "scalene-1.5.4.tar.gz", hash = "sha256:2e9563adee90f474ada3e098112f2fff1491d1e497ae05c9f3d1162f696dba3b"},
 ]
 scikit-learn = [
     {file = "scikit-learn-1.0.2.tar.gz", hash = "sha256:b5870959a5484b614f26d31ca4c17524b1b0317522199dc985c3b4256e030767"},
@@ -3682,10 +3671,6 @@ tox-gh-actions = [
 tox-poetry-installer = [
     {file = "tox-poetry-installer-0.8.3.tar.gz", hash = "sha256:04b6c7d368b67ef3cc4409e275b26eef3564a6487259bd9cc671587f5aaf4b4f"},
     {file = "tox_poetry_installer-0.8.3-py3-none-any.whl", hash = "sha256:4cefad997ef5b8533811ceb5308b5cb6e6d6997af377c0b7d03b2dd43179c235"},
-]
-tox-pyenv = [
-    {file = "tox-pyenv-1.1.0.tar.gz", hash = "sha256:916c2213577aec0b3b5452c5bfb32fd077f3a3196f50a81ad57d7ef3fc2599e4"},
-    {file = "tox_pyenv-1.1.0-py2.py3-none-any.whl", hash = "sha256:e470c18af115fe52eeff95e7e3cdd0793613eca19709966fc2724b79d55246cb"},
 ]
 tqdm = [
     {file = "tqdm-4.62.3-py2.py3-none-any.whl", hash = "sha256:8dd278a422499cd6b727e6ae4061c40b48fce8b76d1ccbf5d34fca9b7f925b0c"},
