@@ -139,7 +139,11 @@ def test_frequencies_match_with_eob(variable_parameters, teob_generator):
 
     freq, waveform = teob_generator.effective_one_body_waveform(variable_parameters)
 
-    assert np.allclose(freq, variable_parameters.dataset.frequencies, atol=0.0)
+    dataset_freq = variable_parameters.dataset.frequencies
+
+    assert len(freq) == len(dataset_freq)
+
+    assert np.allclose(freq, dataset_freq, atol=0.0)
 
 
 def test_residuals_are_not_too_large(variable_parameters, teob_generator):
@@ -180,7 +184,7 @@ def test_true_waveforms_in_validation(dataset, parameters):
     cartesian_wf_from_polar = waveforms.amplitudes[0] * np.exp(1j * waveforms.phases[0])
 
     f, cartesian_wf_direct = dataset.waveform_generator.effective_one_body_waveform(
-        parameters
+        parameters, frequencies=dataset.frequencies
     )
 
     assert np.allclose(abs(cartesian_wf_direct), abs(cartesian_wf_from_polar))

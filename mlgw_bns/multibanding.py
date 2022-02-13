@@ -1,13 +1,15 @@
 import numpy as np
 
-EXTRA_FACTOR = 1.5
-
 # this value refers to the eta=1/4, m_tot=2.8 case
 SEGLEN_20_HZ = 157.86933774
 
 
 def seglen_from_freq(
-    f_0: float, m_tot: float = 2.8, maximum_mass_ratio: float = 2.0
+    f_0: float,
+    m_tot: float = 2.8,
+    maximum_mass_ratio: float = 2.0,
+    power_of_two=True,
+    margin_percent=5.0,
 ) -> float:
     r"""
     The seglen has a closed-form expression in the Newtonian limit,
@@ -31,6 +33,19 @@ def seglen_from_freq(
             Maximum allowed mass ratio in the dataset;
             this is used to give an upper bound on the seglen.
             Defaults to 2.
+    power_of_two : bool
+        whether to return a frequency spacing which is a round power of two.
+        Defaults to True.
+    margin_percent : float
+        percent of margin to be added to the seglen, so that
+        :math:`\Delta f < 1 / (T + \delta T)` holds for
+        :math:`\delta T \leq T (\text{margin} / 100)`.
+
+        This should not be too low, since varying the waveform parameters
+        can perturb the seglen and make it a bit higher than the
+        Newtonian approximation used in this formula.
+
+
 
     Returns
     -------
@@ -40,7 +55,14 @@ def seglen_from_freq(
 
     eta = maximum_mass_ratio / (1 + maximum_mass_ratio) ** 2
 
-    return SEGLEN_20_HZ * (f_0 / 20) ** (-8 / 3) * (m_tot / 2.8) ** (5 / 3) / (4 * eta)
+    seglen = (
+        SEGLEN_20_HZ * (f_0 / 20) ** (-8 / 3) * (m_tot / 2.8) ** (5 / 3) / (4 * eta)
+    )
+
+    if power_of_two:
+        return 2 ** (np.ceil(np.log2(seglen * (1 + margin_percent / 100))))
+    else:
+        return seglen
 
 
 def reduced_frequency_array(f_min: float, f_max: float, f_pivot: float) -> np.ndarray:
@@ -72,8 +94,8 @@ def reduced_frequency_array(f_min: float, f_max: float, f_pivot: float) -> np.nd
     if f_min <= f_pivot <= f_max:
         df_pivot = 1 / seglen_from_freq(f_pivot)
         return np.append(
-            low_frequency_grid(f_min, f_pivot),
-            high_frequency_grid(f_pivot + df_pivot, f_max),
+            low_frequency_grid(f_min, f_pivot - df_pivot),
+            high_frequency_grid(f_pivot, f_max),
         )
     elif f_max < f_pivot:
         return low_frequency_grid(f_min, f_max)
@@ -96,8 +118,9 @@ def high_frequency_grid(f_min: float, f_max: float):
     frequencies: np.ndrray
         Frequency array, in Hz.
     """
+    df = 1 / seglen_from_freq(f_min)
 
-    return np.arange(f_min, f_max, step=1 / seglen_from_freq(f_min) / EXTRA_FACTOR)
+    return np.arange(f_min, f_max + df, step=df)
 
 
 def low_frequency_grid(f_min: float, f_max: float):
@@ -130,9 +153,13 @@ def low_frequency_grid(f_min: float, f_max: float):
     """
     f_min_reduced, f_max_reduced = f_min ** (-5 / 3), f_max ** (-5 / 3)
     # iterate backwards since we are f^{-5/3} is a decreasing function of f
+
+    # this df is NOT measured in Hz!
+    df_effective = 1 / seglen_from_freq(1, power_of_two=False) * (5 / 3)
+
     grid = np.arange(
         f_max_reduced,
         f_min_reduced,
-        step=1 / seglen_from_freq(1) * (5 / 3) / EXTRA_FACTOR,
+        step=df_effective,
     )
     return sorted(grid ** (-3 / 5))
