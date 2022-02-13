@@ -34,7 +34,7 @@ jobs:
         python -m pip install poetry
         poetry install -v
     - name: Run tests
-      run: poetry run pytest -v --junit-xml tests/test_results.xml {posargs}
+      run: poetry run pytest -v --junit-xml tests/test_results.xml
 
     - name: Upload Test Results
       if: always()
