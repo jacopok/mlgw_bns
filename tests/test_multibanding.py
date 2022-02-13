@@ -1,7 +1,6 @@
 import numpy as np
 
 from mlgw_bns.multibanding import (
-    EXTRA_FACTOR,
     SEGLEN_20_HZ,
     high_frequency_grid,
     low_frequency_grid,
@@ -21,7 +20,13 @@ def test_reduced_frequency_array_simplifies_to_high_or_low_frequency_grids():
 
 
 def test_seglen_normalization():
-    assert np.isclose(seglen_from_freq(20, maximum_mass_ratio=1.0), SEGLEN_20_HZ)
+    assert np.isclose(
+        seglen_from_freq(20, maximum_mass_ratio=1.0, power_of_two=False), SEGLEN_20_HZ
+    )
+    assert np.isclose(
+        seglen_from_freq(20, maximum_mass_ratio=1.0),
+        2 ** (np.ceil(np.log2(SEGLEN_20_HZ))),
+    )
 
 
 def test_reduced_frequency_array_histogram_works():
@@ -30,11 +35,11 @@ def test_reduced_frequency_array_histogram_works():
     hist, _ = np.histogram(arr, bins=np.arange(30, 101))
 
     assert np.allclose(
-        hist[:10], seglen_from_freq(np.arange(30, 40) + 1 / 2) * EXTRA_FACTOR, rtol=2e-2
+        hist[:10],
+        seglen_from_freq(np.arange(30, 40) + 1 / 2, power_of_two=False),
+        rtol=5e-2,
     )
-    assert np.allclose(
-        hist[10:], seglen_from_freq(40.0) * EXTRA_FACTOR, rtol=2e-2, atol=1.0
-    )
+    assert np.allclose(hist[10:], seglen_from_freq(40.0), rtol=2e-2, atol=1.0)
 
 
 def test_reduced_frequency_array_is_sorted():

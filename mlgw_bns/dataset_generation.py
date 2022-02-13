@@ -796,7 +796,7 @@ class Dataset:
     f_pivot_hz: float
             Pivot frequency for the multibanding in Hz, only used if
             :attr:`multibanding` is True.
-            Defaults to 30.
+            Defaults to 20.
 
     Examples
     --------
@@ -822,8 +822,8 @@ class Dataset:
         parameter_generator_class: Type[ParameterGenerator] = UniformParameterGenerator,
         parameter_generator_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 42,
-        multibanding: bool = False,
-        f_pivot_hz: float = 30.0,
+        multibanding: bool = True,
+        f_pivot_hz: float = 20.0,
     ):
 
         self.initial_frequency_hz = initial_frequency_hz
@@ -854,9 +854,13 @@ class Dataset:
 
     @property
     def waveform_length(self) -> int:
-        return (
-            int((self.srate_hz / 2 - self.initial_frequency_hz) / self.delta_f_hz) + 1
-        )
+        if self.multibanding:
+            return len(self.frequencies)
+        else:
+            return (
+                int((self.srate_hz / 2 - self.initial_frequency_hz) / self.delta_f_hz)
+                + 1
+            )
 
     @property
     def frequencies(self) -> np.ndarray:
@@ -881,7 +885,7 @@ class Dataset:
         if self.multibanding:
             return reduced_frequency_array(
                 self.initial_frequency_hz,
-                self.srate_hz / 2 + self.delta_f_hz,
+                self.srate_hz / 2,
                 self.f_pivot_hz,
             )
         else:
@@ -943,9 +947,27 @@ class Dataset:
 
     @property
     def mass_sum_seconds(self) -> float:
+        """Reference total mass expressed in seconds, :math:`GM / c^3`.
+
+        Returns
+        -------
+        float
+        """
         return self.total_mass * SUN_MASS_SECONDS
 
     def hz_to_natural_units(self, frequency_hz: Union[float, np.ndarray]):
+        """Utility function: convert Hz to natural units,
+        using the reference total mass of the dataset.
+
+        Parameters
+        ----------
+        frequency_hz : Union[float, np.ndarray]
+
+        Returns
+        -------
+        frequency_nu
+            Frequency in natural units.
+        """
         return frequency_hz * self.mass_sum_seconds
 
     def taylor_f2_prefactor(self, eta: float) -> float:

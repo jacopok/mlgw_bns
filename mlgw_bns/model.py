@@ -175,7 +175,7 @@ class Model:
             Dictionary of keyword arguments to be used when initializing
             a :class:`ParameterGenerator`.
             It should be a map of strings to tuples, in the form
-            {'q_range': (1., 3.)}.
+            `{'q_range': (1., 3.)}`.
 
             Options include
             ``q_range``,
@@ -183,6 +183,13 @@ class Model:
             ``lambda2_range``,
             ``chi1_range``,
             ``chi2_range``.
+    mass_range: tuple[float, float]
+            Range of total masses :math:`M` (in solar masses)
+            that the model should be able to reconstruct.
+            The reconstruction works with the frequency expressed as :math:`Mf`,
+            but changing the total mass changes the range of relevant frequencies.
+
+            Defaults to (2.8, 2.8).
     """
 
     def __init__(
@@ -191,11 +198,12 @@ class Model:
         initial_frequency_hz: float = 20.0,
         srate_hz: float = 4096.0,
         pca_components_number: int = 30,
-        multibanding: bool = False,
+        multibanding: bool = True,
         waveform_generator: Optional[WaveformGenerator] = None,
         downsampling_training: Optional[DownsamplingTraining] = None,
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
         parameter_generator_kwargs: Optional[dict[str, tuple[float, float]]] = None,
+        mass_range: tuple[float, float] = (2.8, 2.8),
     ):
 
         self.filename = filename
@@ -212,9 +220,13 @@ class Model:
         else:
             self.waveform_generator = waveform_generator
 
+        effective_initial_frequency, effective_srate = expand_frequency_range(
+            initial_frequency_hz, srate_hz, mass_range, Dataset.total_mass
+        )
+
         self.dataset = Dataset(
-            initial_frequency_hz,
-            srate_hz,
+            effective_initial_frequency,
+            effective_srate,
             waveform_generator=self.waveform_generator,
             multibanding=multibanding,
             parameter_generator_kwargs=parameter_generator_kwargs,
@@ -925,3 +937,48 @@ def compute_cartesian_waveform(
     )
 
     return amp * np.exp(1j * phi)
+
+
+def expand_frequency_range(
+    initial_frequency: float,
+    final_frequency: float,
+    mass_range: tuple[float, float],
+    reference_mass: float,
+) -> tuple[float, float]:
+    """Widen the frequency range to account for the
+    different masses the user requires.
+
+    Parameters
+    ----------
+    initial_frequency : float
+        Lower bound for the frequency.
+        Typically in Hz, but this function just requires it
+        to be consistent with the other parameters.
+    final_frequency : float
+        Upper bound for the frequency.
+        It can also be given as the time-domain
+        signal rate :math:`r = 1 / \Delta t`, which is
+        twice che maximum frequency because of the Nyquist bound.
+
+        Since all this function does is multiply it by a certain factor,
+        the formulations can be exchanged.
+    mass_range : tuple[float, float]
+        Range of allowed masses, in the same unit as the
+        reference mass (typically, solar masses).
+    reference_mass : float
+        Reference mass the model uses to convert frequencies
+        to the dimensionless :math:`Mf`.
+
+    Returns
+    -------
+    tuple[float, float]
+        New lower and upper bounds for the frequency range.
+    """
+
+    m_min, m_max = mass_range
+    assert m_min <= m_max
+
+    return (
+        initial_frequency * (reference_mass / m_max),
+        final_frequency * (reference_mass / m_min),
+    )

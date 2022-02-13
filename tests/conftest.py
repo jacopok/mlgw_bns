@@ -22,6 +22,7 @@ def fixture_variable_dataset(f_0):
         initial_frequency_hz=f_0,
         srate_hz=4096.0,
         waveform_generator=TEOBResumSGenerator(EOBRunPy),
+        multibanding=True,
     )
 
 
