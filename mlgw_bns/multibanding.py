@@ -1,3 +1,8 @@
+"""This module implements something close to the methods outlined in
+Vinciguerra et al. 2017 http://arxiv.org/abs/1803.07965
+to create a frequency array which scales well with the initial frequency.
+"""
+
 import numpy as np
 
 # this value refers to the eta=1/4, m_tot=2.8 case
