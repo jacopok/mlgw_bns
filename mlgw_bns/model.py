@@ -670,18 +670,22 @@ class Model:
             + (2 * np.pi * params.time_shift) * frequencies
         )
 
-        cartesian_waveform = combine_amp_phase(amp, phi)
+        cartesian_waveform_real, cartesian_waveform_imag = combine_amp_phase(amp, phi)
 
         pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
         cosi = np.cos(params.inclination)
         pre_plus = (1 + cosi ** 2) / 2 * pre / params.distance_mpc
-        pre_cross = cosi * pre * (-1j) / params.distance_mpc
+        pre_cross = cosi * pre / params.distance_mpc
 
-        return compute_polarizations(cartesian_waveform, pre_plus, pre_cross)
+        return compute_polarizations(
+            cartesian_waveform_real, cartesian_waveform_imag, pre_plus, pre_cross
+        )
 
 
 @njit
-def combine_amp_phase(amp: np.ndarray, phase: np.ndarray) -> np.ndarray:
+def combine_amp_phase(
+    amp: np.ndarray, phase: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     """Combine amplitude and phase arrays into a Cartesian waveform,
     according to
     :math:`h = A e^{i \phi}`.
@@ -697,7 +701,8 @@ def combine_amp_phase(amp: np.ndarray, phase: np.ndarray) -> np.ndarray:
     -------
     np.ndarray
     """
-    return amp * np.exp(1j * phase)
+    # return amp * np.exp(1j * phase)
+    return (amp * np.cos(phase), amp * np.sin(phase))
 
 
 @njit
@@ -742,7 +747,8 @@ def combine_residuals_phi(phi: np.ndarray, phi_pn: np.ndarray) -> np.ndarray:
 
 @njit
 def compute_polarizations(
-    waveform: np.ndarray,
+    waveform_real: np.ndarray,
+    waveform_imag: np.ndarray,
     pre_plus: Union[complex, float],
     pre_cross: Union[complex, float],
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -756,20 +762,24 @@ def compute_polarizations(
 
     Parameters
     ----------
-    waveform : np.ndarray
-        Cartesian complex-valued waveform.
+    waveform_real : np.ndarray
+        Real part of the cartesian complex-valued waveform.
+    waveform_imag : np.ndarray
+        Imaginary part of the cartesian complex-valued waveform.
     pre_plus : complex
-        Complex-valued prefactor for the plus polarization of the waveform.
+        Real-valued prefactor for the plus polarization of the waveform.
     pre_cross : complex
-        Complex-valued prefactor for the cross polarization of the waveform.
+        Real-valued prefactor for the cross polarization of the waveform.
 
     Returns
     -------
     tuple[np.ndarray, np.ndarray]
         Plus and cross polarizations: complex-valued arrays.
     """
-    hp = pre_plus * waveform
-    hc = pre_cross * waveform
+
+    hp = pre_plus * waveform_real + 1j * pre_plus * waveform_imag
+    hc = pre_cross * waveform_imag - 1j * pre_cross * waveform_real
+
     return hp, hc
 
 
