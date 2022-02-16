@@ -12,7 +12,8 @@ from tqdm import tqdm  # type: ignore
 from .data_management import FDWaveforms
 from .dataset_generation import Dataset, ParameterSet, WaveformGenerator
 from .downsampling_interpolation import DownsamplingIndices, DownsamplingTraining
-from .model import Model, cartesian_waveforms_at_frequencies
+from .model import Model
+from .resample_residuals import cartesian_waveforms_at_frequencies
 
 
 class ValidateModel:
