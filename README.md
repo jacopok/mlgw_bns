@@ -15,7 +15,7 @@ but it is planned to introduce the possibility to use others.
 
 The documentation can be found [here](https://mlgw-bns.readthedocs.io/en/latest).
 
-![dependencygraph](mlgw_bns.svg)
+<!-- ![dependencygraph](mlgw_bns.svg) -->
 
 ## Installation
 
