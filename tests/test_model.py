@@ -3,11 +3,7 @@ import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 
 from mlgw_bns.dataset_generation import ParameterSet, TEOBResumSGenerator
-from mlgw_bns.model import (
-    Model,
-    ParametersWithExtrinsic,
-    cartesian_waveforms_at_frequencies,
-)
+from mlgw_bns.model import Model, ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 
 DEFAULT_MODEL_MAX_MISMATCH = 1e-5
