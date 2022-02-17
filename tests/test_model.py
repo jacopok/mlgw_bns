@@ -50,7 +50,6 @@ def test_quick_model_with_validation_mismatches(trained_model):
     )
 
 
-@pytest.mark.xfail
 def test_default_model_with_validation_mismatches(default_model):
 
     vm = ValidateModel(default_model)
@@ -63,7 +62,6 @@ def test_default_model_with_validation_mismatches(default_model):
     )
 
 
-@pytest.mark.xfail
 def test_default_model_residuals(default_model):
 
     vm = ValidateModel(default_model)
@@ -85,7 +83,6 @@ def test_default_model_residuals(default_model):
     # assert all(abs(phase_errors) < 1e-2)
 
 
-@pytest.mark.xfail
 @pytest.mark.benchmark(group="model-prediction")
 @pytest.mark.parametrize(
     "number_of_sample_points",
@@ -184,7 +181,6 @@ def test_model_nn_prediction(
     assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=tolerance_amp * 20)
 
 
-@pytest.mark.xfail
 @pytest.mark.parametrize(
     "model_name, tolerance_mismatch, tolerance_amp",
     [
@@ -266,5 +262,5 @@ def random_parameters(model: Model, seed: int) -> ParametersWithExtrinsic:
         chi_2=intrinsic_params.chi_2,
         distance_mpc=10 ** param_generator.rng.uniform(-1, 4),
         inclination=param_generator.rng.uniform(-np.pi, np.pi),
-        total_mass=param_generator.rng.uniform(1, 3),
+        total_mass=param_generator.rng.uniform(2.5, 4),
     )
