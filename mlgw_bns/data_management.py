@@ -124,6 +124,15 @@ class SavableData:
 
 
 @dataclass
+class MassRange(SavableData):
+    """Mass range to be allowed."""
+
+    mass_range: np.ndarray
+
+    group_name: ClassVar[str] = "mass_range"
+
+
+@dataclass
 class DownsamplingIndices(SavableData):
     """Indices to be used to select a subset of frequencies
     at which the waveform's amplitude and phase
