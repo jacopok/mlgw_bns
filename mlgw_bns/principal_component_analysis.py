@@ -46,7 +46,7 @@ class PrincipalComponentTraining:
                 self.pca_model.number_of_components,
                 number_of_training_waveforms,
             )
-            raise NotImplementedError
+            raise ValueError
 
         logging.info(
             "Generating %s waveforms for PCA training", number_of_training_waveforms
