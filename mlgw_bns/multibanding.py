@@ -62,12 +62,9 @@ def seglen_from_freq(
 
     seglen = (
         SEGLEN_20_HZ * (f_0 / 20) ** (-8 / 3) * (m_tot / 2.8) ** (5 / 3) / (4 * eta)
-    )
+    ) * (1 + margin_percent / 100)
 
-    if power_of_two:
-        return 2 ** (np.ceil(np.log2(seglen * (1 + margin_percent / 100))))
-    else:
-        return seglen
+    return 2 ** (np.ceil(np.log2(seglen))) if power_of_two else seglen
 
 
 def reduced_frequency_array(f_min: float, f_max: float, f_pivot: float) -> np.ndarray:
@@ -161,12 +158,18 @@ def low_frequency_grid(f_min: float, f_max: float):
 
     # this df is NOT measured in Hz!
     df_effective = (
-        1 / seglen_from_freq(1, power_of_two=False, margin_percent=100.0) * (5 / 3)
+        1 / seglen_from_freq(1, power_of_two=False, margin_percent=50.0) * (5 / 3)
     )
 
-    grid = np.arange(
+    scaled_grid = np.arange(
         f_max_reduced,
         f_min_reduced,
         step=df_effective,
     )
-    return sorted(grid ** (-3 / 5))
+
+    grid = scaled_grid ** (-3 / 5)
+
+    if f_min not in grid:
+        grid = np.append(grid, [f_min])
+
+    return sorted(grid)
