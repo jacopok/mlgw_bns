@@ -433,19 +433,18 @@ class Model:
         self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
         self.pca_data = PrincipalComponentData.from_file(file_arrays)
         self.training_parameters = ParameterSet.from_file(file_arrays)
-
-        mass_range = MassRange.from_file(file_arrays)
-        assert mass_range is not None
-        self.mass_range = mass_range
-
-        self.dataset = self.make_dataset()
-
         if (
             self.downsampling_indices is None
             or self.pca_data is None
             or self.training_parameters is None
         ):
             raise FileNotFoundError
+
+        mass_range = MassRange.from_file(file_arrays)
+        assert mass_range is not None
+        self.mass_range = mass_range
+
+        self.dataset = self.make_dataset()
 
         self.training_dataset = Residuals.from_file(
             file_arrays, ignore_warnings=ignore_warnings
