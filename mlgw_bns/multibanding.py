@@ -12,9 +12,9 @@ SEGLEN_20_HZ = 157.86933774
 def seglen_from_freq(
     f_0: float,
     m_tot: float = 2.8,
-    maximum_mass_ratio: float = 2.0,
+    maximum_mass_ratio: float = 4.0,
     power_of_two=True,
-    margin_percent=5.0,
+    margin_percent=2.0,
 ) -> float:
     r"""
     The seglen has a closed-form expression in the Newtonian limit,
@@ -160,7 +160,9 @@ def low_frequency_grid(f_min: float, f_max: float):
     # iterate backwards since we are f^{-5/3} is a decreasing function of f
 
     # this df is NOT measured in Hz!
-    df_effective = 1 / seglen_from_freq(1, power_of_two=False) * (5 / 3)
+    df_effective = (
+        1 / seglen_from_freq(1, power_of_two=False, margin_percent=100.0) * (5 / 3)
+    )
 
     grid = np.arange(
         f_max_reduced,
