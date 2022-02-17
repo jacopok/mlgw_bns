@@ -17,10 +17,10 @@ from sklearn.preprocessing import StandardScaler  # type: ignore
 from .data_management import (
     DownsamplingIndices,
     FDWaveforms,
+    MassRange,
     PrincipalComponentData,
     Residuals,
     SavableData,
-    MassRange,
 )
 from .dataset_generation import (
     BarePostNewtonianGenerator,
