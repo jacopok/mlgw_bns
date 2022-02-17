@@ -135,9 +135,11 @@ def test_changing_parameter_generation_ranges(dataset):
         assert 0 <= getattr(params, attr) <= 1
 
 
-def test_frequencies_match_with_eob(variable_parameters, teob_generator):
+def test_uniform_frequencies_match_with_eob(variable_parameters, teob_generator):
 
     freq, waveform = teob_generator.effective_one_body_waveform(variable_parameters)
+
+    variable_parameters.dataset.multibanding = False
 
     dataset_freq = variable_parameters.dataset.frequencies
 
