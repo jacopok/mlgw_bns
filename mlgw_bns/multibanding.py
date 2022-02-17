@@ -14,7 +14,7 @@ def seglen_from_freq(
     m_tot: float = 2.8,
     maximum_mass_ratio: float = 4.0,
     power_of_two=True,
-    margin_percent=2.0,
+    margin_percent=5.0,
 ) -> float:
     r"""
     The seglen has a closed-form expression in the Newtonian limit,
