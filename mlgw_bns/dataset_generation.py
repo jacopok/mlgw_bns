@@ -796,7 +796,7 @@ class Dataset:
     f_pivot_hz: float
             Pivot frequency for the multibanding in Hz, only used if
             :attr:`multibanding` is True.
-            Defaults to 20.
+            Defaults to 40.
 
     Examples
     --------
@@ -823,7 +823,7 @@ class Dataset:
         parameter_generator_kwargs: Optional[dict[str, Any]] = None,
         seed: int = 42,
         multibanding: bool = True,
-        f_pivot_hz: float = 20.0,
+        f_pivot_hz: float = 40.0,
     ):
 
         self.initial_frequency_hz = initial_frequency_hz
