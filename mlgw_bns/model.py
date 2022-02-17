@@ -20,6 +20,7 @@ from .data_management import (
     PrincipalComponentData,
     Residuals,
     SavableData,
+    MassRange,
 )
 from .dataset_generation import (
     BarePostNewtonianGenerator,
@@ -220,17 +221,13 @@ class Model:
         else:
             self.waveform_generator = waveform_generator
 
-        effective_initial_frequency, effective_srate = expand_frequency_range(
-            initial_frequency_hz, srate_hz, mass_range, Dataset.total_mass
-        )
+        self.mass_range = MassRange(np.array(mass_range))
+        self.initial_frequency_hz = initial_frequency_hz
+        self.srate_hz = srate_hz
+        self.multibanding = multibanding
+        self.parameter_generator_kwargs = parameter_generator_kwargs
 
-        self.dataset = Dataset(
-            effective_initial_frequency,
-            effective_srate,
-            waveform_generator=self.waveform_generator,
-            multibanding=multibanding,
-            parameter_generator_kwargs=parameter_generator_kwargs,
-        )
+        self.dataset = self.make_dataset()
 
         if downsampling_training is None:
             self.downsampling_training: DownsamplingTraining = (
@@ -263,6 +260,25 @@ class Model:
         model.filename = filename
 
         return model
+
+    def make_dataset(self) -> Dataset:
+
+        mass_min, mass_max = self.mass_range.mass_range
+
+        effective_initial_frequency, effective_srate = expand_frequency_range(
+            self.initial_frequency_hz,
+            self.srate_hz,
+            (mass_min, mass_max),
+            Dataset.total_mass,
+        )
+
+        return Dataset(
+            effective_initial_frequency,
+            effective_srate,
+            waveform_generator=self.waveform_generator,
+            multibanding=self.multibanding,
+            parameter_generator_kwargs=self.parameter_generator_kwargs,
+        )
 
     @property
     def auxiliary_data_available(self) -> bool:
@@ -374,6 +390,7 @@ class Model:
             self.downsampling_indices,
             self.pca_data,
             self.training_parameters,
+            self.mass_range,
         ]
 
         if include_training_data:
@@ -416,6 +433,12 @@ class Model:
         self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
         self.pca_data = PrincipalComponentData.from_file(file_arrays)
         self.training_parameters = ParameterSet.from_file(file_arrays)
+
+        mass_range = MassRange.from_file(file_arrays)
+        assert mass_range is not None
+        self.mass_range = mass_range
+
+        self.dataset = self.make_dataset()
 
         if (
             self.downsampling_indices is None
