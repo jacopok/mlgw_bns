@@ -41,12 +41,12 @@ class PrincipalComponentTraining:
     def train(self, number_of_training_waveforms: int) -> PrincipalComponentData:
 
         if number_of_training_waveforms < self.pca_model.number_of_components:
-            logging.warn(
+            logging.error(
                 "PCA can not be trained with K=%s but only %s waveforms. Aborting.",
                 self.pca_model.number_of_components,
                 number_of_training_waveforms,
             )
-            return NotImplemented
+            raise NotImplementedError
 
         logging.info(
             "Generating %s waveforms for PCA training", number_of_training_waveforms
