@@ -99,7 +99,7 @@ def trained_model(generated_model):
 
 @pytest.fixture(scope="session")
 def default_model():
-    yield Model.default("default_model")
+    yield Model.default()
 
 
 @pytest.fixture
