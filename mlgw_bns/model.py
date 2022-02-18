@@ -721,9 +721,9 @@ def combine_amp_phase(
 
     Returns
     -------
-    np.ndarray
+    tuple[np.ndarray, np.ndarray]:
+        Real and imaginary parts of the waveform, respectively.
     """
-    # return amp * np.exp(1j * phase)
     return (amp * np.cos(phase), amp * np.sin(phase))
 
 
