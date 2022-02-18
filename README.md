@@ -30,9 +30,10 @@ For more details see [the documentation](https://mlgw-bns.readthedocs.io/en/late
 
 The main steps taken by `mlgw_bns` to train on a dataset are as follows:
 
-- generate the dataset 
+- generate the dataset, consisting of EOB waveforms
 - decompose the Fourier transforms of the waveforms into phase and amplitude
 - downsample the dataset to a few thousand points
+- compute the residuals of the EOB waveforms from PN ones
 - apply a PCA to reduce the dimensionality to a few tens of real numbers
 - train a neural network on the relation
     between the waveform parameters and the PCA components
