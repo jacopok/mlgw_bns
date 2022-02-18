@@ -654,8 +654,8 @@ class Model:
             params.total_mass / self.dataset.total_mass
         )
 
-        assert min(rescaled_frequencies) >= self.dataset.initial_frequency_hz
-        assert max(rescaled_frequencies) <= self.dataset.srate_hz / 2.0
+        assert rescaled_frequencies[0] >= self.dataset.initial_frequency_hz
+        assert rescaled_frequencies[-1] <= self.dataset.srate_hz / 2.0
 
         intrinsic_params = params.intrinsic(self.dataset)
 
