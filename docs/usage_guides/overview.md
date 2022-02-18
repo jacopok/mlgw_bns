@@ -8,7 +8,7 @@ The fastest way to access a functional instance of this object is to use
 the default one: 
 ```python
 from mlgw_bns import Model
-model = Model.default(filename='my_model')
+model = Model.default()
 ```
 
 Now we can predict waveforms; in order to do so however we 
@@ -39,12 +39,12 @@ hp, hc = model.predict(frequencies, params)
 
 The simplest thing to do is to use the default model provided with the package:
 ```python
-m = Model.default('your_model_name')
+m = Model.default()
 ```
 
 The way to create a new model from scratch is as follows:
 ```python
-m = Model('your_model_name')
+m = Model()
 m.generate()
 m.set_hyper_and_train_nn()
 ```
@@ -55,7 +55,7 @@ For this to work `mlgw_bns` must be able to import
 We can then save this model to file with `m.save()`; afterwards we
 will be able to recover it with 
 ```python 
-m = Model('your_model_name')
+m = Model()
 m.load()
 ```
 where it is crucial that the model name is the same --- the `load` method
