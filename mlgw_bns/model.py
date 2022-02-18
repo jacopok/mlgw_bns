@@ -195,7 +195,7 @@ class Model:
 
     def __init__(
         self,
-        filename: str,
+        filename: Optional[str] = None,
         initial_frequency_hz: float = 20.0,
         srate_hz: float = 4096.0,
         pca_components_number: int = 30,
@@ -227,7 +227,7 @@ class Model:
         self.multibanding = multibanding
         self.parameter_generator_kwargs = parameter_generator_kwargs
 
-        self.dataset = self.make_dataset()
+        self.dataset = self._make_dataset()
 
         if downsampling_training is None:
             self.downsampling_training: DownsamplingTraining = (
@@ -249,7 +249,7 @@ class Model:
         self.nn_kind = nn_kind
 
     @classmethod
-    def default(cls, filename: str):
+    def default(cls, filename: Optional[str] = None):
         model = cls(DEFAULT_DATASET_BASENAME)
 
         stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
@@ -261,7 +261,10 @@ class Model:
 
         return model
 
-    def make_dataset(self) -> Dataset:
+    def _handle_missing_filename(self) -> None:
+        raise ValueError('Please set the "filename" attribute of this object')
+
+    def _make_dataset(self) -> Dataset:
 
         mass_min, mass_max = self.mass_range.mass_range
 
@@ -296,6 +299,9 @@ class Model:
 
     @property
     def filename_arrays(self) -> str:
+        if self.filename is None:
+            self._handle_missing_filename()
+
         return f"{self.filename}_arrays.h5"
 
     @property
@@ -312,11 +318,19 @@ class Model:
     @property
     def filename_nn(self) -> str:
         """File name in which to save the neural network."""
+
+        if self.filename is None:
+            self._handle_missing_filename()
+
         return f"{self.filename}_nn.pkl"
 
     @property
     def filename_hyper(self) -> str:
         """File name in which to save the hyperparameters."""
+
+        if self.filename is None:
+            self._handle_missing_filename()
+
         return f"{self.filename}_hyper.pkl"
 
     def generate(
@@ -444,7 +458,7 @@ class Model:
         assert mass_range is not None
         self.mass_range = mass_range
 
-        self.dataset = self.make_dataset()
+        self.dataset = self._make_dataset()
 
         self.training_dataset = Residuals.from_file(
             file_arrays, ignore_warnings=ignore_warnings
@@ -708,7 +722,7 @@ class Model:
 def combine_amp_phase(
     amp: np.ndarray, phase: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Combine amplitude and phase arrays into a Cartesian waveform,
+    r"""Combine amplitude and phase arrays into a Cartesian waveform,
     according to
     :math:`h = A e^{i \phi}`.
 
@@ -749,7 +763,7 @@ def combine_residuals_amp(amp: np.ndarray, amp_pn: np.ndarray) -> np.ndarray:
 
 @njit
 def combine_residuals_phi(phi: np.ndarray, phi_pn: np.ndarray) -> np.ndarray:
-    """Combine amplitude residuals with their Post-Newtonian counterparts,
+    r"""Combine amplitude residuals with their Post-Newtonian counterparts,
     according to
     :math:`\phi = \phi_{PN} + \Delta \phi`.
 
@@ -811,7 +825,7 @@ def expand_frequency_range(
     mass_range: tuple[float, float],
     reference_mass: float,
 ) -> tuple[float, float]:
-    """Widen the frequency range to account for the
+    r"""Widen the frequency range to account for the
     different masses the user requires.
 
     Parameters
