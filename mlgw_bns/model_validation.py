@@ -29,8 +29,9 @@ class ValidateModel:
             The name should correspond to one of the PSDs provided by
             `pycbc <https://pycbc.org/pycbc/latest/html/pycbc.psd.html>`_.
             Defaults to "EinsteinTelescopeP1600143".
-            TODO: check whether this is compatible with
-            the `official ET sensitivities <http://www.et-gw.eu/index.php/etsensitivities>`_.
+            This is compatible with
+            the `official ET sensitivities <http://www.et-gw.eu/index.php/etsensitivities>`_
+            only down to 5Hz (`issue <https://github.com/gwastro/pycbc/issues/3938>`_).
     downsample_by: int
             Factor by which to increase the spacing in the frequencies
             used for the computation of the PSD and mismatches, compared
