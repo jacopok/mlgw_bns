@@ -2427,13 +2427,13 @@ docs = ["sphinx", "jaraco.packaging (>=8.2)", "rst.linker (>=1.9)"]
 testing = ["pytest (>=6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "pytest-cov", "pytest-enabler (>=1.0.1)", "jaraco.itertools", "func-timeout", "pytest-black (>=0.3.7)", "pytest-mypy"]
 
 [extras]
-docs = ["Sphinx", "sphinx-rtd-theme", "readthedocs-sphinx-search", "myst-parser"]
+docs = ["Sphinx", "sphinx-rtd-theme", "readthedocs-sphinx-search", "myst-parser", "MarkupSafe"]
 torch = ["torch"]
 
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.7,<3.10"
-content-hash = "e98286c0574972f4a8fb75d982245ccd438695fc6e230cfa920fe940d0346a79"
+content-hash = "9d45d584b74ab1308b680d3926e7bfe2553ce18d16f4ae4faa986e9b96fbf837"
 
 [metadata.files]
 alabaster = [
