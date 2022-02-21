@@ -768,6 +768,54 @@ class Model:
             cartesian_waveform_real, cartesian_waveform_imag, pre_plus, pre_cross
         )
 
+    def time_until_merger(
+        self,
+        frequency: float,
+        params: ParametersWithExtrinsic,
+        delta_f: Optional[float] = None,
+    ) -> float:
+        r"""Approximate the time left until merger for a wavorm starting at a given frequency,
+        using the approximate Stationary Phase Approximation expression
+        given in `Marsat and Baker 2018 <https://arxiv.org/abs/1806.10734>`_ (eq. 20):
+
+        :math:`t = - \frac{1}{2 \pi} \frac{\mathrm{d} \phi}{\mathrm{d} f}`
+
+        The derivative is computed with ninth-order central differences,
+        because why not.
+
+        Parameters
+        ----------
+        frequencies : Union[float, np.ndarray]
+            One frequency or an array of them, for which to compute
+            the time to merger.
+        params : ParametersWithExtrinsic
+            Parameters of the CBC.
+        delta_f: float, optional
+            delta_f for the numerical calculation of the derivative.
+            If None (default), it is computed internally as f/1000.
+
+        Returns
+        -------
+        Union[float, np.ndarray]
+            Time or times left until merger.
+        """
+
+        df = frequency / 1000
+        freqs = frequency + df * np.arange(-4, 5)
+        weights = np.array([3, -32, 168, -672, 0, 672, -168, 32, -3]) / 840.0
+
+        try:
+
+            _, phis = self._predict_amplitude_phase(freqs, params)
+        except FrequencyTooLowError:
+            phis = self.waveform_generator.post_newtonian_phase(
+                params.intrinsic(self.dataset), freqs * params.mass_sum_seconds
+            )
+
+        derivative = np.sum(phis * weights) / df
+
+        return derivative / (2 * np.pi)
+
 
 @njit
 def combine_amp_phase(
