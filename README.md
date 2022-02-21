@@ -8,7 +8,7 @@ This package's purpose is to speed up the generation of template gravitational w
 
 It is able to reconstruct them with mismatches lower than 1/10000,
 with as little as 1000 training waveforms; 
-the accuracy then steadily drops as more training waveforms are used.
+the accuracy then steadily improves as more training waveforms are used.
 
 Currently, the only model used for training is [`TEOBResumS`](http://arxiv.org/abs/1806.01772),
 but it is planned to introduce the possibility to use others.
@@ -37,12 +37,15 @@ The main steps taken by `mlgw_bns` to train on a dataset are as follows:
 - apply a PCA to reduce the dimensionality to a few tens of real numbers
 - train a neural network on the relation
     between the waveform parameters and the PCA components
+    
+After this, the model can reconstruct a waveform within its parameter space,
+resampled at arbitrary points in frequency space.
 
-In several of these steps data-driven optimizations are performed:
+In several of the training steps data-driven optimizations are performed:
 
 - the points at which the waveforms are downsampled are not uniformly chosen:
     instead, a greedy downsampling algorithm determines them
-- the PCA is trained on a separate downsampled dataset, which is then thrown out
-- the hyperparameters for the neural network are optimized according to both
-    the time taken for the training and the estimated reconstruction error
-
+- the hyperparameters for the neural network are optimized, according to both
+    the time taken for the training and the estimated reconstruction error, 
+    also varying the number of training waveforms available. 
+    
