@@ -42,6 +42,14 @@ from .taylorf2 import SUN_MASS_SECONDS
 DEFAULT_DATASET_BASENAME = "data/default_dataset"
 
 
+class FrequencyTooLowError(ValueError):
+    pass
+
+
+class FrequencyTooHighError(ValueError):
+    pass
+
+
 @dataclass
 class ParametersWithExtrinsic:
     r"""Parameters for the generation of a single waveform,
@@ -668,8 +676,15 @@ class Model:
             params.total_mass / self.dataset.total_mass
         )
 
-        assert rescaled_frequencies[0] >= self.dataset.initial_frequency_hz
-        assert rescaled_frequencies[-1] <= self.dataset.srate_hz / 2.0
+        try:
+            assert rescaled_frequencies[0] >= self.dataset.initial_frequency_hz
+        except AssertionError as e:
+            raise FrequencyTooLowError() from e
+
+        try:
+            assert rescaled_frequencies[-1] <= self.dataset.srate_hz / 2.0
+        except AssertionError as e:
+            raise FrequencyTooHighError() from e
 
         intrinsic_params = params.intrinsic(self.dataset)
 
