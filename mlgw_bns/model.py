@@ -631,44 +631,28 @@ class Model:
             residuals, params, self.downsampling_indices
         )
 
-    def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
-        r"""Calculate the waveforms in the plus and cross polarizations,
-        accounting for extrinsic parameters
+    def _predict_amplitude_phase(
+        self, frequencies: np.ndarray, params: ParametersWithExtrinsic
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Predict the amplitude and phase of a waveform.
+        This function is basically the same as :method:`predict`,
+        with the difference that it does not compute the
+        Cartesian waveform.
+
+        Also, it only gives one polarization
+        and does not account for the distance
 
         Parameters
         ----------
         frequencies : np.ndarray
-                Frequencies where to compute the waveform, in Hz.
-
-                These should always be within the range in which the
-                model has been trained, and be careful!
-                The model is always trained with a specific initial frequency
-                :math:`f_0`, and a final frequency :math:`f_1`,
-                and it is trained to reconstruct the dependence
-                of the waveform on :math:`M_0 f`, where :math:`M_0` is
-                some standard mass, typically :math:`2.8M_{\odot}`.
-
-                Now, this means that the model can only predict in the range
-                :math:`M_0 f_0 \leq M f \leq M_0 f_1`;
-                when :math:`M` differs significantly from :math:`M_0`
-                this will be quite a different range from :math:`[f_0, f_1]`.
-
-
         params : ParametersWithExtrinsic
-                Parameters for the waveform, both intrinsic and extrinsic.
-
-        Raises
-        ------
-        AssertionError
-                When the frequencies given are either too high or too low.
 
         Returns
         -------
-        hp, hc (complex np.ndarray)
-                Cartesian plus and cross-polarized waveforms, computed
-                at the given frequencies, measured in 1/Hz.
-
+        tuple[np.ndarray, np.ndarray]
+            Amplitude and phase.
         """
+
         assert self.downsampling_indices is not None
         assert self.nn is not None
 
@@ -705,10 +689,18 @@ class Model:
         amp_ds = combine_residuals_amp(residuals.amplitude_residuals[0], pn_amplitude)
         phi_ds = combine_residuals_phi(residuals.phase_residuals[0], pn_phase)
 
-        amp = self.downsampling_training.resample(
-            self.dataset.frequencies_hz[self.downsampling_indices.amplitude_indices],
-            rescaled_frequencies,
-            amp_ds,
+        pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
+
+        amp = (
+            self.downsampling_training.resample(
+                self.dataset.frequencies_hz[
+                    self.downsampling_indices.amplitude_indices
+                ],
+                rescaled_frequencies,
+                amp_ds,
+            )
+            * pre
+            / params.distance_mpc
         )
 
         phi = (
@@ -721,12 +713,56 @@ class Model:
             + (2 * np.pi * params.time_shift) * frequencies
         )
 
+        return amp, phi
+
+    def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
+        r"""Calculate the waveforms in the plus and cross polarizations,
+        accounting for extrinsic parameters
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+                Frequencies where to compute the waveform, in Hz.
+
+                These should always be within the range in which the
+                model has been trained, and be careful!
+                The model is always trained with a specific initial frequency
+                :math:`f_0`, and a final frequency :math:`f_1`,
+                and it is trained to reconstruct the dependence
+                of the waveform on :math:`M_0 f`, where :math:`M_0` is
+                some standard mass, typically :math:`2.8M_{\odot}`.
+
+                Now, this means that the model can only predict in the range
+                :math:`M_0 f_0 \leq M f \leq M_0 f_1`;
+                when :math:`M` differs significantly from :math:`M_0`
+                this will be quite a different range from :math:`[f_0, f_1]`.
+
+
+        params : ParametersWithExtrinsic
+                Parameters for the waveform, both intrinsic and extrinsic.
+
+        Raises
+        ------
+        AssertionError
+                When the frequencies given are either too high or too low.
+                For speed, this is only checked against the first and last elements
+                of the array, assuming that it is sorted.
+
+        Returns
+        -------
+        hp, hc (complex np.ndarray)
+                Cartesian plus and cross-polarized waveforms, computed
+                at the given frequencies, measured in 1/Hz.
+
+        """
+
+        amp, phi = self._predict_amplitude_phase(frequencies, params)
+
         cartesian_waveform_real, cartesian_waveform_imag = combine_amp_phase(amp, phi)
 
-        pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
         cosi = np.cos(params.inclination)
-        pre_plus = (1 + cosi ** 2) / 2 * pre / params.distance_mpc
-        pre_cross = cosi * pre / params.distance_mpc
+        pre_plus = (1 + cosi ** 2) / 2
+        pre_cross = cosi
 
         return compute_polarizations(
             cartesian_waveform_real, cartesian_waveform_imag, pre_plus, pre_cross
