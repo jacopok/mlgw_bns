@@ -314,9 +314,9 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         >>> p = WaveformParameters(1, 300, 300, .3, -.3, Dataset(20., 4096.))
         >>> f, waveform = tg.effective_one_body_waveform(p)
         >>> print(len(waveform))
-        1038337
+        1167238
         >>> print(waveform[0]) # doctest: +NUMBER
-        (-2912.7-5248.4j)
+        (-4137.9-8121.9)
         """
 
         par_dict: dict = params.teobresums
@@ -482,12 +482,13 @@ class WaveformParameters:
             "chi2": self.chi_2,
             "M": self.dataset.total_mass,
             "distance": 1.0,
-            "initial_frequency": self.dataset.initial_frequency_hz
+            "initial_frequency": self.dataset.effective_initial_frequency_hz
             * self.dataset.mass_sum_seconds,
             "use_geometric_units": "yes",
             "interp_uniform_grid": "no",
             "domain": 1,  # Fourier domain
-            "srate_interp": self.dataset.srate_hz * self.dataset.mass_sum_seconds,
+            "srate_interp": self.dataset.effective_srate_hz
+            * self.dataset.mass_sum_seconds,
             "df": self.dataset.delta_f_hz * self.dataset.mass_sum_seconds,
             "interp_FD_waveform": 1,
             "inclination": 0.0,
@@ -519,7 +520,7 @@ class WaveformParameters:
             "s2z": self.chi_2,
             "lambda1": self.lambda_1,
             "lambda2": self.lambda_2,
-            "f_min": self.dataset.initial_frequency_hz,
+            "f_min": self.dataset.effective_initial_frequency_hz,
             "phi_ref": 0,
             "phaseorder": 11,
             "tidalorder": 15,
