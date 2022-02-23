@@ -16,6 +16,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
 from typing import (
+    TYPE_CHECKING,
     Any,
     ClassVar,
     Iterable,
@@ -24,7 +25,6 @@ from typing import (
     Type,
     TypeVar,
     Union,
-    TYPE_CHECKING,
 )
 
 import h5py
@@ -90,9 +90,8 @@ class SavableData:
         if self.group_name not in file:
             file.create_group(self.group_name)
 
-        for array_name in self._arrays_list():
+        for array_name, array in zip(self._arrays_list(), self):
             array_path = f"{self.group_name}/{array_name}"
-            array = getattr(self, array_name)
 
             # convert to numpy array here in order to be able to get
             # the shape of lists as well
@@ -148,39 +147,33 @@ class ParameterRanges(SavableData):
 
     Parameters
     ----------
-    mass_range: np.ndarray
-    q_range: np.ndarray
-    lambda1_range: np.ndarray
-    lambda2_range: np.ndarray
-    chi1_range: np.ndarray
-    chi2_range: np.ndarray
+    mass_range: tuple[float, float]
+    q_range: tuple[float, float]
+    lambda1_range: tuple[float, float]
+    lambda2_range: tuple[float, float]
+    chi1_range: tuple[float, float]
+    chi2_range: tuple[float, float]
 
     """
 
-    mass_range: np.ndarray = np.array([2.5, 4.0])
-    q_range: np.ndarray = np.array([1.0, 3.0])
-    lambda1_range: np.ndarray = np.array([5.0, 5000.0])
-    lambda2_range: np.ndarray = np.array([5.0, 5000.0])
-    chi1_range: np.ndarray = np.array([-0.5, 0.5])
-    chi2_range: np.ndarray = np.array([-0.5, 0.5])
+    mass_range: tuple[float, float] = (2.5, 4.0)
+    q_range: tuple[float, float] = (1.0, 3.0)
+    lambda1_range: tuple[float, float] = (5.0, 5000.0)
+    lambda2_range: tuple[float, float] = (5.0, 5000.0)
+    chi1_range: tuple[float, float] = (-0.5, 0.5)
+    chi2_range: tuple[float, float] = (-0.5, 0.5)
 
     group_name: ClassVar[str] = "parameter_ranges"
 
-    def __post_init__(self):
-        self.check_validity()
-
-    def check_validity(self) -> None:
-        try:
-            for arr_name in self._arrays_list():
-                assert len(getattr(self, arr_name)) == 2
-        except AssertionError as e:
-            raise ValueError() from e
+    def __iter__(self) -> Iterator[Any]:
+        """Override this method for the purpose of saving
+        as an h5 file, which only works with arrays."""
+        for array_name in self._arrays_list():
+            yield np.array(getattr(self, array_name))
 
     def check_parameters_in_ranges(self, params: ParametersWithExtrinsic) -> None:
-        self.check_validity()
-
-        def within(x: float, x_range: np.ndarray, name: str):
-            x_min, x_max = tuple(x_range)
+        def within(x: float, x_range: tuple[float, float], name: str):
+            x_min, x_max = x_range
 
             if x < x_min:
                 raise ValueError(f"{name} out of bounds! {x} < {x_min}")
@@ -193,15 +186,6 @@ class ParameterRanges(SavableData):
         within(params.lambda_2, self.lambda2_range, name="lambda_2")
         within(params.chi_1, self.chi1_range, name="chi_1")
         within(params.chi_2, self.chi2_range, name="chi_2")
-
-    @property
-    def intrinsic_tuples(self) -> dict[str, tuple[float, float]]:
-        self.check_validity()
-        intrinsic = filter(lambda x: x != "mass_range", self._arrays_list())
-
-        # the tuples will always contain two floats
-        # because of check_validity
-        return {name: tuple(getattr(self, name)) for name in intrinsic}  # type: ignore
 
 
 @dataclass

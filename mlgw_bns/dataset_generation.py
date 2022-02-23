@@ -314,7 +314,7 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         >>> p = WaveformParameters(1, 300, 300, .3, -.3, Dataset(20., 4096.))
         >>> f, waveform = tg.effective_one_body_waveform(p)
         >>> print(len(waveform))
-        519169
+        1038337
         >>> print(waveform[0]) # doctest: +NUMBER
         (4679.9+3758.8j)
         """
@@ -723,13 +723,11 @@ class UniformParameterGenerator(ParameterGenerator):
         seed: Optional[int] = None,
     ):
 
-        intrinsic_tuples = parameter_ranges.intrinsic_tuples
-
-        self.q_range: tuple[float, float] = intrinsic_tuples["q_range"]
-        self.lambda1_range: tuple[float, float] = intrinsic_tuples["lambda1_range"]
-        self.lambda2_range: tuple[float, float] = intrinsic_tuples["lambda2_range"]
-        self.chi1_range: tuple[float, float] = intrinsic_tuples["chi1_range"]
-        self.chi2_range: tuple[float, float] = intrinsic_tuples["chi2_range"]
+        self.q_range: tuple[float, float] = parameter_ranges.q_range
+        self.lambda1_range: tuple[float, float] = parameter_ranges.lambda1_range
+        self.lambda2_range: tuple[float, float] = parameter_ranges.lambda2_range
+        self.chi1_range: tuple[float, float] = parameter_ranges.chi1_range
+        self.chi2_range: tuple[float, float] = parameter_ranges.chi2_range
         super().__init__(dataset=dataset, seed=seed)
 
     def __next__(self) -> WaveformParameters:
@@ -803,8 +801,8 @@ class Dataset:
     Examples
     --------
     >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
-    >>> print(dataset.delta_f_hz) # should be 1/256 Hz, doctest: +NUMBER
-    0.00390625
+    >>> print(dataset.delta_f_hz) # should be 1/512 Hz, doctest: +NUMBER
+    0.001953125
 
     Class Attributes
     ----------------
