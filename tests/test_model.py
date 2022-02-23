@@ -6,6 +6,8 @@ from mlgw_bns.dataset_generation import ParameterSet, TEOBResumSGenerator
 from mlgw_bns.model import Model, ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 
+from .conftest import default_available
+
 DEFAULT_MODEL_MAX_MISMATCH = 1e-5
 TRAINED_MODEL_MAX_MISMATCH = 1e-2
 
@@ -50,6 +52,7 @@ def test_quick_model_with_validation_mismatches(trained_model):
     )
 
 
+@default_available
 def test_default_model_with_validation_mismatches(default_model):
 
     vm = ValidateModel(default_model)
@@ -62,6 +65,7 @@ def test_default_model_with_validation_mismatches(default_model):
     )
 
 
+@default_available
 def test_default_model_residuals(default_model):
 
     vm = ValidateModel(default_model)
@@ -83,6 +87,7 @@ def test_default_model_residuals(default_model):
     # assert all(abs(phase_errors) < 1e-2)
 
 
+@default_available
 @pytest.mark.benchmark(group="model-prediction")
 @pytest.mark.parametrize(
     "number_of_sample_points",
@@ -92,7 +97,9 @@ def test_default_model_residuals(default_model):
     "model_name, tolerance_mismatch, tolerance_amp",
     [
         ("trained_model", TRAINED_MODEL_MAX_MISMATCH, 1e-1),
-        ("default_model", DEFAULT_MODEL_MAX_MISMATCH, 2e-3),
+        pytest.param(
+            "default_model", DEFAULT_MODEL_MAX_MISMATCH, 2e-3, marks=default_available
+        ),
     ],
 )
 def test_model_nn_prediction(
@@ -185,7 +192,9 @@ def test_model_nn_prediction(
     "model_name, tolerance_mismatch, tolerance_amp",
     [
         ("trained_model", TRAINED_MODEL_MAX_MISMATCH, 1e-1),
-        ("default_model", DEFAULT_MODEL_MAX_MISMATCH, 2e-3),
+        pytest.param(
+            "default_model", DEFAULT_MODEL_MAX_MISMATCH, 2e-3, marks=default_available
+        ),
     ],
 )
 @pytest.mark.parametrize("seed", list(range(2)))

@@ -10,6 +10,7 @@ from EOBRun_module import EOBRunPy  # type: ignore
 from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
 
 from mlgw_bns import Model
+from mlgw_bns.data_management import ParameterRanges
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
 from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
 
@@ -23,6 +24,7 @@ def fixture_variable_dataset(f_0):
         srate_hz=4096.0,
         waveform_generator=TEOBResumSGenerator(EOBRunPy),
         multibanding=True,
+        parameter_ranges=ParameterRanges(mass_range=(2.8, 2.8)),
     )
 
 
@@ -33,6 +35,7 @@ def fixture_dataset():
         initial_frequency_hz=20.0,
         srate_hz=4096.0,
         waveform_generator=TEOBResumSGenerator(EOBRunPy),
+        parameter_ranges=ParameterRanges(mass_range=(2.8, 2.8)),
     )
 
 
@@ -121,3 +124,8 @@ def random_array():
     return rng.multivariate_normal(
         np.zeros(100), cov=np.diag(1 / np.arange(1, 101) ** 2), size=(100,)
     )
+
+
+default_available = pytest.mark.skipif(
+    True, reason="Skip if the default dataset needs to be updated"
+)
