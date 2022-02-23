@@ -316,7 +316,7 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         >>> print(len(waveform))
         1167238
         >>> print(waveform[0]) # doctest: +NUMBER
-        (-4137.9-8121.9)
+        (-4137.9-8121.9j)
         """
 
         par_dict: dict = params.teobresums
