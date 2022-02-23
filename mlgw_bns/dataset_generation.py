@@ -1031,7 +1031,7 @@ class Dataset:
         ParameterGenerators
         """
         if seed is None:
-            seed = self.seed_sequence.integers(low=0, high=2 ** 63 - 1)
+            seed = self.seed_sequence.integers(low=0, high=1 << 63 - 1)
 
         return self.parameter_generator_class(
             parameter_ranges=self.parameter_ranges,
