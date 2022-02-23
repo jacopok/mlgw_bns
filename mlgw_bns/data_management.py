@@ -147,12 +147,25 @@ class ParameterRanges(SavableData):
 
     Parameters
     ----------
-    mass_range: tuple[float, float]
-    q_range: tuple[float, float]
-    lambda1_range: tuple[float, float]
-    lambda2_range: tuple[float, float]
-    chi1_range: tuple[float, float]
-    chi2_range: tuple[float, float]
+    mass_range : tuple[float, float]
+            Range of valid total masses, in solar masses.
+            Defaults to (2.5., 4.).
+    q_range : tuple[float, float]
+            Range of valid mass ratios.
+            Defaults to (1., 3.).
+    lambda1_range : tuple[float, float]
+            Range of valid tidal deformabilities parameters for the larger star.
+            Defaults to (5., 5000.): the lower bound is not zero because that
+            may create some issues with TEOB crashing.
+    lambda2_range : tuple[float, float]
+            Range of valid tidal deformabilities parameters for the smaller star.
+            Defaults to (5., 5000.).
+    chi1_range : tuple[float, float]
+            Range of valid dimensionless aligned spins for the larger star.
+            Defaults to (-.5, .5).
+    chi2_range : tuple[float, float]
+            Range of valid dimensionless aligned spins for the smaller star.
+            Defaults to (-.5, .5).
 
     """
 
