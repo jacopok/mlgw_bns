@@ -43,11 +43,11 @@ DEFAULT_DATASET_BASENAME = "data/default_dataset"
 
 
 class FrequencyTooLowError(ValueError):
-    pass
+    """Raised when the frequency given to the predictor is too low."""
 
 
 class FrequencyTooHighError(ValueError):
-    pass
+    """Raised when the frequency given to the predictor is too high."""
 
 
 @dataclass
@@ -180,25 +180,6 @@ class Model:
     nn_kind : Type[NeuralNetwork]
             Neural network implementation to use,
             defaults to :class:`SklearnNetwork`.
-    parameter_generator_kwargs: dict[str, tuple[float, float]], optional
-            Dictionary of keyword arguments to be used when initializing
-            a :class:`ParameterGenerator`.
-            It should be a map of strings to tuples, in the form
-            `{'q_range': (1., 3.)}`.
-
-            Options include
-            ``q_range``,
-            ``lambda1_range``,
-            ``lambda2_range``,
-            ``chi1_range``,
-            ``chi2_range``.
-    mass_range: tuple[float, float]
-            Range of total masses :math:`M` (in solar masses)
-            that the model should be able to reconstruct.
-            The reconstruction works with the frequency expressed as :math:`Mf`,
-            but changing the total mass changes the range of relevant frequencies.
-
-            Defaults to (2.8, 2.8).
     """
 
     def __init__(
@@ -255,6 +236,24 @@ class Model:
         self.downsampling_indices: Optional[DownsamplingIndices] = None
 
         self.nn_kind = nn_kind
+
+    def __str__(self):
+
+        n_waveforms = (
+            f"waveforms_available = {len(self.training_dataset)}"
+            if self.training_dataset_available
+            else ""
+        )
+
+        return (
+            "Model("
+            f"filename={self.filename}, "
+            f"auxiliary_data_available={self.auxiliary_data_available}, "
+            f"nn_available={self.nn_available}, "
+            f"training_dataset_available={self.training_dataset_available}, "
+            + n_waveforms
+            + f"parameter_ranges={self.parameter_ranges})"
+        )
 
     @classmethod
     def default(cls, filename: Optional[str] = None):
@@ -805,9 +804,10 @@ class Model:
         weights = np.array([3, -32, 168, -672, 0, 672, -168, 32, -3]) / 840.0
 
         try:
-
             _, phis = self._predict_amplitude_phase(freqs, params)
+            logging.info("Derivative coming from mlgw_bns")
         except FrequencyTooLowError:
+            logging.info("Derivative coming from the PN approximant")
             phis = self.waveform_generator.post_newtonian_phase(
                 params.intrinsic(self.dataset), freqs * params.mass_sum_seconds
             )
