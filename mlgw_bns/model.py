@@ -17,7 +17,7 @@ from sklearn.preprocessing import StandardScaler  # type: ignore
 from .data_management import (
     DownsamplingIndices,
     FDWaveforms,
-    MassRange,
+    ParameterRanges,
     PrincipalComponentData,
     Residuals,
     SavableData,
@@ -192,8 +192,7 @@ class Model:
         waveform_generator: Optional[WaveformGenerator] = None,
         downsampling_training: Optional[DownsamplingTraining] = None,
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
-        parameter_generator_kwargs: Optional[dict[str, tuple[float, float]]] = None,
-        mass_range: tuple[float, float] = (2.8, 2.8),
+        parameter_ranges: ParameterRanges = ParameterRanges(),
     ):
 
         self.filename = filename
@@ -210,11 +209,10 @@ class Model:
         else:
             self.waveform_generator = waveform_generator
 
-        self.mass_range = MassRange(np.array(mass_range))
+        self.parameter_ranges = parameter_ranges
         self.initial_frequency_hz = initial_frequency_hz
         self.srate_hz = srate_hz
         self.multibanding = multibanding
-        self.parameter_generator_kwargs = parameter_generator_kwargs
 
         self.dataset = self._make_dataset()
 
@@ -268,27 +266,18 @@ class Model:
 
         return model
 
-    def _handle_missing_filename(self) -> None:
-        raise ValueError('Please set the "filename" attribute of this object')
-
     def _make_dataset(self) -> Dataset:
 
-        mass_min, mass_max = self.mass_range.mass_range
-
-        effective_initial_frequency, effective_srate = expand_frequency_range(
+        return Dataset(
             self.initial_frequency_hz,
             self.srate_hz,
-            (mass_min, mass_max),
-            Dataset.total_mass,
-        )
-
-        return Dataset(
-            effective_initial_frequency,
-            effective_srate,
             waveform_generator=self.waveform_generator,
             multibanding=self.multibanding,
-            parameter_generator_kwargs=self.parameter_generator_kwargs,
+            parameter_ranges=self.parameter_ranges,
         )
+
+    def _handle_missing_filename(self) -> None:
+        raise ValueError('Please set the "filename" attribute of this object')
 
     @property
     def auxiliary_data_available(self) -> bool:
@@ -411,7 +400,7 @@ class Model:
             self.downsampling_indices,
             self.pca_data,
             self.training_parameters,
-            self.mass_range,
+            self.parameter_ranges,
         ]
 
         if include_training_data:
@@ -461,9 +450,9 @@ class Model:
         ):
             raise FileNotFoundError
 
-        mass_range = MassRange.from_file(file_arrays)
-        assert mass_range is not None
-        self.mass_range = mass_range
+        parameter_ranges = ParameterRanges.from_file(file_arrays)
+        assert parameter_ranges is not None
+        self.parameter_ranges = parameter_ranges
 
         self.dataset = self._make_dataset()
 
@@ -660,14 +649,18 @@ class Model:
         )
 
         try:
-            assert rescaled_frequencies[0] >= self.dataset.initial_frequency_hz
+            assert (
+                rescaled_frequencies[0] >= self.dataset.effective_initial_frequency_hz
+            )
         except AssertionError as e:
             raise FrequencyTooLowError() from e
 
         try:
-            assert rescaled_frequencies[-1] <= self.dataset.srate_hz / 2.0
+            assert rescaled_frequencies[-1] <= self.dataset.effective_srate_hz / 2.0
         except AssertionError as e:
             raise FrequencyTooHighError() from e
+
+        self.parameter_ranges.check_parameters_in_ranges(params)
 
         intrinsic_params = params.intrinsic(self.dataset)
 
@@ -916,48 +909,3 @@ def compute_polarizations(
     hc = pre_cross * waveform_imag - 1j * pre_cross * waveform_real
 
     return hp, hc
-
-
-def expand_frequency_range(
-    initial_frequency: float,
-    final_frequency: float,
-    mass_range: tuple[float, float],
-    reference_mass: float,
-) -> tuple[float, float]:
-    r"""Widen the frequency range to account for the
-    different masses the user requires.
-
-    Parameters
-    ----------
-    initial_frequency : float
-        Lower bound for the frequency.
-        Typically in Hz, but this function just requires it
-        to be consistent with the other parameters.
-    final_frequency : float
-        Upper bound for the frequency.
-        It can also be given as the time-domain
-        signal rate :math:`r = 1 / \Delta t`, which is
-        twice che maximum frequency because of the Nyquist bound.
-
-        Since all this function does is multiply it by a certain factor,
-        the formulations can be exchanged.
-    mass_range : tuple[float, float]
-        Range of allowed masses, in the same unit as the
-        reference mass (typically, solar masses).
-    reference_mass : float
-        Reference mass the model uses to convert frequencies
-        to the dimensionless :math:`Mf`.
-
-    Returns
-    -------
-    tuple[float, float]
-        New lower and upper bounds for the frequency range.
-    """
-
-    m_min, m_max = mass_range
-    assert m_min <= m_max
-
-    return (
-        initial_frequency * (reference_mass / m_max),
-        final_frequency * (reference_mass / m_min),
-    )
