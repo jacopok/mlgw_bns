@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from mlgw_bns.data_management import ParameterRanges
 from mlgw_bns.dataset_generation import (
     Dataset,
     ParameterSet,
@@ -56,7 +57,9 @@ def test_waveform_parameters_teobresums_output(parameters):
 
 def test_random_parameter_generation(dataset):
 
-    u = UniformParameterGenerator(dataset=dataset)
+    u = UniformParameterGenerator(
+        dataset=dataset, parameter_ranges=ParameterRanges(q_range=(1, 2.0))
+    )
 
     new_parameter_set = next(u)
     assert new_parameter_set.almost_equal_to(
@@ -121,11 +124,13 @@ def test_dataset_generation_size_1(benchmark, variable_dataset):
 
 def test_changing_parameter_generation_ranges(dataset):
     parameter_generator = UniformParameterGenerator(
-        q_range=(0.0, 1.0),
-        lambda1_range=(0.0, 1.0),
-        lambda2_range=(0.0, 1.0),
-        chi1_range=(0.0, 1.0),
-        chi2_range=(0.0, 1.0),
+        parameter_ranges=ParameterRanges(
+            q_range=(0.0, 1.0),
+            lambda1_range=(0.0, 1.0),
+            lambda2_range=(0.0, 1.0),
+            chi1_range=(0.0, 1.0),
+            chi2_range=(0.0, 1.0),
+        ),
         dataset=dataset,
     )
 
