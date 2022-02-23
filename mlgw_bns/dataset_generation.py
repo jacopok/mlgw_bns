@@ -316,7 +316,7 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         >>> print(len(waveform))
         1038337
         >>> print(waveform[0]) # doctest: +NUMBER
-        (4679.9+3758.8j)
+        (-2912.7-5248.4j)
         """
 
         par_dict: dict = params.teobresums
@@ -679,28 +679,10 @@ class UniformParameterGenerator(ParameterGenerator):
 
     Parameters
     ----------
-    q_range : tuple[float, float]
-            Range of valid mass ratios.
-            Defaults to (1., 2.).
-    lambda1_range : tuple[float, float]
-            Range of valid tidal deformabilities parameters for the larger star.
-            Defaults to (5., 5000.): the lower bound is not zero because that
-            may create some issues with TEOB crashing.
-    lambda2_range : tuple[float, float]
-            Range of valid tidal deformabilities parameters for the smaller star.
-            Defaults to (5., 5000.).
-    chi1_range : tuple[float, float]
-            Range of valid dimensionless aligned spins for the larger star.
-            Defaults to (-.5, .5).
-    chi2_range : tuple[float, float]
-            Range of valid dimensionless aligned spins for the smaller star.
-            Defaults to (-.5, .5).
-
-    Keyword Arguments
-    -----------------
     dataset: Dataset
             See the documentation for the initialization of a
             :class:`ParameterGenerator`.
+    parameter_ranges: ParameterRanges
     seed: Optional[int]
             See the documentation for the initialization of a
             :class:`ParameterGenerator`.
@@ -708,7 +690,9 @@ class UniformParameterGenerator(ParameterGenerator):
 
     Examples
     --------
-    >>> generator = UniformParameterGenerator(dataset=Dataset(20., 4096.))
+    >>> generator = UniformParameterGenerator(
+    ...    dataset=Dataset(20., 4096.),
+    ...    parameter_ranges=ParameterRanges(q_range=(1., 2.)))
     >>> params = next(generator)
     >>> print(type(params))
     <class 'mlgw_bns.dataset_generation.WaveformParameters'>
@@ -835,8 +819,7 @@ class Dataset:
         ) = expand_frequency_range(
             initial_frequency_hz,
             srate_hz,
-            tuple(parameter_ranges.mass_range),  # type: ignore
-            # this will always have two elements!
+            parameter_ranges.mass_range,
             self.total_mass,
         )
 
