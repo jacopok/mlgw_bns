@@ -15,10 +15,23 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
-from typing import Any, ClassVar, Iterable, Iterator, Optional, Type, TypeVar, Union
+from typing import (
+    Any,
+    ClassVar,
+    Iterable,
+    Iterator,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+    TYPE_CHECKING,
+)
 
 import h5py
 import numpy as np
+
+if TYPE_CHECKING:
+    from .model import ParametersWithExtrinsic
 
 # make type hinting available for
 TYPE_DATA = TypeVar("TYPE_DATA", bound="SavableData")
@@ -29,6 +42,9 @@ class SavableData:
     """Generic container for data which might need to be saved to file.
 
     Subclasses should also be decorated with ``@dataclass``.
+
+    Instances should only store numpy arrays, so that
+    the h5py compatibility will work.
     """
 
     @property
@@ -124,12 +140,68 @@ class SavableData:
 
 
 @dataclass
-class MassRange(SavableData):
-    """Mass range to be allowed."""
+class ParameterRanges(SavableData):
+    """Parameter ranges for waveform generation.
 
+    The parameters should all be numpy arrays,
+    but
+
+    Parameters
+    ----------
     mass_range: np.ndarray
+    q_range: np.ndarray
+    lambda1_range: np.ndarray
+    lambda2_range: np.ndarray
+    chi1_range: np.ndarray
+    chi2_range: np.ndarray
 
-    group_name: ClassVar[str] = "mass_range"
+    """
+
+    mass_range: np.ndarray = np.array([2.5, 4.0])
+    q_range: np.ndarray = np.array([1.0, 3.0])
+    lambda1_range: np.ndarray = np.array([5.0, 5000.0])
+    lambda2_range: np.ndarray = np.array([5.0, 5000.0])
+    chi1_range: np.ndarray = np.array([-0.5, 0.5])
+    chi2_range: np.ndarray = np.array([-0.5, 0.5])
+
+    group_name: ClassVar[str] = "parameter_ranges"
+
+    def __post_init__(self):
+        self.check_validity()
+
+    def check_validity(self) -> None:
+        try:
+            for arr_name in self._arrays_list():
+                assert len(getattr(self, arr_name)) == 2
+        except AssertionError as e:
+            raise ValueError() from e
+
+    def check_parameters_in_ranges(self, params: ParametersWithExtrinsic) -> None:
+        self.check_validity()
+
+        def within(x: float, x_range: np.ndarray, name: str):
+            x_min, x_max = tuple(x_range)
+
+            if x < x_min:
+                raise ValueError(f"{name} out of bounds! {x} < {x_min}")
+            if x > x_max:
+                raise ValueError(f"{name} out of bounds! {x} > {x_max}")
+
+        within(params.total_mass, self.mass_range, name="total_mass")
+        within(params.mass_ratio, self.q_range, name="mass_ratio")
+        within(params.lambda_1, self.lambda1_range, name="lambda_1")
+        within(params.lambda_2, self.lambda2_range, name="lambda_2")
+        within(params.chi_1, self.chi1_range, name="chi_1")
+        within(params.chi_2, self.chi2_range, name="chi_2")
+
+    @property
+    def intrinsic_tuples(self) -> dict[str, tuple[float, float]]:
+        self.check_validity()
+        intrinsic = filter(lambda x: x != "mass_range", self._arrays_list())
+
+        # the tuples will always contain two floats
+        # because of check_validity
+        return {name: tuple(getattr(self, name)) for name in intrinsic}  # type: ignore
 
 
 @dataclass
@@ -149,6 +221,11 @@ class DownsamplingIndices(SavableData):
     an initial frequency, finishing at half of the time-domain
     interpolation rate, with a step equal to the inverse of the
     length of the time-domain waveform.
+
+    Parameters
+    ----------
+    amplitude_indices: list[int]
+    phase_indices: list[int]
     """
 
     amplitude_indices: list[int]
