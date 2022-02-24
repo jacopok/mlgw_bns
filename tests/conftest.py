@@ -26,7 +26,7 @@ def pytest_addoption(parser):
 
 def pytest_configure(config):
     config.addinivalue_line(
-        "markers", "default_available: need the default model to run"
+        "markers", "requires_default: need the default model to run"
     )
 
 

@@ -319,7 +319,7 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         (-4137.9-8121.9j)
         """
 
-        par_dict: dict = params.teobresums
+        par_dict: dict = params.teobresums()
 
         # tweak initial frequency backward by a few samples
         # this is needed because of a bug in TEOBResumS
@@ -467,13 +467,27 @@ class WaveformParameters:
         For the precise definition see equation 27 of `this paper <http://arxiv.org/abs/2102.00017>`__."""
         return compute_delta_lambda(self.m_1, self.m_2, self.lambda_1, self.lambda_2)
 
-    @property
-    def teobresums(self) -> dict[str, Union[float, int, str]]:
+    def teobresums(
+        self, use_effective_frequencies: bool = True
+    ) -> dict[str, Union[float, int, str]]:
         """Parameter dictionary in a format compatible with
         TEOBResumS.
 
         The parameters are all converted to natural units.
         """
+
+        if use_effective_frequencies:
+            initial_freq = (
+                self.dataset.effective_initial_frequency_hz
+                * self.dataset.mass_sum_seconds
+            )
+            srate = self.dataset.effective_srate_hz * self.dataset.mass_sum_seconds
+        else:
+            initial_freq = (
+                self.dataset.initial_frequency_hz * self.dataset.mass_sum_seconds
+            )
+            srate = self.dataset.srate_hz * self.dataset.mass_sum_seconds
+
         return {
             "q": self.mass_ratio,
             "Lambda1": self.lambda_1,
@@ -482,13 +496,11 @@ class WaveformParameters:
             "chi2": self.chi_2,
             "M": self.dataset.total_mass,
             "distance": 1.0,
-            "initial_frequency": self.dataset.effective_initial_frequency_hz
-            * self.dataset.mass_sum_seconds,
+            "initial_frequency": initial_freq,
             "use_geometric_units": "yes",
             "interp_uniform_grid": "no",
             "domain": 1,  # Fourier domain
-            "srate_interp": self.dataset.effective_srate_hz
-            * self.dataset.mass_sum_seconds,
+            "srate_interp": srate,
             "df": self.dataset.delta_f_hz * self.dataset.mass_sum_seconds,
             "interp_FD_waveform": 1,
             "inclination": 0.0,
