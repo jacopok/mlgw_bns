@@ -314,7 +314,7 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         >>> p = WaveformParameters(1, 300, 300, .3, -.3, Dataset(20., 4096.))
         >>> f, waveform = tg.effective_one_body_waveform(p)
         >>> print(len(waveform))
-        1167238
+        744412
         >>> print(waveform[0]) # doctest: +NUMBER
         (-4137.9-8121.9j)
         """
@@ -798,8 +798,8 @@ class Dataset:
     Examples
     --------
     >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
-    >>> print(dataset.delta_f_hz) # should be 1/512 Hz, doctest: +NUMBER
-    0.001953125
+    >>> print(dataset.delta_f_hz) # should be 1/256 Hz, doctest: +NUMBER
+    0.00390625
 
     Class Attributes
     ----------------
@@ -1249,7 +1249,15 @@ def expand_frequency_range(
     m_min, m_max = mass_range
     assert m_min <= m_max
 
+    # return (
+    #     initial_frequency * (reference_mass / m_max),
+    #     final_frequency * (reference_mass / m_min),
+    # )
     return (
-        initial_frequency * (reference_mass / m_max),
-        final_frequency * (reference_mass / m_min),
+        initial_frequency * (m_min / reference_mass),
+        final_frequency * (m_max / reference_mass),
     )
+    # return (
+    #     initial_frequency * (2.5 / 2.8),
+    #     final_frequency * (2.8 / 2.5),
+    # )
