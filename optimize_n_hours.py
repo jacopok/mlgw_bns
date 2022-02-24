@@ -2,9 +2,12 @@ import argparse
 from mlgw_bns import *
 
 if __name__ == "__main__":
-    m = Model("optimization_dataset")
-    print(m.filename)
-    m.load()
+
+    try:
+        m = Model("optimization_dataset")
+        m.load()
+    except FileNotFoundError:
+        m.generate(512, 1 << 14)
     ho = HyperparameterOptimization(m)
 
     n_hours_before = ho.total_training_time().total_seconds() / 3600
