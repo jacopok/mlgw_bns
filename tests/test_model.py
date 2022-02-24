@@ -274,5 +274,52 @@ def random_parameters(model: Model, seed: int) -> ParametersWithExtrinsic:
         chi_2=intrinsic_params.chi_2,
         distance_mpc=10 ** param_generator.rng.uniform(-1, 4),
         inclination=param_generator.rng.uniform(-np.pi, np.pi),
-        total_mass=param_generator.rng.uniform(2.5, 4),
+        total_mass=param_generator.rng.uniform(2.5, 3.2),
     )
+
+
+@pytest.mark.parametrize(
+    "param_name, value",
+    [
+        ("mass_ratio", 4),
+        ("lambda_1", 0.0),
+        ("lambda_2", 6000.0),
+        ("chi_1", 2.0),
+        ("chi_2", 2.0),
+        ("total_mass", 5.0),
+    ],
+)
+def test_parameters_out_of_bounds_error(trained_model, param_name, value):
+
+    freqs = np.linspace(20.0, 2048.0)
+
+    with pytest.raises(ValueError):
+        params = ParametersWithExtrinsic(
+            mass_ratio=2.0,
+            lambda_1=500,
+            lambda_2=400,
+            chi_1=0.1,
+            chi_2=-0.1,
+            distance_mpc=10,
+            inclination=0.5,
+            total_mass=2.8,
+        )
+        setattr(params, param_name, value)
+        trained_model.predict(freqs, params)
+
+
+@pytest.mark.parametrize("total_mass", [2.5, 4])
+def test_bounds_of_mass_range_work(trained_model, total_mass):
+    freqs = np.linspace(20.0, 2048.0)
+    params = ParametersWithExtrinsic(
+        mass_ratio=2.0,
+        lambda_1=500,
+        lambda_2=400,
+        chi_1=0.1,
+        chi_2=-0.1,
+        distance_mpc=10,
+        inclination=0.5,
+        total_mass=total_mass,
+    )
+
+    trained_model.predict(freqs, params)
