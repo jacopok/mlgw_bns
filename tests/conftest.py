@@ -15,6 +15,33 @@ from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformPa
 from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--defaultunavailable",
+        action="store_true",
+        default=False,
+        help="skip tests which require the default model to be up to date",
+    )
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "default_available: need the default model to run"
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption("--defaultunavailable"):
+        # the user did not specify: run all tests
+        return
+    default_unavailable = pytest.mark.skipif(
+        reason="Skip if the default dataset needs to be updated"
+    )
+    for item in items:
+        if "requires_default" in item.keywords:
+            item.add_marker(default_unavailable)
+
+
 @fixture(name="variable_dataset")
 @parametrize(f_0=[30.0, 40.0])
 def fixture_variable_dataset(f_0):
@@ -124,8 +151,3 @@ def random_array():
     return rng.multivariate_normal(
         np.zeros(100), cov=np.diag(1 / np.arange(1, 101) ** 2), size=(100,)
     )
-
-
-default_available = pytest.mark.skipif(
-    True, reason="Skip if the default dataset needs to be updated"
-)
