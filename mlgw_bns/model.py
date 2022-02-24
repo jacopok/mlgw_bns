@@ -12,7 +12,6 @@ import numpy as np
 import optuna
 import pkg_resources
 from numba import njit  # type: ignore
-from sklearn.preprocessing import StandardScaler  # type: ignore
 
 from .data_management import (
     DownsamplingIndices,
@@ -385,8 +384,6 @@ class Model:
             assert self.training_dataset is not None
             assert self.training_parameters is not None
 
-        self.train_parameter_scaler()
-
     def save_arrays(self, include_training_data: bool = True) -> None:
         """Save all big arrays contained in this object to the file
         defined as ``{filename}.h5``.
@@ -399,14 +396,15 @@ class Model:
         arr_list: list[SavableData] = [
             self.downsampling_indices,
             self.pca_data,
-            self.training_parameters,
             self.parameter_ranges,
         ]
 
         if include_training_data:
+            assert self.training_parameters is not None
             assert self.training_dataset is not None
 
             arr_list += [
+                self.training_parameters,
                 self.training_dataset,
             ]
 
@@ -443,11 +441,7 @@ class Model:
         self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
         self.pca_data = PrincipalComponentData.from_file(file_arrays)
         self.training_parameters = ParameterSet.from_file(file_arrays)
-        if (
-            self.downsampling_indices is None
-            or self.pca_data is None
-            or self.training_parameters is None
-        ):
+        if self.downsampling_indices is None or self.pca_data is None:
             raise FileNotFoundError
 
         parameter_ranges = ParameterRanges.from_file(file_arrays)
@@ -463,22 +457,7 @@ class Model:
         try:
             self.nn = self.nn_kind.from_file(filename_nn)
         except FileNotFoundError:
-            logging.warn("No trained network or hyperparmeters found.")
-
-        self.train_parameter_scaler()
-
-    def train_parameter_scaler(self) -> None:
-        """Train the parameter scaler, which takes the
-        waveform parameters and makes their magnitudes similar
-        in order to aid the training of the network.
-
-        The parameter scaler is always trained on all the available dataset.
-        """
-        assert self.training_parameters is not None
-
-        self.param_scaler: StandardScaler = StandardScaler().fit(
-            self.training_parameters.parameter_array
-        )
+            logging.warn("No trained network or hyperparameters found.")
 
     @property
     def reduced_residuals(self) -> np.ndarray:
@@ -533,17 +512,16 @@ class Model:
         assert self.training_parameters is not None
         assert self.pca_data is not None
 
-        scaled_params: np.ndarray = self.param_scaler.transform(
-            self.training_parameters.parameter_array[indices]
-        )
-
         training_residuals = (
             self.reduced_residuals
             * (self.pca_data.eigenvalues ** hyper.pc_exponent)[np.newaxis, :]
         )
 
         nn = self.nn_kind(hyper)
-        nn.fit(scaled_params, training_residuals[indices])
+        nn.fit(
+            self.training_parameters.parameter_array[indices],
+            training_residuals[indices],
+        )
         return nn
 
     def set_hyper_and_train_nn(self, hyper: Optional[Hyperparameters] = None) -> None:
@@ -590,9 +568,7 @@ class Model:
         assert self.pca_data is not None
         assert self.downsampling_indices is not None
 
-        scaled_params = self.param_scaler.transform(params.parameter_array)
-
-        scaled_pca_components = nn.predict(scaled_params)
+        scaled_pca_components = nn.predict(params.parameter_array)
 
         combined_residuals = self.pca_model.reconstruct_data(
             scaled_pca_components / (self.pca_data.eigenvalues ** nn.hyper.pc_exponent),

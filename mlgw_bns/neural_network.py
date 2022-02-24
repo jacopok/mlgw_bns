@@ -10,6 +10,7 @@ import numpy as np
 import optuna
 import pkg_resources
 from sklearn.neural_network import MLPRegressor  # type: ignore
+from sklearn.preprocessing import StandardScaler  # type: ignore
 
 if TYPE_CHECKING:
     import torch  # type: ignore
@@ -239,18 +240,28 @@ class SklearnNetwork(NeuralNetwork):
     the library `scikit-learn <https://scikit-learn.org/stable/>`_.
     """
 
-    def __init__(self, hyper: Hyperparameters, nn: Optional[MLPRegressor] = None):
+    def __init__(
+        self,
+        hyper: Hyperparameters,
+        nn: Optional[MLPRegressor] = None,
+        param_scaler: Optional[StandardScaler] = None,
+    ):
         super().__init__(hyper=hyper)
         self.nn = MLPRegressor(**hyper.nn_params) if nn is None else nn
+        if param_scaler is not None:
+            self.param_scaler: StandardScaler = param_scaler
 
     def fit(self, x_data: np.ndarray, y_data: np.ndarray) -> None:
-        self.nn.fit(x_data, y_data)
+        self.param_scaler = StandardScaler().fit(x_data)
+        scaled_x = self.param_scaler.transform(x_data)
+        self.nn.fit(scaled_x, y_data)
 
     def predict(self, x_data: np.ndarray) -> np.ndarray:
-        return self.nn.predict(x_data)
+        scaled_x = self.param_scaler.transform(x_data)
+        return self.nn.predict(scaled_x)
 
     def save(self, filename: str):
-        joblib.dump((self.hyper, self.nn), filename)
+        joblib.dump((self.hyper, self.nn, self.param_scaler), filename)
 
     @classmethod
     def from_file(cls, filename: Union[IO[bytes], str]):
