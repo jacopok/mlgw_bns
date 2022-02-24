@@ -87,7 +87,6 @@ def test_default_model_residuals(default_model):
     # assert all(abs(phase_errors) < 1e-2)
 
 
-@default_available
 @pytest.mark.benchmark(group="model-prediction")
 @pytest.mark.parametrize(
     "number_of_sample_points",
