@@ -124,13 +124,15 @@ class ParametersWithExtrinsic:
     def mass_sum_seconds(self) -> float:
         return self.total_mass * SUN_MASS_SECONDS
 
-    def teobresums_dict(self, dataset: Dataset) -> dict[str, Union[float, int, str]]:
+    def teobresums_dict(
+        self, dataset: Dataset, use_effective_frequencies: bool = True
+    ) -> dict[str, Union[float, int, str]]:
         """Parameter dictionary in a format compatible with
         TEOBResumS.
 
         The parameters are all converted to natural units.
         """
-        base_dict = self.intrinsic(dataset).teobresums
+        base_dict = self.intrinsic(dataset).teobresums(use_effective_frequencies)
 
         return {
             **base_dict,

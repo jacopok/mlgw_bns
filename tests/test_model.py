@@ -128,7 +128,7 @@ def test_model_nn_prediction(
         total_mass=2.8,
     )
 
-    teob_dict = params.teobresums_dict(model.dataset)
+    teob_dict = params.teobresums_dict(model.dataset, use_effective_frequencies=False)
     teob_dict["use_geometric_units"] = "no"
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
     teob_dict["srate_interp"] /= params.mass_sum_seconds
@@ -188,6 +188,7 @@ def test_model_nn_prediction(
     assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=tolerance_amp * 20)
 
 
+@pytest.mark.parametrize("seed", list(range(10)))
 @pytest.mark.parametrize(
     "model_name, tolerance_mismatch, tolerance_amp",
     [
@@ -200,7 +201,6 @@ def test_model_nn_prediction(
         ),
     ],
 )
-@pytest.mark.parametrize("seed", list(range(2)))
 def test_model_nn_prediction_random_extrinsic(
     request, model_name, tolerance_mismatch, tolerance_amp, seed
 ):
@@ -208,12 +208,12 @@ def test_model_nn_prediction_random_extrinsic(
 
     params = random_parameters(model, seed)
 
-    teob_dict = params.teobresums_dict(model.dataset)
+    teob_dict = params.teobresums_dict(model.dataset, use_effective_frequencies=False)
 
     teob_dict["use_geometric_units"] = "no"
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
     teob_dict["srate_interp"] /= params.mass_sum_seconds
-    teob_dict["df"] /= params.mass_sum_seconds
+    teob_dict["df"] /= params.mass_sum_seconds / 16.0
 
     # tweak initial frequency backward by a few samples
     # this is needed because of a bug in TEOBResumS

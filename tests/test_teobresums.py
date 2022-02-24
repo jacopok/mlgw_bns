@@ -25,7 +25,7 @@ def test_teob_generator(dataset, teob_generator):
     )
 
     teob_dict = params.teobresums_dict(dataset)
-    assert teob_dict == params.intrinsic(dataset).teobresums
+    assert teob_dict == params.intrinsic(dataset).teobresums()
 
     n_additional = 256
     f_0 = teob_dict["initial_frequency"]

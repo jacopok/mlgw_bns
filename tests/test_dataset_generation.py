@@ -50,9 +50,9 @@ def test_waveform_parameters_teobresums_output(parameters):
         "time_shift_FD": "yes",
     }.items():
         if isinstance(val, float):
-            assert np.isclose(val, parameters.teobresums[key])
+            assert np.isclose(val, parameters.teobresums()[key])
         else:
-            assert val == parameters.teobresums[key]
+            assert val == parameters.teobresums()[key]
 
 
 def test_random_parameter_generation(dataset):
