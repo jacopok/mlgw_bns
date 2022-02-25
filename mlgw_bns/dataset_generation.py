@@ -201,6 +201,9 @@ class WaveformGenerator(ABC):
         amplitude_pn = self.post_newtonian_amplitude(params, amp_frequencies)
         phase_pn = self.post_newtonian_phase(params, phi_frequencies)
 
+        assert np.all(amplitude_pn > 0)
+        assert np.all(amplitude_eob > 0)
+
         return (np.log(amplitude_eob / amplitude_pn), phase_eob - phase_pn)
 
 
@@ -221,7 +224,7 @@ class BarePostNewtonianGenerator(WaveformGenerator):
     ) -> np.ndarray:
         par_dict = params.taylor_f2(frequencies)
 
-        return (
+        pn_amp = (
             Af3hPN(
                 par_dict["f"],
                 par_dict["mtot"],
@@ -238,6 +241,8 @@ class BarePostNewtonianGenerator(WaveformGenerator):
             )
             * params.dataset.taylor_f2_prefactor(params.eta)
         )
+
+        return np.maximum(pn_amp, 1e-6)
 
     def post_newtonian_phase(
         self, params: "WaveformParameters", frequencies: np.ndarray
@@ -313,10 +318,6 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         >>> tg = TEOBResumSGenerator(EOBRunPy)
         >>> p = WaveformParameters(1, 300, 300, .3, -.3, Dataset(20., 4096.))
         >>> f, waveform = tg.effective_one_body_waveform(p)
-        >>> print(len(waveform))
-        744412
-        >>> print(waveform[0]) # doctest: +NUMBER
-        (-4137.9-8121.9j)
         """
 
         par_dict: dict = params.teobresums()
@@ -799,7 +800,7 @@ class Dataset:
     --------
     >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
     >>> print(dataset.delta_f_hz) # should be 1/256 Hz, doctest: +NUMBER
-    0.00390625
+    0.001953125
 
     Class Attributes
     ----------------
