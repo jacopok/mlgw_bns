@@ -7,7 +7,7 @@ from mlgw_bns.model import Model, ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 
 DEFAULT_MODEL_MAX_MISMATCH = 1e-5
-TRAINED_MODEL_MAX_MISMATCH = 1e-2
+TRAINED_MODEL_MAX_MISMATCH = 1.2e-2
 
 # if the maximum mismatch is 1e-2,
 # the average mismatch should be this many times
@@ -213,7 +213,7 @@ def test_model_nn_prediction_random_extrinsic(
     teob_dict["use_geometric_units"] = "no"
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
     teob_dict["srate_interp"] /= params.mass_sum_seconds
-    teob_dict["df"] /= params.mass_sum_seconds / 16.0
+    teob_dict["df"] /= params.mass_sum_seconds / 8.0
 
     # tweak initial frequency backward by a few samples
     # this is needed because of a bug in TEOBResumS
@@ -221,7 +221,7 @@ def test_model_nn_prediction_random_extrinsic(
     # at the beginning of integration
     # TODO remove this once the TEOB bug is fixed
 
-    n_additional = 256
+    n_additional = 128
     f_0 = teob_dict["initial_frequency"]
     delta_f = teob_dict["df"]
     new_f0 = f_0 - delta_f * n_additional
@@ -308,7 +308,7 @@ def test_parameters_out_of_bounds_error(trained_model, param_name, value):
         trained_model.predict(freqs, params)
 
 
-@pytest.mark.parametrize("total_mass", [2.5, 4])
+@pytest.mark.parametrize("total_mass", [2.0, 4.0])
 def test_bounds_of_mass_range_work(trained_model, total_mass):
     freqs = np.linspace(20.0, 2048.0)
     params = ParametersWithExtrinsic(
