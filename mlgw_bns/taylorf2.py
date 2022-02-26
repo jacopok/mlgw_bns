@@ -4,7 +4,7 @@ Code adapted from `bajes <https://arxiv.org/abs/2102.00017>`_,
 which can be found in `this repo <https://github.com/matteobreschi/bajes>`_.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 from numba import njit  # type: ignore
@@ -775,7 +775,7 @@ def decreasing_function(frequencies: np.ndarray, merger_freq: float):
     merger_freq : float
     """
 
-    return (merger_freq / frequencies) ** 2
+    return 0.1 * np.exp(-frequencies / merger_freq)
 
 
 def smoothly_connect_with_zero(
@@ -784,12 +784,18 @@ def smoothly_connect_with_zero(
     pivot_1: float,
     pivot_2: float,
     merger_freq: float,
+    smoothing_func: Callable[[np.ndarray], np.ndarray] = lambda x: (
+        1 - np.cos(x * np.pi)
+    )
+    / 2,
 ):
 
-    mask_mid = pivot_1 <= frequencies < pivot_2
+    mask_mid = np.logical_and(pivot_1 <= frequencies, frequencies < pivot_2)
     mask_end = pivot_2 <= frequencies
 
-    connecting_coefficient = (frequencies[mask_mid] - pivot_1) / (pivot_2 - pivot_1)
+    connecting_coefficient = smoothing_func(
+        (frequencies[mask_mid] - pivot_1) / (pivot_2 - pivot_1)
+    )
 
     pn_amp[mask_mid] = (
         pn_amp[mask_mid] * (1 - connecting_coefficient)
@@ -828,7 +834,7 @@ def amplitude_3h_post_newtonian(
     merger_freq = frequency_of_merger(params)
 
     return smoothly_connect_with_zero(
-        frequencies, pn_amp, merger_freq, merger_freq * 1.1, merger_freq
+        frequencies, pn_amp, merger_freq * 0.9, merger_freq, merger_freq
     )
 
 
