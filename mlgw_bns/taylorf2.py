@@ -4,12 +4,12 @@ Code adapted from `bajes <https://arxiv.org/abs/2102.00017>`_,
 which can be found in `this repo <https://github.com/matteobreschi/bajes>`_.
 """
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 from numba import njit  # type: ignore
 
 from .frequency_of_merger import frequency_of_merger
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .dataset_generation import WaveformParameters
@@ -765,6 +765,43 @@ def Phif3hPN(
     return LO * (pointmass + tidal)
 
 
+def decreasing_function(frequencies: np.ndarray, merger_freq: float):
+    """A function which is equal to 1 when the input frequency is
+    equal to the merger frequency, and which then decreases.
+
+    Parameters
+    ----------
+    frequencies : np.ndarray
+    merger_freq : float
+    """
+
+    return (merger_freq / frequencies) ** 2
+
+
+def smoothly_connect_with_zero(
+    frequencies: np.ndarray,
+    pn_amp: np.ndarray,
+    pivot_1: float,
+    pivot_2: float,
+    merger_freq: float,
+):
+
+    mask_mid = pivot_1 <= frequencies < pivot_2
+    mask_end = pivot_2 <= frequencies
+
+    connecting_coefficient = (frequencies[mask_mid] - pivot_1) / (pivot_2 - pivot_1)
+
+    pn_amp[mask_mid] = (
+        pn_amp[mask_mid] * (1 - connecting_coefficient)
+        + decreasing_function(frequencies[mask_mid], merger_freq)
+        * connecting_coefficient
+    )
+
+    pn_amp[mask_end] = decreasing_function(frequencies[mask_end], merger_freq)
+
+    return pn_amp
+
+
 def amplitude_3h_post_newtonian(
     params: "WaveformParameters", frequencies: np.ndarray
 ) -> np.ndarray:
@@ -788,7 +825,11 @@ def amplitude_3h_post_newtonian(
         * params.dataset.taylor_f2_prefactor(params.eta)
     )
 
-    return np.maximum(pn_amp, 1e-6)
+    merger_freq = frequency_of_merger(params)
+
+    return smoothly_connect_with_zero(
+        frequencies, pn_amp, merger_freq, merger_freq * 1.1, merger_freq
+    )
 
 
 def phase_5h_post_newtonian_tidal(
