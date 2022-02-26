@@ -27,6 +27,8 @@ from .multibanding import reduced_frequency_array
 from .taylorf2 import (
     SUN_MASS_SECONDS,
     amplitude_3h_post_newtonian,
+    compute_delta_lambda,
+    compute_lambda_tilde,
     phase_5h_post_newtonian_tidal,
 )
 
