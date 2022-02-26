@@ -26,12 +26,8 @@ from .multibanding import reduced_frequency_array
 # from .downsampling_interpolation import DownsamplingTraining
 from .taylorf2 import (
     SUN_MASS_SECONDS,
-    Af3hPN,
-    Phif5hPN,
-    PhifQM3hPN,
-    PhifT7hPNComplete,
-    compute_delta_lambda,
-    compute_lambda_tilde,
+    amplitude_3h_post_newtonian,
+    phase_5h_post_newtonian_tidal,
 )
 
 TF2_BASE: float = 3.668693487138444e-19
@@ -222,74 +218,12 @@ class BarePostNewtonianGenerator(WaveformGenerator):
     def post_newtonian_amplitude(
         self, params: "WaveformParameters", frequencies: np.ndarray
     ) -> np.ndarray:
-        par_dict = params.taylor_f2(frequencies)
-
-        pn_amp = (
-            Af3hPN(
-                par_dict["f"],
-                par_dict["mtot"],
-                params.eta,
-                par_dict["s1x"],
-                par_dict["s1y"],
-                par_dict["s1z"],
-                par_dict["s2x"],
-                par_dict["s2y"],
-                par_dict["s2z"],
-                Lam=params.lambdatilde,
-                dLam=params.dlambda,
-                Deff=par_dict["Deff"],
-            )
-            * params.dataset.taylor_f2_prefactor(params.eta)
-        )
-
-        return np.maximum(pn_amp, 1e-6)
+        return amplitude_3h_post_newtonian(params, frequencies)
 
     def post_newtonian_phase(
         self, params: "WaveformParameters", frequencies: np.ndarray
     ) -> np.ndarray:
-
-        par_dict = params.taylor_f2(frequencies)
-
-        phi_5pn = Phif5hPN(
-            par_dict["f"],
-            par_dict["mtot"],
-            params.eta,
-            par_dict["s1x"],
-            par_dict["s1y"],
-            par_dict["s1z"],
-            par_dict["s2x"],
-            par_dict["s2y"],
-            par_dict["s2z"],
-        )
-
-        # Tidal and QM contributions
-        phi_tidal = PhifT7hPNComplete(
-            par_dict["f"],
-            par_dict["mtot"],
-            params.eta,
-            par_dict["lambda1"],
-            par_dict["lambda2"],
-        )
-        # Quadrupole-monopole term
-        # [https://arxiv.org/abs/gr-qc/9709032]
-        phi_qm = PhifQM3hPN(
-            par_dict["f"],
-            par_dict["mtot"],
-            params.eta,
-            par_dict["s1x"],
-            par_dict["s1y"],
-            par_dict["s1z"],
-            par_dict["s2x"],
-            par_dict["s2y"],
-            par_dict["s2z"],
-            par_dict["lambda1"],
-            par_dict["lambda2"],
-        )
-
-        # I use the convention h = h+ + i hx
-        phase = -phi_5pn - phi_tidal - phi_qm
-
-        return phase - phase[0]
+        return phase_5h_post_newtonian_tidal(params, frequencies)
 
     def effective_one_body_waveform(
         self, params: "WaveformParameters", frequencies: Optional[list[float]] = None
