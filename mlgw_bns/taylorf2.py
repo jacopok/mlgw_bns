@@ -7,6 +7,13 @@ which can be found in `this repo <https://github.com/matteobreschi/bajes>`_.
 import numpy as np
 from numba import njit  # type: ignore
 
+from .frequency_of_merger import frequency_of_merger
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .dataset_generation import WaveformParameters
+
 SUN_MASS_SECONDS: float = 4.92549094830932e-6  # M_sun * G / c**3
 EULER_GAMMA = 0.57721566490153286060
 
@@ -756,3 +763,77 @@ def Phif3hPN(
         tidal = 0.0 * v
 
     return LO * (pointmass + tidal)
+
+
+def amplitude_3h_post_newtonian(
+    params: "WaveformParameters", frequencies: np.ndarray
+) -> np.ndarray:
+    par_dict = params.taylor_f2(frequencies)
+
+    pn_amp = (
+        Af3hPN(
+            par_dict["f"],
+            par_dict["mtot"],
+            params.eta,
+            par_dict["s1x"],
+            par_dict["s1y"],
+            par_dict["s1z"],
+            par_dict["s2x"],
+            par_dict["s2y"],
+            par_dict["s2z"],
+            Lam=params.lambdatilde,
+            dLam=params.dlambda,
+            Deff=par_dict["Deff"],
+        )
+        * params.dataset.taylor_f2_prefactor(params.eta)
+    )
+
+    return np.maximum(pn_amp, 1e-6)
+
+
+def phase_5h_post_newtonian_tidal(
+    params: "WaveformParameters", frequencies: np.ndarray
+) -> np.ndarray:
+
+    par_dict = params.taylor_f2(frequencies)
+
+    phi_5pn = Phif5hPN(
+        par_dict["f"],
+        par_dict["mtot"],
+        params.eta,
+        par_dict["s1x"],
+        par_dict["s1y"],
+        par_dict["s1z"],
+        par_dict["s2x"],
+        par_dict["s2y"],
+        par_dict["s2z"],
+    )
+
+    # Tidal and QM contributions
+    phi_tidal = PhifT7hPNComplete(
+        par_dict["f"],
+        par_dict["mtot"],
+        params.eta,
+        par_dict["lambda1"],
+        par_dict["lambda2"],
+    )
+    # Quadrupole-monopole term
+    # [https://arxiv.org/abs/gr-qc/9709032]
+    phi_qm = PhifQM3hPN(
+        par_dict["f"],
+        par_dict["mtot"],
+        params.eta,
+        par_dict["s1x"],
+        par_dict["s1y"],
+        par_dict["s1z"],
+        par_dict["s2x"],
+        par_dict["s2y"],
+        par_dict["s2z"],
+        par_dict["lambda1"],
+        par_dict["lambda2"],
+    )
+
+    # I use the convention h = h+ + i hx
+    phase = -phi_5pn - phi_tidal - phi_qm
+
+    return phase - phase[0]
