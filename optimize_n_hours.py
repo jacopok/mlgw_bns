@@ -3,7 +3,6 @@ from mlgw_bns import *
 
 if __name__ == "__main__":
     m = Model("optimization_dataset")
-    print(m.filename)
     m.load()
     ho = HyperparameterOptimization(m)
 
