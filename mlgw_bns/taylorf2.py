@@ -775,7 +775,7 @@ def decreasing_function(frequencies: np.ndarray, merger_freq: float):
     merger_freq : float
     """
 
-    return 0.1 * np.exp(-frequencies / merger_freq)
+    return 10 * (frequencies / merger_freq) ** (-3.25)
 
 
 def smoothly_connect_with_zero(
@@ -805,7 +805,9 @@ def smoothly_connect_with_zero(
 
     pn_amp[mask_end] = decreasing_function(frequencies[mask_end], merger_freq)
 
-    return pn_amp
+    # we still impose the condition of the amplitude
+    # being larger than a small number to be sure
+    return np.maximum(pn_amp, 1e-3)
 
 
 def amplitude_3h_post_newtonian(
@@ -831,11 +833,12 @@ def amplitude_3h_post_newtonian(
         * params.dataset.taylor_f2_prefactor(params.eta)
     )
 
-    merger_freq = frequency_of_merger(params)
+    return np.maximum(pn_amp, 1e-3)
+    # merger_freq = frequency_of_merger(params)
 
-    return smoothly_connect_with_zero(
-        frequencies, pn_amp, merger_freq * 0.9, merger_freq, merger_freq
-    )
+    # return smoothly_connect_with_zero(
+    #     frequencies, pn_amp, merger_freq * 0.9, merger_freq * 1.1, merger_freq
+    # )
 
 
 def phase_5h_post_newtonian_tidal(
