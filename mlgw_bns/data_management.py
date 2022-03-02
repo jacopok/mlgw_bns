@@ -15,10 +15,23 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
-from typing import Any, ClassVar, Iterable, Iterator, Optional, Type, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Iterable,
+    Iterator,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+)
 
 import h5py
 import numpy as np
+
+if TYPE_CHECKING:
+    from .model import ParametersWithExtrinsic
 
 # make type hinting available for
 TYPE_DATA = TypeVar("TYPE_DATA", bound="SavableData")
@@ -29,6 +42,9 @@ class SavableData:
     """Generic container for data which might need to be saved to file.
 
     Subclasses should also be decorated with ``@dataclass``.
+
+    Instances should only store numpy arrays, so that
+    the h5py compatibility will work.
     """
 
     @property
@@ -74,9 +90,8 @@ class SavableData:
         if self.group_name not in file:
             file.create_group(self.group_name)
 
-        for array_name in self._arrays_list():
+        for array_name, array in zip(self._arrays_list(), self):
             array_path = f"{self.group_name}/{array_name}"
-            array = getattr(self, array_name)
 
             # convert to numpy array here in order to be able to get
             # the shape of lists as well
@@ -124,12 +139,66 @@ class SavableData:
 
 
 @dataclass
-class MassRange(SavableData):
-    """Mass range to be allowed."""
+class ParameterRanges(SavableData):
+    """Parameter ranges for waveform generation.
 
-    mass_range: np.ndarray
+    The parameters should all be numpy arrays,
+    but
 
-    group_name: ClassVar[str] = "mass_range"
+    Parameters
+    ----------
+    mass_range : tuple[float, float]
+            Range of valid total masses, in solar masses.
+            Defaults to (2.5., 4.).
+    q_range : tuple[float, float]
+            Range of valid mass ratios.
+            Defaults to (1., 3.).
+    lambda1_range : tuple[float, float]
+            Range of valid tidal deformabilities parameters for the larger star.
+            Defaults to (5., 5000.): the lower bound is not zero because that
+            may create some issues with TEOB crashing.
+    lambda2_range : tuple[float, float]
+            Range of valid tidal deformabilities parameters for the smaller star.
+            Defaults to (5., 5000.).
+    chi1_range : tuple[float, float]
+            Range of valid dimensionless aligned spins for the larger star.
+            Defaults to (-.5, .5).
+    chi2_range : tuple[float, float]
+            Range of valid dimensionless aligned spins for the smaller star.
+            Defaults to (-.5, .5).
+
+    """
+
+    mass_range: tuple[float, float] = (2.0, 4.0)
+    q_range: tuple[float, float] = (1.0, 3.0)
+    lambda1_range: tuple[float, float] = (5.0, 5000.0)
+    lambda2_range: tuple[float, float] = (5.0, 5000.0)
+    chi1_range: tuple[float, float] = (-0.5, 0.5)
+    chi2_range: tuple[float, float] = (-0.5, 0.5)
+
+    group_name: ClassVar[str] = "parameter_ranges"
+
+    def __iter__(self) -> Iterator[Any]:
+        """Override this method for the purpose of saving
+        as an h5 file, which only works with arrays."""
+        for array_name in self._arrays_list():
+            yield np.array(getattr(self, array_name))
+
+    def check_parameters_in_ranges(self, params: ParametersWithExtrinsic) -> None:
+        def within(x: float, x_range: tuple[float, float], name: str):
+            x_min, x_max = x_range
+
+            if x < x_min:
+                raise ValueError(f"{name} out of bounds! {x} < {x_min}")
+            if x > x_max:
+                raise ValueError(f"{name} out of bounds! {x} > {x_max}")
+
+        within(params.total_mass, self.mass_range, name="total_mass")
+        within(params.mass_ratio, self.q_range, name="mass_ratio")
+        within(params.lambda_1, self.lambda1_range, name="lambda_1")
+        within(params.lambda_2, self.lambda2_range, name="lambda_2")
+        within(params.chi_1, self.chi1_range, name="chi_1")
+        within(params.chi_2, self.chi2_range, name="chi_2")
 
 
 @dataclass
@@ -149,6 +218,11 @@ class DownsamplingIndices(SavableData):
     an initial frequency, finishing at half of the time-domain
     interpolation rate, with a step equal to the inverse of the
     length of the time-domain waveform.
+
+    Parameters
+    ----------
+    amplitude_indices: list[int]
+    phase_indices: list[int]
     """
 
     amplitude_indices: list[int]

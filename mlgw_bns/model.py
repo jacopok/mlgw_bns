@@ -12,12 +12,11 @@ import numpy as np
 import optuna
 import pkg_resources
 from numba import njit  # type: ignore
-from sklearn.preprocessing import StandardScaler  # type: ignore
 
 from .data_management import (
     DownsamplingIndices,
     FDWaveforms,
-    MassRange,
+    ParameterRanges,
     PrincipalComponentData,
     Residuals,
     SavableData,
@@ -43,11 +42,11 @@ DEFAULT_DATASET_BASENAME = "data/default_dataset"
 
 
 class FrequencyTooLowError(ValueError):
-    pass
+    """Raised when the frequency given to the predictor is too low."""
 
 
 class FrequencyTooHighError(ValueError):
-    pass
+    """Raised when the frequency given to the predictor is too high."""
 
 
 @dataclass
@@ -125,13 +124,15 @@ class ParametersWithExtrinsic:
     def mass_sum_seconds(self) -> float:
         return self.total_mass * SUN_MASS_SECONDS
 
-    def teobresums_dict(self, dataset: Dataset) -> dict[str, Union[float, int, str]]:
+    def teobresums_dict(
+        self, dataset: Dataset, use_effective_frequencies: bool = True
+    ) -> dict[str, Union[float, int, str]]:
         """Parameter dictionary in a format compatible with
         TEOBResumS.
 
         The parameters are all converted to natural units.
         """
-        base_dict = self.intrinsic(dataset).teobresums
+        base_dict = self.intrinsic(dataset).teobresums(use_effective_frequencies)
 
         return {
             **base_dict,
@@ -180,25 +181,6 @@ class Model:
     nn_kind : Type[NeuralNetwork]
             Neural network implementation to use,
             defaults to :class:`SklearnNetwork`.
-    parameter_generator_kwargs: dict[str, tuple[float, float]], optional
-            Dictionary of keyword arguments to be used when initializing
-            a :class:`ParameterGenerator`.
-            It should be a map of strings to tuples, in the form
-            `{'q_range': (1., 3.)}`.
-
-            Options include
-            ``q_range``,
-            ``lambda1_range``,
-            ``lambda2_range``,
-            ``chi1_range``,
-            ``chi2_range``.
-    mass_range: tuple[float, float]
-            Range of total masses :math:`M` (in solar masses)
-            that the model should be able to reconstruct.
-            The reconstruction works with the frequency expressed as :math:`Mf`,
-            but changing the total mass changes the range of relevant frequencies.
-
-            Defaults to (2.8, 2.8).
     """
 
     def __init__(
@@ -211,8 +193,7 @@ class Model:
         waveform_generator: Optional[WaveformGenerator] = None,
         downsampling_training: Optional[DownsamplingTraining] = None,
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
-        parameter_generator_kwargs: Optional[dict[str, tuple[float, float]]] = None,
-        mass_range: tuple[float, float] = (2.8, 2.8),
+        parameter_ranges: ParameterRanges = ParameterRanges(),
     ):
 
         self.filename = filename
@@ -229,11 +210,10 @@ class Model:
         else:
             self.waveform_generator = waveform_generator
 
-        self.mass_range = MassRange(np.array(mass_range))
+        self.parameter_ranges = parameter_ranges
         self.initial_frequency_hz = initial_frequency_hz
         self.srate_hz = srate_hz
         self.multibanding = multibanding
-        self.parameter_generator_kwargs = parameter_generator_kwargs
 
         self.dataset = self._make_dataset()
 
@@ -256,6 +236,24 @@ class Model:
 
         self.nn_kind = nn_kind
 
+    def __str__(self):
+
+        n_waveforms = (
+            f"waveforms_available = {len(self.training_dataset)}"
+            if self.training_dataset_available
+            else ""
+        )
+
+        return (
+            "Model("
+            f"filename={self.filename}, "
+            f"auxiliary_data_available={self.auxiliary_data_available}, "
+            f"nn_available={self.nn_available}, "
+            f"training_dataset_available={self.training_dataset_available}, "
+            + n_waveforms
+            + f"parameter_ranges={self.parameter_ranges})"
+        )
+
     @classmethod
     def default(cls, filename: Optional[str] = None):
         model = cls(DEFAULT_DATASET_BASENAME)
@@ -269,27 +267,18 @@ class Model:
 
         return model
 
-    def _handle_missing_filename(self) -> None:
-        raise ValueError('Please set the "filename" attribute of this object')
-
     def _make_dataset(self) -> Dataset:
 
-        mass_min, mass_max = self.mass_range.mass_range
-
-        effective_initial_frequency, effective_srate = expand_frequency_range(
+        return Dataset(
             self.initial_frequency_hz,
             self.srate_hz,
-            (mass_min, mass_max),
-            Dataset.total_mass,
-        )
-
-        return Dataset(
-            effective_initial_frequency,
-            effective_srate,
             waveform_generator=self.waveform_generator,
             multibanding=self.multibanding,
-            parameter_generator_kwargs=self.parameter_generator_kwargs,
+            parameter_ranges=self.parameter_ranges,
         )
+
+    def _handle_missing_filename(self) -> None:
+        raise ValueError('Please set the "filename" attribute of this object')
 
     @property
     def auxiliary_data_available(self) -> bool:
@@ -397,8 +386,6 @@ class Model:
             assert self.training_dataset is not None
             assert self.training_parameters is not None
 
-        self.train_parameter_scaler()
-
     def save_arrays(self, include_training_data: bool = True) -> None:
         """Save all big arrays contained in this object to the file
         defined as ``{filename}.h5``.
@@ -411,14 +398,15 @@ class Model:
         arr_list: list[SavableData] = [
             self.downsampling_indices,
             self.pca_data,
-            self.training_parameters,
-            self.mass_range,
+            self.parameter_ranges,
         ]
 
         if include_training_data:
+            assert self.training_parameters is not None
             assert self.training_dataset is not None
 
             arr_list += [
+                self.training_parameters,
                 self.training_dataset,
             ]
 
@@ -455,16 +443,12 @@ class Model:
         self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
         self.pca_data = PrincipalComponentData.from_file(file_arrays)
         self.training_parameters = ParameterSet.from_file(file_arrays)
-        if (
-            self.downsampling_indices is None
-            or self.pca_data is None
-            or self.training_parameters is None
-        ):
+        if self.downsampling_indices is None or self.pca_data is None:
             raise FileNotFoundError
 
-        mass_range = MassRange.from_file(file_arrays)
-        assert mass_range is not None
-        self.mass_range = mass_range
+        parameter_ranges = ParameterRanges.from_file(file_arrays)
+        assert parameter_ranges is not None
+        self.parameter_ranges = parameter_ranges
 
         self.dataset = self._make_dataset()
 
@@ -475,22 +459,7 @@ class Model:
         try:
             self.nn = self.nn_kind.from_file(filename_nn)
         except FileNotFoundError:
-            logging.warn("No trained network or hyperparmeters found.")
-
-        self.train_parameter_scaler()
-
-    def train_parameter_scaler(self) -> None:
-        """Train the parameter scaler, which takes the
-        waveform parameters and makes their magnitudes similar
-        in order to aid the training of the network.
-
-        The parameter scaler is always trained on all the available dataset.
-        """
-        assert self.training_parameters is not None
-
-        self.param_scaler: StandardScaler = StandardScaler().fit(
-            self.training_parameters.parameter_array
-        )
+            logging.warn("No trained network or hyperparameters found.")
 
     @property
     def reduced_residuals(self) -> np.ndarray:
@@ -545,17 +514,16 @@ class Model:
         assert self.training_parameters is not None
         assert self.pca_data is not None
 
-        scaled_params: np.ndarray = self.param_scaler.transform(
-            self.training_parameters.parameter_array[indices]
-        )
-
         training_residuals = (
             self.reduced_residuals
             * (self.pca_data.eigenvalues ** hyper.pc_exponent)[np.newaxis, :]
         )
 
         nn = self.nn_kind(hyper)
-        nn.fit(scaled_params, training_residuals[indices])
+        nn.fit(
+            self.training_parameters.parameter_array[indices],
+            training_residuals[indices],
+        )
         return nn
 
     def set_hyper_and_train_nn(self, hyper: Optional[Hyperparameters] = None) -> None:
@@ -602,9 +570,7 @@ class Model:
         assert self.pca_data is not None
         assert self.downsampling_indices is not None
 
-        scaled_params = self.param_scaler.transform(params.parameter_array)
-
-        scaled_pca_components = nn.predict(scaled_params)
+        scaled_pca_components = nn.predict(params.parameter_array)
 
         combined_residuals = self.pca_model.reconstruct_data(
             scaled_pca_components / (self.pca_data.eigenvalues ** nn.hyper.pc_exponent),
@@ -661,14 +627,18 @@ class Model:
         )
 
         try:
-            assert rescaled_frequencies[0] >= self.dataset.initial_frequency_hz
+            assert (
+                rescaled_frequencies[0] >= self.dataset.effective_initial_frequency_hz
+            )
         except AssertionError as e:
             raise FrequencyTooLowError() from e
 
         try:
-            assert rescaled_frequencies[-1] <= self.dataset.srate_hz / 2.0
+            assert rescaled_frequencies[-1] <= self.dataset.effective_srate_hz / 2.0
         except AssertionError as e:
             raise FrequencyTooHighError() from e
+
+        self.parameter_ranges.check_parameters_in_ranges(params)
 
         intrinsic_params = params.intrinsic(self.dataset)
 
@@ -805,9 +775,10 @@ class Model:
         weights = np.array([3, -32, 168, -672, 0, 672, -168, 32, -3]) / 840.0
 
         try:
-
             _, phis = self._predict_amplitude_phase(freqs, params)
+            logging.info("Derivative coming from mlgw_bns")
         except FrequencyTooLowError:
+            logging.info("Derivative coming from the PN approximant")
             phis = self.waveform_generator.post_newtonian_phase(
                 params.intrinsic(self.dataset), freqs * params.mass_sum_seconds
             )
@@ -916,48 +887,3 @@ def compute_polarizations(
     hc = pre_cross * waveform_imag - 1j * pre_cross * waveform_real
 
     return hp, hc
-
-
-def expand_frequency_range(
-    initial_frequency: float,
-    final_frequency: float,
-    mass_range: tuple[float, float],
-    reference_mass: float,
-) -> tuple[float, float]:
-    r"""Widen the frequency range to account for the
-    different masses the user requires.
-
-    Parameters
-    ----------
-    initial_frequency : float
-        Lower bound for the frequency.
-        Typically in Hz, but this function just requires it
-        to be consistent with the other parameters.
-    final_frequency : float
-        Upper bound for the frequency.
-        It can also be given as the time-domain
-        signal rate :math:`r = 1 / \Delta t`, which is
-        twice che maximum frequency because of the Nyquist bound.
-
-        Since all this function does is multiply it by a certain factor,
-        the formulations can be exchanged.
-    mass_range : tuple[float, float]
-        Range of allowed masses, in the same unit as the
-        reference mass (typically, solar masses).
-    reference_mass : float
-        Reference mass the model uses to convert frequencies
-        to the dimensionless :math:`Mf`.
-
-    Returns
-    -------
-    tuple[float, float]
-        New lower and upper bounds for the frequency range.
-    """
-
-    m_min, m_max = mass_range
-    assert m_min <= m_max
-
-    return (
-        initial_frequency * (reference_mass / m_max),
-        final_frequency * (reference_mass / m_min),
-    )
