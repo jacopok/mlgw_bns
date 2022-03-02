@@ -116,7 +116,7 @@ def test_model_nn_prediction(
     model = request.getfixturevalue(model_name)
 
     params = ParametersWithExtrinsic(
-        mass_ratio=1.0,
+        mass_ratio=1.2,
         lambda_1=500.0,
         lambda_2=50.0,
         chi_1=0.1,
@@ -274,7 +274,7 @@ def random_parameters(model: Model, seed: int) -> ParametersWithExtrinsic:
         chi_2=intrinsic_params.chi_2,
         distance_mpc=10 ** param_generator.rng.uniform(-1, 4),
         inclination=param_generator.rng.uniform(-np.pi, np.pi),
-        total_mass=param_generator.rng.uniform(2.5, 3.2),
+        total_mass=param_generator.rng.uniform(2.0, 4.0),
     )
 
 
