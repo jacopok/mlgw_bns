@@ -4,8 +4,15 @@ Code adapted from `bajes <https://arxiv.org/abs/2102.00017>`_,
 which can be found in `this repo <https://github.com/matteobreschi/bajes>`_.
 """
 
+from typing import TYPE_CHECKING, Callable
+
 import numpy as np
 from numba import njit  # type: ignore
+
+from .frequency_of_merger import frequency_of_merger
+
+if TYPE_CHECKING:
+    from .dataset_generation import WaveformParameters
 
 SUN_MASS_SECONDS: float = 4.92549094830932e-6  # M_sun * G / c**3
 EULER_GAMMA = 0.57721566490153286060
@@ -756,3 +763,125 @@ def Phif3hPN(
         tidal = 0.0 * v
 
     return LO * (pointmass + tidal)
+
+
+def decreasing_function(frequencies: np.ndarray, merger_freq: float) -> np.ndarray:
+    """A function which is equal to 1 when the input frequency is
+    equal to the merger frequency, and which then decreases.
+
+    Parameters
+    ----------
+    frequencies : np.ndarray
+    merger_freq : float
+    """
+
+    return 20 * np.ones_like(frequencies)
+
+
+def smoothly_connect_with_zero(
+    frequencies: np.ndarray,
+    pn_amp: np.ndarray,
+    pivot_1: float,
+    pivot_2: float,
+    merger_freq: float,
+    smoothing_func: Callable[[np.ndarray], np.ndarray] = lambda x: (
+        1 - np.cos(x * np.pi)
+    )
+    / 2,
+):
+
+    mask_mid = np.logical_and(pivot_1 <= frequencies, frequencies < pivot_2)
+    mask_end = pivot_2 <= frequencies
+
+    connecting_coefficient = smoothing_func(
+        (frequencies[mask_mid] - pivot_1) / (pivot_2 - pivot_1)
+    )
+
+    pn_amp[mask_mid] = (
+        pn_amp[mask_mid] * (1 - connecting_coefficient)
+        + decreasing_function(frequencies[mask_mid], merger_freq)
+        * connecting_coefficient
+    )
+
+    pn_amp[mask_end] = decreasing_function(frequencies[mask_end], merger_freq)
+
+    # we still impose the condition of the amplitude
+    # being larger than a small number to be sure
+    assert np.all(pn_amp > 1e-3)
+    return pn_amp
+
+
+def amplitude_3h_post_newtonian(
+    params: "WaveformParameters", frequencies: np.ndarray
+) -> np.ndarray:
+    par_dict = params.taylor_f2(frequencies)
+
+    pn_amp = (
+        Af3hPN(
+            par_dict["f"],
+            par_dict["mtot"],
+            params.eta,
+            par_dict["s1x"],
+            par_dict["s1y"],
+            par_dict["s1z"],
+            par_dict["s2x"],
+            par_dict["s2y"],
+            par_dict["s2z"],
+            Lam=params.lambdatilde,
+            dLam=params.dlambda,
+            Deff=par_dict["Deff"],
+        )
+        * params.dataset.taylor_f2_prefactor(params.eta)
+    )
+
+    # merger_freq = frequency_of_merger(params)
+
+    return smoothly_connect_with_zero(frequencies, pn_amp, 0.01, 0.02, 0.02)
+
+
+def phase_5h_post_newtonian_tidal(
+    params: "WaveformParameters", frequencies: np.ndarray
+) -> np.ndarray:
+
+    par_dict = params.taylor_f2(frequencies)
+
+    phi_5pn = Phif5hPN(
+        par_dict["f"],
+        par_dict["mtot"],
+        params.eta,
+        par_dict["s1x"],
+        par_dict["s1y"],
+        par_dict["s1z"],
+        par_dict["s2x"],
+        par_dict["s2y"],
+        par_dict["s2z"],
+    )
+
+    # Tidal and QM contributions
+    phi_tidal = PhifT7hPNComplete(
+        par_dict["f"],
+        par_dict["mtot"],
+        params.eta,
+        par_dict["lambda1"],
+        par_dict["lambda2"],
+    )
+    # Quadrupole-monopole term
+    # [https://arxiv.org/abs/gr-qc/9709032]
+    phi_qm = PhifQM3hPN(
+        par_dict["f"],
+        par_dict["mtot"],
+        params.eta,
+        par_dict["s1x"],
+        par_dict["s1y"],
+        par_dict["s1z"],
+        par_dict["s2x"],
+        par_dict["s2y"],
+        par_dict["s2z"],
+        par_dict["lambda1"],
+        par_dict["lambda2"],
+    )
+
+    # I use the convention h = h+ + i hx
+    phase = -phi_5pn - phi_tidal - phi_qm
+
+    return phase - phase[0]

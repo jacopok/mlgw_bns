@@ -16,6 +16,7 @@ from tqdm import tqdm  # type: ignore
 from .data_management import (
     DownsamplingIndices,
     FDWaveforms,
+    ParameterRanges,
     Residuals,
     SavableData,
     phase_unwrapping,
@@ -25,12 +26,10 @@ from .multibanding import reduced_frequency_array
 # from .downsampling_interpolation import DownsamplingTraining
 from .taylorf2 import (
     SUN_MASS_SECONDS,
-    Af3hPN,
-    Phif5hPN,
-    PhifQM3hPN,
-    PhifT7hPNComplete,
+    amplitude_3h_post_newtonian,
     compute_delta_lambda,
     compute_lambda_tilde,
+    phase_5h_post_newtonian_tidal,
 )
 
 TF2_BASE: float = 3.668693487138444e-19
@@ -200,6 +199,9 @@ class WaveformGenerator(ABC):
         amplitude_pn = self.post_newtonian_amplitude(params, amp_frequencies)
         phase_pn = self.post_newtonian_phase(params, phi_frequencies)
 
+        assert np.all(amplitude_pn > 0)
+        assert np.all(amplitude_eob > 0)
+
         return (np.log(amplitude_eob / amplitude_pn), phase_eob - phase_pn)
 
 
@@ -218,72 +220,12 @@ class BarePostNewtonianGenerator(WaveformGenerator):
     def post_newtonian_amplitude(
         self, params: "WaveformParameters", frequencies: np.ndarray
     ) -> np.ndarray:
-        par_dict = params.taylor_f2(frequencies)
-
-        return (
-            Af3hPN(
-                par_dict["f"],
-                par_dict["mtot"],
-                params.eta,
-                par_dict["s1x"],
-                par_dict["s1y"],
-                par_dict["s1z"],
-                par_dict["s2x"],
-                par_dict["s2y"],
-                par_dict["s2z"],
-                Lam=params.lambdatilde,
-                dLam=params.dlambda,
-                Deff=par_dict["Deff"],
-            )
-            * params.dataset.taylor_f2_prefactor(params.eta)
-        )
+        return amplitude_3h_post_newtonian(params, frequencies)
 
     def post_newtonian_phase(
         self, params: "WaveformParameters", frequencies: np.ndarray
     ) -> np.ndarray:
-
-        par_dict = params.taylor_f2(frequencies)
-
-        phi_5pn = Phif5hPN(
-            par_dict["f"],
-            par_dict["mtot"],
-            params.eta,
-            par_dict["s1x"],
-            par_dict["s1y"],
-            par_dict["s1z"],
-            par_dict["s2x"],
-            par_dict["s2y"],
-            par_dict["s2z"],
-        )
-
-        # Tidal and QM contributions
-        phi_tidal = PhifT7hPNComplete(
-            par_dict["f"],
-            par_dict["mtot"],
-            params.eta,
-            par_dict["lambda1"],
-            par_dict["lambda2"],
-        )
-        # Quadrupole-monopole term
-        # [https://arxiv.org/abs/gr-qc/9709032]
-        phi_qm = PhifQM3hPN(
-            par_dict["f"],
-            par_dict["mtot"],
-            params.eta,
-            par_dict["s1x"],
-            par_dict["s1y"],
-            par_dict["s1z"],
-            par_dict["s2x"],
-            par_dict["s2y"],
-            par_dict["s2z"],
-            par_dict["lambda1"],
-            par_dict["lambda2"],
-        )
-
-        # I use the convention h = h+ + i hx
-        phase = -phi_5pn - phi_tidal - phi_qm
-
-        return phase - phase[0]
+        return phase_5h_post_newtonian_tidal(params, frequencies)
 
     def effective_one_body_waveform(
         self, params: "WaveformParameters", frequencies: Optional[list[float]] = None
@@ -312,13 +254,9 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         >>> tg = TEOBResumSGenerator(EOBRunPy)
         >>> p = WaveformParameters(1, 300, 300, .3, -.3, Dataset(20., 4096.))
         >>> f, waveform = tg.effective_one_body_waveform(p)
-        >>> print(len(waveform))
-        519169
-        >>> print(waveform[0]) # doctest: +NUMBER
-        (4679.9+3758.8j)
         """
 
-        par_dict: dict = params.teobresums
+        par_dict: dict = params.teobresums()
 
         # tweak initial frequency backward by a few samples
         # this is needed because of a bug in TEOBResumS
@@ -466,13 +404,27 @@ class WaveformParameters:
         For the precise definition see equation 27 of `this paper <http://arxiv.org/abs/2102.00017>`__."""
         return compute_delta_lambda(self.m_1, self.m_2, self.lambda_1, self.lambda_2)
 
-    @property
-    def teobresums(self) -> dict[str, Union[float, int, str]]:
+    def teobresums(
+        self, use_effective_frequencies: bool = True
+    ) -> dict[str, Union[float, int, str]]:
         """Parameter dictionary in a format compatible with
         TEOBResumS.
 
         The parameters are all converted to natural units.
         """
+
+        if use_effective_frequencies:
+            initial_freq = (
+                self.dataset.effective_initial_frequency_hz
+                * self.dataset.mass_sum_seconds
+            )
+            srate = self.dataset.effective_srate_hz * self.dataset.mass_sum_seconds
+        else:
+            initial_freq = (
+                self.dataset.initial_frequency_hz * self.dataset.mass_sum_seconds
+            )
+            srate = self.dataset.srate_hz * self.dataset.mass_sum_seconds
+
         return {
             "q": self.mass_ratio,
             "Lambda1": self.lambda_1,
@@ -481,12 +433,11 @@ class WaveformParameters:
             "chi2": self.chi_2,
             "M": self.dataset.total_mass,
             "distance": 1.0,
-            "initial_frequency": self.dataset.initial_frequency_hz
-            * self.dataset.mass_sum_seconds,
+            "initial_frequency": initial_freq,
             "use_geometric_units": "yes",
             "interp_uniform_grid": "no",
             "domain": 1,  # Fourier domain
-            "srate_interp": self.dataset.srate_hz * self.dataset.mass_sum_seconds,
+            "srate_interp": srate,
             "df": self.dataset.delta_f_hz * self.dataset.mass_sum_seconds,
             "interp_FD_waveform": 1,
             "inclination": 0.0,
@@ -518,7 +469,7 @@ class WaveformParameters:
             "s2z": self.chi_2,
             "lambda1": self.lambda_1,
             "lambda2": self.lambda_2,
-            "f_min": self.dataset.initial_frequency_hz,
+            "f_min": self.dataset.effective_initial_frequency_hz,
             "phi_ref": 0,
             "phaseorder": 11,
             "tidalorder": 15,
@@ -674,30 +625,14 @@ class UniformParameterGenerator(ParameterGenerator):
     r"""Generator of parameters according to a uniform distribution
     over their allowed ranges.
 
+    # TODO update docs here!
+
     Parameters
     ----------
-    q_range : tuple[float, float]
-            Range of valid mass ratios.
-            Defaults to (1., 2.).
-    lambda1_range : tuple[float, float]
-            Range of valid tidal deformabilities parameters for the larger star.
-            Defaults to (5., 5000.): the lower bound is not zero because that
-            may create some issues with TEOB crashing.
-    lambda2_range : tuple[float, float]
-            Range of valid tidal deformabilities parameters for the smaller star.
-            Defaults to (5., 5000.).
-    chi1_range : tuple[float, float]
-            Range of valid dimensionless aligned spins for the larger star.
-            Defaults to (-.5, .5).
-    chi2_range : tuple[float, float]
-            Range of valid dimensionless aligned spins for the smaller star.
-            Defaults to (-.5, .5).
-
-    Keyword Arguments
-    -----------------
     dataset: Dataset
             See the documentation for the initialization of a
             :class:`ParameterGenerator`.
+    parameter_ranges: ParameterRanges
     seed: Optional[int]
             See the documentation for the initialization of a
             :class:`ParameterGenerator`.
@@ -705,7 +640,9 @@ class UniformParameterGenerator(ParameterGenerator):
 
     Examples
     --------
-    >>> generator = UniformParameterGenerator(dataset=Dataset(20., 4096.))
+    >>> generator = UniformParameterGenerator(
+    ...    dataset=Dataset(20., 4096.),
+    ...    parameter_ranges=ParameterRanges(q_range=(1., 2.)))
     >>> params = next(generator)
     >>> print(type(params))
     <class 'mlgw_bns.dataset_generation.WaveformParameters'>
@@ -715,20 +652,17 @@ class UniformParameterGenerator(ParameterGenerator):
 
     def __init__(
         self,
-        q_range: tuple[float, float] = (1.0, 2.0),
-        lambda1_range: tuple[float, float] = (5.0, 5000.0),
-        lambda2_range: tuple[float, float] = (5.0, 5000.0),
-        chi1_range: tuple[float, float] = (-0.5, 0.5),
-        chi2_range: tuple[float, float] = (-0.5, 0.5),
-        **kwargs,
+        dataset: Dataset,
+        parameter_ranges: ParameterRanges,
+        seed: Optional[int] = None,
     ):
 
-        self.q_range = q_range
-        self.lambda1_range = lambda1_range
-        self.lambda2_range = lambda2_range
-        self.chi1_range = chi1_range
-        self.chi2_range = chi2_range
-        super().__init__(**kwargs)
+        self.q_range: tuple[float, float] = parameter_ranges.q_range
+        self.lambda1_range: tuple[float, float] = parameter_ranges.lambda1_range
+        self.lambda2_range: tuple[float, float] = parameter_ranges.lambda2_range
+        self.chi1_range: tuple[float, float] = parameter_ranges.chi1_range
+        self.chi2_range: tuple[float, float] = parameter_ranges.chi2_range
+        super().__init__(dataset=dataset, seed=seed)
 
     def __next__(self) -> WaveformParameters:
         mass_ratio = self.rng.uniform(*self.q_range)
@@ -802,7 +736,7 @@ class Dataset:
     --------
     >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
     >>> print(dataset.delta_f_hz) # should be 1/256 Hz, doctest: +NUMBER
-    0.00390625
+    0.001953125
 
     Class Attributes
     ----------------
@@ -820,7 +754,7 @@ class Dataset:
         delta_f_hz: Optional[float] = None,
         waveform_generator: WaveformGenerator = BarePostNewtonianGenerator(),
         parameter_generator_class: Type[ParameterGenerator] = UniformParameterGenerator,
-        parameter_generator_kwargs: Optional[dict[str, Any]] = None,
+        parameter_ranges: ParameterRanges = ParameterRanges(),
         seed: int = 42,
         multibanding: bool = True,
         f_pivot_hz: float = 40.0,
@@ -828,12 +762,21 @@ class Dataset:
 
         self.initial_frequency_hz = initial_frequency_hz
         self.srate_hz = srate_hz
+
+        (
+            self.effective_initial_frequency_hz,
+            self.effective_srate_hz,
+        ) = expand_frequency_range(
+            initial_frequency_hz,
+            srate_hz,
+            parameter_ranges.mass_range,
+            self.total_mass,
+        )
+
         self.delta_f_hz = self.optimal_df_hz() if delta_f_hz is None else delta_f_hz
         self.waveform_generator = waveform_generator
         self.parameter_generator_class = parameter_generator_class
-        self.parameter_generator_kwargs = (
-            {} if parameter_generator_kwargs is None else parameter_generator_kwargs
-        )
+        self.parameter_ranges = parameter_ranges
 
         self.seed_sequence = np.random.default_rng(seed=seed)
 
@@ -847,8 +790,10 @@ class Dataset:
         return (
             f"{self.__class__.__name__}("
             f"initial_frequency_hz={self.initial_frequency_hz}, "
-            f"delta_f_hz={self.delta_f_hz}, "
-            f"srate_hz={self.srate_hz}"
+            f"srate_hz={self.srate_hz}, "
+            f"effective_initial_frequency_hz={self.effective_initial_frequency_hz}, "
+            f"effective_srate_hz={self.effective_srate_hz}, "
+            f"delta_f_hz={self.delta_f_hz}"
             ")"
         )
 
@@ -858,7 +803,10 @@ class Dataset:
             return len(self.frequencies)
         else:
             return (
-                int((self.srate_hz / 2 - self.initial_frequency_hz) / self.delta_f_hz)
+                int(
+                    (self.effective_srate_hz / 2 - self.effective_initial_frequency_hz)
+                    / self.delta_f_hz
+                )
                 + 1
             )
 
@@ -884,14 +832,14 @@ class Dataset:
     def _frequencies_hz(self):
         if self.multibanding:
             return reduced_frequency_array(
-                self.initial_frequency_hz,
-                self.srate_hz / 2,
+                self.effective_initial_frequency_hz,
+                self.effective_srate_hz / 2,
                 self.f_pivot_hz,
             )
         else:
             return np.arange(
-                self.initial_frequency_hz,
-                self.srate_hz / 2 + self.delta_f_hz,
+                self.effective_initial_frequency_hz,
+                self.effective_srate_hz / 2 + self.delta_f_hz,
                 self.delta_f_hz,
             )
 
@@ -936,7 +884,7 @@ class Dataset:
         seglen = (
             5
             / 256
-            * (np.pi * self.initial_frequency_hz) ** (-8 / 3)
+            * (np.pi * self.effective_initial_frequency_hz) ** (-8 / 3)
             * (self.mass_sum_seconds * (1 / 4) ** (3 / 5)) ** (-5 / 3)
         )
 
@@ -1014,12 +962,12 @@ class Dataset:
         ParameterGenerators
         """
         if seed is None:
-            seed = self.seed_sequence.integers(low=0, high=2 ** 63 - 1)
+            seed = self.seed_sequence.integers(low=0, high=1 << 63 - 1)
 
         return self.parameter_generator_class(
+            parameter_ranges=self.parameter_ranges,
             dataset=self,
             seed=seed,
-            **self.parameter_generator_kwargs,
         )
 
     def generate_residuals(
@@ -1197,3 +1145,56 @@ class Dataset:
             phis.append(phi[phi_indices])
 
         return FDWaveforms(np.array(amps), np.array(phis))
+
+
+def expand_frequency_range(
+    initial_frequency: float,
+    final_frequency: float,
+    mass_range: tuple[float, float],
+    reference_mass: float,
+) -> tuple[float, float]:
+    r"""Widen the frequency range to account for the
+    different masses the user requires.
+
+    Parameters
+    ----------
+    initial_frequency : float
+        Lower bound for the frequency.
+        Typically in Hz, but this function just requires it
+        to be consistent with the other parameters.
+    final_frequency : float
+        Upper bound for the frequency.
+        It can also be given as the time-domain
+        signal rate :math:`r = 1 / \Delta t`, which is
+        twice che maximum frequency because of the Nyquist bound.
+
+        Since all this function does is multiply it by a certain factor,
+        the formulations can be exchanged.
+    mass_range : tuple[float, float]
+        Range of allowed masses, in the same unit as the
+        reference mass (typically, solar masses).
+    reference_mass : float
+        Reference mass the model uses to convert frequencies
+        to the dimensionless :math:`Mf`.
+
+    Returns
+    -------
+    tuple[float, float]
+        New lower and upper bounds for the frequency range.
+    """
+
+    m_min, m_max = mass_range
+    assert m_min <= m_max
+
+    # return (
+    #     initial_frequency * (reference_mass / m_max),
+    #     final_frequency * (reference_mass / m_min),
+    # )
+    return (
+        initial_frequency * (m_min / reference_mass),
+        final_frequency * (m_max / reference_mass),
+    )
+    # return (
+    #     initial_frequency * (2.5 / 2.8),
+    #     final_frequency * (2.8 / 2.5),
+    # )

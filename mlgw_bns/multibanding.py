@@ -6,6 +6,8 @@ to create a frequency array which scales well with the initial frequency.
 import numpy as np
 
 # this value refers to the eta=1/4, m_tot=2.8 case
+# it is the seglen, in seconds, for a signal starting at 20Hz
+# computed at the PN level
 SEGLEN_20_HZ = 157.86933774
 
 

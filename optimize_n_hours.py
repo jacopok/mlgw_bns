@@ -2,7 +2,6 @@ import argparse
 from mlgw_bns import *
 
 if __name__ == "__main__":
-
     try:
         m = Model("optimization_dataset")
         m.load()

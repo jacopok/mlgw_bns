@@ -10,8 +10,36 @@ from EOBRun_module import EOBRunPy  # type: ignore
 from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
 
 from mlgw_bns import Model
+from mlgw_bns.data_management import ParameterRanges
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
 from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--defaultunavailable",
+        action="store_true",
+        default=False,
+        help="skip tests which require the default model to be up to date",
+    )
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "requires_default: need the default model to run"
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption("--defaultunavailable"):
+        # the user did not specify: run all tests
+        return
+    default_unavailable = pytest.mark.skipif(
+        reason="Skip if the default dataset needs to be updated"
+    )
+    for item in items:
+        if "requires_default" in item.keywords:
+            item.add_marker(default_unavailable)
 
 
 @fixture(name="variable_dataset")
@@ -23,6 +51,7 @@ def fixture_variable_dataset(f_0):
         srate_hz=4096.0,
         waveform_generator=TEOBResumSGenerator(EOBRunPy),
         multibanding=True,
+        parameter_ranges=ParameterRanges(mass_range=(2.8, 2.8)),
     )
 
 
@@ -33,6 +62,7 @@ def fixture_dataset():
         initial_frequency_hz=20.0,
         srate_hz=4096.0,
         waveform_generator=TEOBResumSGenerator(EOBRunPy),
+        parameter_ranges=ParameterRanges(mass_range=(2.8, 2.8)),
     )
 
 
@@ -87,7 +117,7 @@ def model():
 
 @pytest.fixture(scope="session")
 def generated_model(model):
-    model.generate(8, 80, 80)
+    model.generate(8, 100, 100)
     yield model
 
 

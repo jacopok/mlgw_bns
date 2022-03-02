@@ -7,7 +7,7 @@ from mlgw_bns.model import Model, ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 
 DEFAULT_MODEL_MAX_MISMATCH = 1e-5
-TRAINED_MODEL_MAX_MISMATCH = 1e-2
+TRAINED_MODEL_MAX_MISMATCH = 1.2e-2
 
 # if the maximum mismatch is 1e-2,
 # the average mismatch should be this many times
@@ -50,6 +50,7 @@ def test_quick_model_with_validation_mismatches(trained_model):
     )
 
 
+@pytest.mark.requires_default
 def test_default_model_with_validation_mismatches(default_model):
 
     vm = ValidateModel(default_model)
@@ -62,6 +63,7 @@ def test_default_model_with_validation_mismatches(default_model):
     )
 
 
+@pytest.mark.requires_default
 def test_default_model_residuals(default_model):
 
     vm = ValidateModel(default_model)
@@ -92,7 +94,12 @@ def test_default_model_residuals(default_model):
     "model_name, tolerance_mismatch, tolerance_amp",
     [
         ("trained_model", TRAINED_MODEL_MAX_MISMATCH, 1e-1),
-        ("default_model", DEFAULT_MODEL_MAX_MISMATCH, 2e-3),
+        pytest.param(
+            "default_model",
+            DEFAULT_MODEL_MAX_MISMATCH,
+            2e-3,
+            marks=pytest.mark.requires_default,
+        ),
     ],
 )
 def test_model_nn_prediction(
@@ -109,7 +116,7 @@ def test_model_nn_prediction(
     model = request.getfixturevalue(model_name)
 
     params = ParametersWithExtrinsic(
-        mass_ratio=1.0,
+        mass_ratio=1.2,
         lambda_1=500.0,
         lambda_2=50.0,
         chi_1=0.1,
@@ -121,7 +128,7 @@ def test_model_nn_prediction(
         total_mass=2.8,
     )
 
-    teob_dict = params.teobresums_dict(model.dataset)
+    teob_dict = params.teobresums_dict(model.dataset, use_effective_frequencies=False)
     teob_dict["use_geometric_units"] = "no"
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
     teob_dict["srate_interp"] /= params.mass_sum_seconds
@@ -181,14 +188,19 @@ def test_model_nn_prediction(
     assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=tolerance_amp * 20)
 
 
+@pytest.mark.parametrize("seed", list(range(10)))
 @pytest.mark.parametrize(
     "model_name, tolerance_mismatch, tolerance_amp",
     [
         ("trained_model", TRAINED_MODEL_MAX_MISMATCH, 1e-1),
-        ("default_model", DEFAULT_MODEL_MAX_MISMATCH, 2e-3),
+        pytest.param(
+            "default_model",
+            DEFAULT_MODEL_MAX_MISMATCH,
+            2e-3,
+            marks=pytest.mark.requires_default,
+        ),
     ],
 )
-@pytest.mark.parametrize("seed", list(range(2)))
 def test_model_nn_prediction_random_extrinsic(
     request, model_name, tolerance_mismatch, tolerance_amp, seed
 ):
@@ -196,12 +208,12 @@ def test_model_nn_prediction_random_extrinsic(
 
     params = random_parameters(model, seed)
 
-    teob_dict = params.teobresums_dict(model.dataset)
+    teob_dict = params.teobresums_dict(model.dataset, use_effective_frequencies=False)
 
     teob_dict["use_geometric_units"] = "no"
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
     teob_dict["srate_interp"] /= params.mass_sum_seconds
-    teob_dict["df"] /= params.mass_sum_seconds
+    teob_dict["df"] /= params.mass_sum_seconds / 8.0
 
     # tweak initial frequency backward by a few samples
     # this is needed because of a bug in TEOBResumS
@@ -209,7 +221,7 @@ def test_model_nn_prediction_random_extrinsic(
     # at the beginning of integration
     # TODO remove this once the TEOB bug is fixed
 
-    n_additional = 256
+    n_additional = 128
     f_0 = teob_dict["initial_frequency"]
     delta_f = teob_dict["df"]
     new_f0 = f_0 - delta_f * n_additional
@@ -262,5 +274,52 @@ def random_parameters(model: Model, seed: int) -> ParametersWithExtrinsic:
         chi_2=intrinsic_params.chi_2,
         distance_mpc=10 ** param_generator.rng.uniform(-1, 4),
         inclination=param_generator.rng.uniform(-np.pi, np.pi),
-        total_mass=param_generator.rng.uniform(2.5, 4),
+        total_mass=param_generator.rng.uniform(2.0, 4.0),
     )
+
+
+@pytest.mark.parametrize(
+    "param_name, value",
+    [
+        ("mass_ratio", 4),
+        ("lambda_1", 0.0),
+        ("lambda_2", 6000.0),
+        ("chi_1", 2.0),
+        ("chi_2", 2.0),
+        ("total_mass", 5.0),
+    ],
+)
+def test_parameters_out_of_bounds_error(trained_model, param_name, value):
+
+    freqs = np.linspace(20.0, 2048.0)
+
+    with pytest.raises(ValueError):
+        params = ParametersWithExtrinsic(
+            mass_ratio=2.0,
+            lambda_1=500,
+            lambda_2=400,
+            chi_1=0.1,
+            chi_2=-0.1,
+            distance_mpc=10,
+            inclination=0.5,
+            total_mass=2.8,
+        )
+        setattr(params, param_name, value)
+        trained_model.predict(freqs, params)
+
+
+@pytest.mark.parametrize("total_mass", [2.0, 4.0])
+def test_bounds_of_mass_range_work(trained_model, total_mass):
+    freqs = np.linspace(20.0, 2048.0)
+    params = ParametersWithExtrinsic(
+        mass_ratio=2.0,
+        lambda_1=500,
+        lambda_2=400,
+        chi_1=0.1,
+        chi_2=-0.1,
+        distance_mpc=10,
+        inclination=0.5,
+        total_mass=total_mass,
+    )
+
+    trained_model.predict(freqs, params)
