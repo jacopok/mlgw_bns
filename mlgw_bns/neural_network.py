@@ -96,7 +96,7 @@ class Hyperparameters:
             "hidden_layer_sizes": self.hidden_layer_sizes,
             "activation": self.activation,
             "alpha": self.alpha,
-            "batch_size": self.batch_size,
+            "batch_size": min(self.batch_size, self.n_train),
             "learning_rate_init": self.learning_rate_init,
             "tol": self.tol,
             "validation_fraction": self.validation_fraction,
@@ -421,4 +421,6 @@ def best_trial_under_n(
         key=accuracy,
     )[0]
 
-    return Hyperparameters.from_frozen_trial(best_trial)
+    hyper = Hyperparameters.from_frozen_trial(best_trial)
+    hyper.n_train = training_number
+    return hyper
