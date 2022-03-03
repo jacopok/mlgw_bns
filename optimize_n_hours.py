@@ -6,7 +6,8 @@ if __name__ == "__main__":
         m = Model("optimization_dataset")
         m.load()
     except FileNotFoundError:
-        m.generate(512, 1 << 14)
+        m.generate(512, 1 << 15, None)
+        m.save()
     ho = HyperparameterOptimization(m)
 
     n_hours_before = ho.total_training_time().total_seconds() / 3600
