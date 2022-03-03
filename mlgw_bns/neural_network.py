@@ -120,10 +120,10 @@ class Hyperparameters:
                 Upper bound for the attribute :attr:`n_train`.
         """
 
-        n_layers = trial.suggest_int("n_layers", 2, 4)
+        n_layers = trial.suggest_int("n_layers", 1, 4)
 
         layers = tuple(
-            trial.suggest_int(f"size_layer_{i}", 10, 100) for i in range(n_layers)
+            trial.suggest_int(f"size_layer_{i}", 10, 200) for i in range(n_layers)
         )
 
         return cls(
