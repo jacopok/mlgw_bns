@@ -331,6 +331,16 @@ class HyperparameterOptimization:
         return best_trial_under_n(best_trials, training_number)
 
     def save_best_trials_to_file(self, filename: str = "best_trials") -> None:
+        """Save the best trials obtained so far in the optimization to the file
+        "filename".pkl.
+
+        The best trials are obtained as ``self.study.best_trials``.
+
+        Parameters
+        ----------
+        filename : str, optional
+            Filename to save to, by default "best_trials"
+        """
         joblib.dump(self.study.best_trials, f"{filename}.pkl")
 
     def total_training_time(self) -> datetime.timedelta:
