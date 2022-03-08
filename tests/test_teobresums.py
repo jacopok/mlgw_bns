@@ -6,43 +6,6 @@ from mlgw_bns.dataset_generation import ParameterSet
 from mlgw_bns.model import Model, ParametersWithExtrinsic
 
 
-def test_teob_generator(dataset, teob_generator):
-    params = ParametersWithExtrinsic(
-        mass_ratio=1.0,
-        lambda_1=500.0,
-        lambda_2=50.0,
-        chi_1=0.1,
-        chi_2=-0.1,
-        distance_mpc=1.0,
-        inclination=0.0,
-        reference_phase=0.0,
-        time_shift=0.0,
-        total_mass=2.8,
-    )
-
-    f_generator, waveform = teob_generator.effective_one_body_waveform(
-        params.intrinsic(dataset)
-    )
-
-    teob_dict = params.teobresums_dict(dataset)
-    assert teob_dict == params.intrinsic(dataset).teobresums()
-
-    n_additional = 256
-    f_0 = teob_dict["initial_frequency"]
-    delta_f = teob_dict["df"]
-    new_f0 = f_0 - delta_f * n_additional
-    teob_dict["initial_frequency"] = new_f0
-
-    f_eobrun, hpr, hpi, _, _ = EOBRunPy(teob_dict)
-    f_eobrun, hpr2, hpi2, _, _ = EOBRunPy(teob_dict)
-
-    assert np.allclose(f_generator, f_eobrun[n_additional:])
-    assert np.allclose(hpr, hpr2)
-    assert np.allclose(hpi, hpi2)
-
-    assert np.allclose(waveform, (hpr - 1j * hpi)[n_additional:])
-
-
 def test_geometric_units_normalization(dataset, teob_generator):
 
     params = ParametersWithExtrinsic(
