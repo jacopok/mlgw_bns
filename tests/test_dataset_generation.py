@@ -76,11 +76,11 @@ def test_random_parameter_generation(dataset):
 
 def test_generated_waveform_length(variable_parameters, teob_generator):
 
-    freq, waveform = teob_generator.effective_one_body_waveform(variable_parameters)
+    freq, amp, phi = teob_generator.effective_one_body_waveform(variable_parameters)
 
     dset = variable_parameters.dataset
 
-    assert len(freq) == len(waveform)
+    assert len(freq) == len(amp) == len(phi)
 
     assert (
         len(freq)
@@ -142,7 +142,7 @@ def test_changing_parameter_generation_ranges(dataset):
 
 def test_uniform_frequencies_match_with_eob(variable_parameters, teob_generator):
 
-    freq, waveform = teob_generator.effective_one_body_waveform(variable_parameters)
+    freq, _, _ = teob_generator.effective_one_body_waveform(variable_parameters)
 
     variable_parameters.dataset.multibanding = False
 
@@ -190,12 +190,12 @@ def test_true_waveforms_in_validation(dataset, parameters):
     waveforms = dataset.generate_waveforms_from_params(param_set)
     cartesian_wf_from_polar = waveforms.amplitudes[0] * np.exp(1j * waveforms.phases[0])
 
-    f, cartesian_wf_direct = dataset.waveform_generator.effective_one_body_waveform(
+    f, amp_direct, phi_direct = dataset.waveform_generator.effective_one_body_waveform(
         parameters, frequencies=dataset.frequencies
     )
 
-    assert np.allclose(abs(cartesian_wf_direct), abs(cartesian_wf_from_polar))
+    assert np.allclose(amp_direct, abs(cartesian_wf_from_polar))
     assert np.allclose(
-        np.unwrap(np.angle(cartesian_wf_direct)) - np.angle(cartesian_wf_direct[0]),
+        phi_direct,
         np.unwrap(np.angle(cartesian_wf_from_polar)),
     )

@@ -3,13 +3,13 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from .dataset_generation import Dataset
 
+from .data_management import FDWaveforms
 from .dataset_generation import (
-    ParameterGenerator,
     BarePostNewtonianGenerator,
+    ParameterGenerator,
     ParameterSet,
     WaveformParameters,
 )
-from .data_management import FDWaveforms
 
 
 class IndexedWaveformParameters(WaveformParameters):

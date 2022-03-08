@@ -119,7 +119,7 @@ class WaveformGenerator(ABC):
     @abstractmethod
     def effective_one_body_waveform(
         self, params: "WaveformParameters", frequencies: Optional[list[float]] = None
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         r"""Waveform computed according to the comparatively slower
         effective-one-body method.
 
@@ -137,10 +137,14 @@ class WaveformGenerator(ABC):
         frequencies : np.ndarray
                 Frequencies at which the waveform is given, in natural units:
                 the quantity here is :math:`Mf` (with :math:`G = c = 1`).
-        cartesian_waveform : np.ndarray
-                Cartesian form of the plus-polarized waveform.
+        amplitude : np.ndarray
+                Amplitude of the plus-polarized waveform.
                 The normalization for the amplitude is the same as discussed
                 in :func:`post_newtonian_amplitude`.
+        phase : np.ndarray
+                Phase of the plus-polarized waveform,
+                in radians, given as a continuously-varying array
+                (so, not constrained between 0 and 2pi).
         """
 
     def generate_residuals(
@@ -178,12 +182,9 @@ class WaveformGenerator(ABC):
                 Amplitude residuals and phase residuals.
         """
 
-        (
-            frequencies_eob,
-            waveform_eob,
-        ) = self.effective_one_body_waveform(params, frequencies)
-
-        amplitude_eob, phase_eob = phase_unwrapping(waveform_eob)
+        (frequencies_eob, amplitude_eob, phase_eob) = self.effective_one_body_waveform(
+            params, frequencies
+        )
 
         if downsampling_indices:
             amp_indices, phi_indices = downsampling_indices
@@ -245,7 +246,7 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
 
     def effective_one_body_waveform(
         self, params: "WaveformParameters", frequencies: Optional[list[float]] = None
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         r"""Generate an EOB waveform with TEOB.
 
         Examples
@@ -253,7 +254,7 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         >>> from EOBRun_module import EOBRunPy
         >>> tg = TEOBResumSGenerator(EOBRunPy)
         >>> p = WaveformParameters(1, 300, 300, .3, -.3, Dataset(20., 4096.))
-        >>> f, waveform = tg.effective_one_body_waveform(p)
+        >>> f, amp, phi = tg.effective_one_body_waveform(p)
         """
 
         par_dict: dict = params.teobresums()
@@ -296,7 +297,9 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         waveform = (rhpf - 1j * ihpf)[to_slice]
         # waveform = rhpf - 1j * ihpf
 
-        return (f_spa, waveform)
+        amplitude, phase = phase_unwrapping(waveform)
+
+        return (f_spa, amplitude, phase)
 
 
 @dataclass
@@ -1137,10 +1140,9 @@ class Dataset:
         phis = []
 
         for par in tqdm(waveform_param_list, unit="waveforms"):
-            _, cartesian_wf = self.waveform_generator.effective_one_body_waveform(
+            _, amp, phi = self.waveform_generator.effective_one_body_waveform(
                 par, list(self.frequencies)
             )
-            amp, phi = phase_unwrapping(cartesian_wf)
             amps.append(amp[amp_indices])
             phis.append(phi[phi_indices])
 
