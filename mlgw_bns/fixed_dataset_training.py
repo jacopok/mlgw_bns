@@ -13,12 +13,31 @@ from .data_management import FDWaveforms
 
 
 class IndexedWaveformParameters(WaveformParameters):
+    """A simple subclass of WaveformParameters
+    including an extra index, used to communicate
+    information between a FixedParameterGenerator
+    and a FixedWaveformGenerator.
+    """
+
     def __init__(self, index: int, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.index = index
 
 
 class FixedParameterGenerator(ParameterGenerator):
+    """Generate waveform parameters by going through a fixed list.
+
+    Parameters
+    ----------
+    dataset : Dataset
+        Reference dataset.
+    parameter_set : ParameterSet
+        The parameters which will be sequentially generated.
+    seed : Optional[int], optional
+        RNG seed - included for compatibility, do not use.
+        By default None.
+    """
+
     def __init__(
         self,
         dataset: "Dataset",
@@ -39,7 +58,7 @@ class FixedParameterGenerator(ParameterGenerator):
 
 class FixedWaveformGenerator(BarePostNewtonianGenerator):
     def __init__(self, waveforms: FDWaveforms):
-        pass
+        self.waveforms = waveforms
 
     def effective_one_body_waveform(self, params):
         pass
