@@ -258,7 +258,7 @@ class ValidateModel:
         waveform_1: np.ndarray,
         waveform_2: np.ndarray,
         frequencies: Optional[np.ndarray] = None,
-        max_delta_t: float = 0.05,
+        max_delta_t: float = 0.07,
     ) -> float:
         r"""Compute the mismatch between two Cartesian waveforms.
 
