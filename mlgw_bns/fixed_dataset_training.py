@@ -1,7 +1,10 @@
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from .dataset_generation import Dataset
+
+import numpy as np
 
 from .data_management import FDWaveforms
 from .dataset_generation import (
@@ -10,6 +13,7 @@ from .dataset_generation import (
     ParameterSet,
     WaveformParameters,
 )
+from .downsampling_interpolation import DownsamplingTraining
 
 
 class IndexedWaveformParameters(WaveformParameters):
@@ -19,9 +23,16 @@ class IndexedWaveformParameters(WaveformParameters):
     and a FixedWaveformGenerator.
     """
 
-    def __init__(self, index: int, *args, **kwargs):
+    def __init__(
+        self,
+        index: int,
+        parameter_generator: "FixedParameterGenerator",
+        *args,
+        **kwargs
+    ):
         super().__init__(*args, **kwargs)
         self.index = index
+        self.parameter_generator = parameter_generator
 
 
 class FixedParameterGenerator(ParameterGenerator):
@@ -46,19 +57,63 @@ class FixedParameterGenerator(ParameterGenerator):
     ):
         super().__init__(dataset=dataset, seed=seed)
         waveform_parameters = parameter_set.waveform_parameters(dataset)
+        self.reset()
 
-        self.waveform_parameters = [
-            IndexedWaveformParameters(index, *params, dataset)
+    def reset(self):
+        self.waveform_parameters: Iterable[IndexedWaveformParameters] = (
+            IndexedWaveformParameters(index, self, *params, self.dataset)
             for index, params in enumerate(parameter_set.parameter_array)
-        ]
+        )
 
     def __next__(self):
         return next(self.waveform_parameters)
 
 
 class FixedWaveformGenerator(BarePostNewtonianGenerator):
-    def __init__(self, waveforms: FDWaveforms):
-        self.waveforms = waveforms
+    """Generate waveforms corresponding to
 
-    def effective_one_body_waveform(self, params):
-        pass
+    Parameters
+    ----------
+    BarePostNewtonianGenerator : _type_
+        _description_
+    """
+
+    def __init__(
+        self,
+        frequencies: np.ndarray,
+        waveforms: FDWaveforms,
+        parameter_generator: FixedParameterGenerator,
+    ):
+        self.frequencies = frequencies
+        self.waveforms = waveforms
+        self.parameter_generator = parameter_generator
+
+    def effective_one_body_waveform(  # type: ignore[override]
+        self,
+        params: IndexedWaveformParameters,  # type: ignore[override]
+        frequencies: Optional[list[float]] = None,
+    ):
+
+        if params.parameter_generator is not self.parameter_generator:
+            raise NotImplementedError(
+                "The parameter generator corresponding to these "
+                "waveforms is not the same one which generated these parameters."
+            )
+
+        if frequencies is None:
+            return (
+                self.frequencies,
+                self.waveforms.amplitudes[params.index],
+                self.waveforms.phases[params.index],
+            )
+
+        resampled_amplitudes = DownsamplingTraining.resample(
+            self.frequencies,
+            np.array(frequencies),
+            self.waveforms.amplitudes[params.index],
+        )
+        resampled_phases = DownsamplingTraining.resample(
+            self.frequencies, np.array(frequencies), self.waveforms.phases[params.index]
+        )
+
+        return frequencies, resampled_amplitudes, resampled_phases
