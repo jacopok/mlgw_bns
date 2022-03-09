@@ -70,13 +70,7 @@ class FixedParameterGenerator(ParameterGenerator):
 
 
 class FixedWaveformGenerator(BarePostNewtonianGenerator):
-    """Generate waveforms corresponding to
-
-    Parameters
-    ----------
-    BarePostNewtonianGenerator : _type_
-        _description_
-    """
+    """Generate waveforms from a given dataset."""
 
     def __init__(
         self,
@@ -116,7 +110,7 @@ class FixedWaveformGenerator(BarePostNewtonianGenerator):
             self.frequencies, np.array(frequencies), self.waveforms.phases[params.index]
         )
 
-        return frequencies, resampled_amplitudes, resampled_phases
+        return np.array(frequencies), resampled_amplitudes, resampled_phases
 
 
 def make_fixed_generation_pair(
@@ -125,18 +119,16 @@ def make_fixed_generation_pair(
     waveforms: FDWaveforms,
     reference_mass: float = Dataset.total_mass,
 ) -> tuple[FixedParameterGenerator, FixedWaveformGenerator]:
-    """Make a fixed parameter and waveform generator pair:
+    """Make a fixed parameter and waveform generator pair.
 
     Parameters
     ----------
     frequencies : np.ndarray
-        _description_
+        In Hz.
     parameter_set : ParameterSet
-        _description_
     waveforms : FDWaveforms
-        _description_
     reference_mass : float, optional
-        _description_, by default Dataset.total_mass
+        Reference mass in solar masses, by default Dataset.total_mass
 
     Returns
     -------
@@ -144,12 +136,19 @@ def make_fixed_generation_pair(
         _description_
     """
 
-    dataset = Dataset(initial_frequency_hz=frequencies[0], srate_hz=2 * frequencies[-1])
+    dataset = Dataset(
+        initial_frequency_hz=frequencies[0],
+        srate_hz=2 * frequencies[-1],
+        parameter_generator_class=FixedParameterGenerator,
+    )
     dataset.total_mass = reference_mass
-
     parameter_generator = FixedParameterGenerator(dataset, parameter_set)
 
-    return (
-        parameter_generator,
-        FixedWaveformGenerator(frequencies, waveforms, parameter_generator),
+    waveform_generator = FixedWaveformGenerator(
+        frequencies, waveforms, parameter_generator
     )
+
+    dataset.waveform_generator = waveform_generator
+    dataset.parameter_generator = parameter_generator
+
+    return (parameter_generator, waveform_generator)
