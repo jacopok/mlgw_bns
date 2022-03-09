@@ -7,6 +7,4 @@ The code can be found on the `github page <https://github.com/jacopok/mlgw_bns>`
 """
 
 
-from .hyperparameter_optimization import HyperparameterOptimization
 from .model import Model, ParametersWithExtrinsic
-from .model_validation import ValidateModel
