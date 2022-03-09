@@ -717,8 +717,10 @@ class Dataset:
             the class as opposed to an instance since the parameter generator
             needs to reference the dataset and therefure must be created after it.
             Defaults to UniformParameterGenerator.
-    parameter_generator_kwargs : dict[str, Any]
-            Arguments for the creation of the parameter generator.
+    parameter_generator : Optional[ParameterGenerator]
+            Certain parameter generators should not be regenerated each time;
+            if this is the case, then pass the parameter generator here.
+            Defaults to None.
     seed : int
             Seed for the random number generator used when generating
             waveforms for the training.
@@ -758,6 +760,7 @@ class Dataset:
         waveform_generator: WaveformGenerator = BarePostNewtonianGenerator(),
         parameter_generator_class: Type[ParameterGenerator] = UniformParameterGenerator,
         parameter_ranges: ParameterRanges = ParameterRanges(),
+        parameter_generator: Optional[ParameterGenerator] = None,
         seed: int = 42,
         multibanding: bool = True,
         f_pivot_hz: float = 40.0,
@@ -780,6 +783,8 @@ class Dataset:
         self.waveform_generator = waveform_generator
         self.parameter_generator_class = parameter_generator_class
         self.parameter_ranges = parameter_ranges
+
+        self.parameter_generator = parameter_generator
 
         self.seed_sequence = np.random.default_rng(seed=seed)
 
@@ -1018,7 +1023,10 @@ class Dataset:
         phi_residuals = np.empty((size, phi_length))
         parameter_array = np.empty((size, WaveformParameters.number_of_parameters))
 
-        parameter_generator = self.make_parameter_generator()
+        if self.parameter_generator is None:
+            parameter_generator = self.make_parameter_generator()
+        else:
+            parameter_generator = self.parameter_generator
 
         for i in tqdm(range(size), unit="residuals"):
             params = next(parameter_generator)
