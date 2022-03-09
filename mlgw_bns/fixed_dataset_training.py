@@ -3,14 +3,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Optional
 
-if TYPE_CHECKING:
-    from .dataset_generation import Dataset
-
 import numpy as np
 
 from .data_management import FDWaveforms
 from .dataset_generation import (
     BarePostNewtonianGenerator,
+    Dataset,
     ParameterGenerator,
     ParameterSet,
     WaveformParameters,
@@ -58,13 +56,13 @@ class FixedParameterGenerator(ParameterGenerator):
         seed: Optional[int] = None,
     ):
         super().__init__(dataset=dataset, seed=seed)
-        waveform_parameters = parameter_set.waveform_parameters(dataset)
+        self.parameter_set = parameter_set
         self.reset()
 
     def reset(self):
         self.waveform_parameters: Iterable[IndexedWaveformParameters] = (
             IndexedWaveformParameters(index, self, *params, self.dataset)
-            for index, params in enumerate(parameter_set.parameter_array)
+            for index, params in enumerate(self.parameter_set.parameter_array)
         )
 
     def __next__(self):
@@ -119,3 +117,39 @@ class FixedWaveformGenerator(BarePostNewtonianGenerator):
         )
 
         return frequencies, resampled_amplitudes, resampled_phases
+
+
+def make_fixed_generation_pair(
+    frequencies: np.ndarray,
+    parameter_set: ParameterSet,
+    waveforms: FDWaveforms,
+    reference_mass: float = Dataset.total_mass,
+) -> tuple[FixedParameterGenerator, FixedWaveformGenerator]:
+    """Make a fixed parameter and waveform generator pair:
+
+    Parameters
+    ----------
+    frequencies : np.ndarray
+        _description_
+    parameter_set : ParameterSet
+        _description_
+    waveforms : FDWaveforms
+        _description_
+    reference_mass : float, optional
+        _description_, by default Dataset.total_mass
+
+    Returns
+    -------
+    tuple[FixedParameterGenerator, FixedWaveformGenerator]
+        _description_
+    """
+
+    dataset = Dataset(initial_frequency_hz=frequencies[0], srate_hz=2 * frequencies[-1])
+    dataset.total_mass = reference_mass
+
+    parameter_generator = FixedParameterGenerator(dataset, parameter_set)
+
+    return (
+        parameter_generator,
+        FixedWaveformGenerator(frequencies, waveforms, parameter_generator),
+    )
