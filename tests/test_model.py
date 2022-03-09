@@ -7,14 +7,14 @@ from mlgw_bns.model import Model, ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 
 DEFAULT_MODEL_MAX_MISMATCH = 1e-5
-TRAINED_MODEL_MAX_MISMATCH = 1.2e-2
+TRAINED_MODEL_MAX_MISMATCH = 1.5e-2
 
-# if the maximum mismatch is 1e-2,
+# if the maximum mismatch is 1.5e-2,
 # the average mismatch should be this many times
 # smaller than the maximum mismatch;
-# so, if this is 10 then the average
+# so, if this is 15 then the average
 # mismatch will need to be smaller than 1e-3
-AVERAGE_MISMATCH_REDUCTION_FACTOR = 10
+AVERAGE_MISMATCH_REDUCTION_FACTOR = 15
 
 
 def test_validating_model(generated_model):
