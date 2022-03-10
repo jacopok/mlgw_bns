@@ -7,6 +7,7 @@ import numpy as np
 
 from .data_management import FDWaveforms
 from .dataset_generation import (
+    SUN_MASS_SECONDS,
     BarePostNewtonianGenerator,
     Dataset,
     ParameterGenerator,
@@ -70,7 +71,17 @@ class FixedParameterGenerator(ParameterGenerator):
 
 
 class FixedWaveformGenerator(BarePostNewtonianGenerator):
-    """Generate waveforms from a given dataset."""
+    """Generate waveforms from a given dataset.
+
+    Parameters
+    ----------
+    frequencies: np.ndarray
+        In natural units.
+    waveforms: FDWaveforms
+        Reference waveforms.
+    parameter_generator: FixedParameterGenerator
+        Reference parameter generator.
+    """
 
     def __init__(
         self,
@@ -85,8 +96,10 @@ class FixedWaveformGenerator(BarePostNewtonianGenerator):
     def effective_one_body_waveform(  # type: ignore[override]
         self,
         params: IndexedWaveformParameters,  # type: ignore[override]
-        frequencies: Optional[list[float]] = None,
+        frequencies: Optional[np.ndarray] = None,
     ):
+
+        assert self.frequencies is not None
 
         if params.parameter_generator is not self.parameter_generator:
             raise NotImplementedError(
@@ -103,14 +116,14 @@ class FixedWaveformGenerator(BarePostNewtonianGenerator):
 
         resampled_amplitudes = DownsamplingTraining.resample(
             self.frequencies,
-            np.array(frequencies),
+            frequencies,
             self.waveforms.amplitudes[params.index],
         )
         resampled_phases = DownsamplingTraining.resample(
-            self.frequencies, np.array(frequencies), self.waveforms.phases[params.index]
+            self.frequencies, frequencies, self.waveforms.phases[params.index]
         )
 
-        return np.array(frequencies), resampled_amplitudes, resampled_phases
+        return frequencies, resampled_amplitudes, resampled_phases
 
 
 def make_fixed_generation_pair(
@@ -124,7 +137,7 @@ def make_fixed_generation_pair(
     Parameters
     ----------
     frequencies : np.ndarray
-        In Hz.
+        In natural units.
     parameter_set : ParameterSet
     waveforms : FDWaveforms
     reference_mass : float, optional
@@ -137,15 +150,17 @@ def make_fixed_generation_pair(
     """
 
     dataset = Dataset(
-        initial_frequency_hz=frequencies[0],
-        srate_hz=2 * frequencies[-1],
+        initial_frequency_hz=frequencies[0] / SUN_MASS_SECONDS / reference_mass,
+        srate_hz=2 * frequencies[-1] / SUN_MASS_SECONDS / reference_mass,
         parameter_generator_class=FixedParameterGenerator,
     )
     dataset.total_mass = reference_mass
     parameter_generator = FixedParameterGenerator(dataset, parameter_set)
 
     waveform_generator = FixedWaveformGenerator(
-        frequencies, waveforms, parameter_generator
+        frequencies,
+        waveforms,
+        parameter_generator,
     )
 
     dataset.waveform_generator = waveform_generator
