@@ -16,7 +16,7 @@ def fixed_generator_pair(dataset):
     gen = dataset.make_parameter_generator(seed=1)
     params = ParameterSet.from_parameter_generator(gen, 5)
     waveforms = dataset.generate_waveforms_from_params(params)
-    return make_fixed_generation_pair(dataset.frequencies_hz, params, waveforms)
+    return make_fixed_generation_pair(dataset.frequencies, params, waveforms)
 
 
 def test_fixed_generator_parameters(fixed_generator_pair):
@@ -28,12 +28,11 @@ def test_fixed_generator_parameters(fixed_generator_pair):
     assert isinstance(params.dataset.waveform_generator, FixedWaveformGenerator)
 
 
-@pytest.mark.xfail
 def test_fixed_generator_residuals(fixed_generator_pair):
     fixed_parameter_generator, fixed_waveform_generator = fixed_generator_pair
 
     dataset = fixed_parameter_generator.dataset
-    freqs, params, residuals = dataset.generate_residuals(5)
+    freqs, params, residuals = dataset.generate_residuals(5, flatten_phase=False)
 
     assert np.allclose(
         params.parameter_array, fixed_parameter_generator.parameter_set.parameter_array
