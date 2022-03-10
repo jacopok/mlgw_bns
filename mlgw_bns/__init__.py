@@ -7,7 +7,7 @@ The code can be found on the `github page <https://github.com/jacopok/mlgw_bns>`
 """
 try:
     from importlib import metadata
-except ModuleNotFoundError:
+except ImportError:
     # python <3.8 compatibility
     import importlib_metadata as metadata  # type: ignore
 
