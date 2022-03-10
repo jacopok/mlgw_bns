@@ -5,9 +5,14 @@ learning model on effective-one-body waveforms.
 
 The code can be found on the `github page <https://github.com/jacopok/mlgw_bns>`_.
 """
+try:
+    from importlib import metadata
+except ModuleNotFoundError:
+    # python <3.8 compatibility
+    import importlib_metadata as metadata  # type: ignore
 
-from importlib import metadata
 import toml  # type: ignore
+
 from .model import Model, ParametersWithExtrinsic
 
 try:
