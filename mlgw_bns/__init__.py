@@ -6,5 +6,11 @@ learning model on effective-one-body waveforms.
 The code can be found on the `github page <https://github.com/jacopok/mlgw_bns>`_.
 """
 
-
+from importlib import metadata
+import toml  # type: ignore
 from .model import Model, ParametersWithExtrinsic
+
+try:
+    __version__ = metadata.version(__package__)
+except metadata.PackageNotFoundError:
+    __version__ = toml.load("pyproject.toml")["tool"]["poetry"]["version"] + "dev"
