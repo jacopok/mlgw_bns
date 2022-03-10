@@ -56,6 +56,9 @@ class WaveformGenerator(ABC):
     and only override its :meth:`effective_one_body_waveform` method.
     """
 
+    def __init__(self):
+        self.frequencies: Optional[np.ndarray] = None
+
     @abstractmethod
     def post_newtonian_amplitude(
         self, params: "WaveformParameters", frequencies: np.ndarray
@@ -118,7 +121,7 @@ class WaveformGenerator(ABC):
 
     @abstractmethod
     def effective_one_body_waveform(
-        self, params: "WaveformParameters", frequencies: Optional[list[float]] = None
+        self, params: "WaveformParameters", frequencies: Optional[np.ndarray] = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         r"""Waveform computed according to the comparatively slower
         effective-one-body method.
@@ -127,7 +130,7 @@ class WaveformGenerator(ABC):
         ----------
         params : WaveformParameters
                 Parameters of the binary system for which to generate the waveform.
-        frequencies : list[float], optional
+        frequencies : np.ndarray, optional
                 Frequencies at which to compute the waveform, in natural units.
                 Defaults to None, which means the EOB generator will choose
                 the frequencies at which to compute the waveform.
@@ -150,7 +153,7 @@ class WaveformGenerator(ABC):
     def generate_residuals(
         self,
         params: "WaveformParameters",
-        frequencies: Optional[list[float]] = None,
+        frequencies: Optional[np.ndarray] = None,
         downsampling_indices: Optional[DownsamplingIndices] = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Compute the residuals of the :func:`effective_one_body_waveform`
@@ -164,7 +167,7 @@ class WaveformGenerator(ABC):
         ----------
         params : WaveformParameters
                 Parameters for which to compute the residuals.
-        frequencies : list[float], optional
+        frequencies : np.ndarray, optional
                 Frequencies at which to compute the residuals,
                 in natural units.
                 If this parameter is given, the downsampling_indices
@@ -229,7 +232,7 @@ class BarePostNewtonianGenerator(WaveformGenerator):
         return phase_5h_post_newtonian_tidal(params, frequencies)
 
     def effective_one_body_waveform(
-        self, params: "WaveformParameters", frequencies: Optional[list[float]] = None
+        self, params: "WaveformParameters", frequencies: Optional[np.ndarray] = None
     ):
         raise NotImplementedError(
             "This generator does not include the possibility "
@@ -242,10 +245,11 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
     TEOBResumS effective-one-body code"""
 
     def __init__(self, eobrun_callable: Callable[[dict], tuple[np.ndarray, ...]]):
+        super().__init__()
         self.eobrun_callable = eobrun_callable
 
     def effective_one_body_waveform(
-        self, params: "WaveformParameters", frequencies: Optional[list[float]] = None
+        self, params: "WaveformParameters", frequencies: Optional[np.ndarray] = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         r"""Generate an EOB waveform with TEOB.
 
@@ -278,7 +282,7 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         )
 
         if frequencies is not None:
-            frequencies = list(
+            frequencies_list = list(
                 np.insert(
                     frequencies,
                     0,
@@ -287,7 +291,7 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
             )
             par_dict.pop("df")
             par_dict["interp_freqs"] = "yes"
-            par_dict["freqs"] = frequencies
+            par_dict["freqs"] = frequencies_list
 
         f_spa, rhpf, ihpf, _, _ = self.eobrun_callable(par_dict)
 
@@ -823,10 +827,14 @@ class Dataset:
         """Frequency array corresponding to this dataset,
         in natural units.
         """
+
         return self._frequencies()
 
     @lru_cache(maxsize=1)
     def _frequencies(self):
+        if self.waveform_generator.frequencies is not None:
+            return self.waveform_generator.frequencies
+
         return self.hz_to_natural_units(self.frequencies_hz)
 
     @property
@@ -838,6 +846,10 @@ class Dataset:
 
     @lru_cache(maxsize=1)
     def _frequencies_hz(self):
+
+        if self.waveform_generator.frequencies is not None:
+            return self.natural_units_to_hz(self.waveform_generator.frequencies)
+
         if self.multibanding:
             return reduced_frequency_array(
                 self.effective_initial_frequency_hz,
@@ -925,6 +937,21 @@ class Dataset:
             Frequency in natural units.
         """
         return frequency_hz * self.mass_sum_seconds
+
+    def natural_units_to_hz(self, frequency: Union[float, np.ndarray]):
+        """Utility function: convert Hz to natural units,
+        using the reference total mass of the dataset.
+
+        Parameters
+        ----------
+        frequency : Union[float, np.ndarray]
+
+        Returns
+        -------
+        frequency_hz
+            Frequency in Hz.
+        """
+        return frequency / self.mass_sum_seconds
 
     def taylor_f2_prefactor(self, eta: float) -> float:
         """Prefactor by which to multiply the waveform
@@ -1035,7 +1062,7 @@ class Dataset:
                 amp_residuals[i],
                 phi_residuals[i],
             ) = self.waveform_generator.generate_residuals(
-                params, list(self.frequencies), downsampling_indices
+                params, self.frequencies, downsampling_indices
             )
 
             parameter_array[i] = params.array
@@ -1149,7 +1176,7 @@ class Dataset:
 
         for par in tqdm(waveform_param_list, unit="waveforms"):
             _, amp, phi = self.waveform_generator.effective_one_body_waveform(
-                par, list(self.frequencies)
+                par, self.frequencies
             )
             amps.append(amp[amp_indices])
             phis.append(phi[phi_indices])
