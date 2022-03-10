@@ -1196,15 +1196,7 @@ def expand_frequency_range(
     m_min, m_max = mass_range
     assert m_min <= m_max
 
-    # return (
-    #     initial_frequency * (reference_mass / m_max),
-    #     final_frequency * (reference_mass / m_min),
-    # )
     return (
         initial_frequency * (m_min / reference_mass),
         final_frequency * (m_max / reference_mass),
     )
-    # return (
-    #     initial_frequency * (2.5 / 2.8),
-    #     final_frequency * (2.8 / 2.5),
-    # )
