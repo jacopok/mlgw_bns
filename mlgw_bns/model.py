@@ -441,7 +441,9 @@ class Model:
 
         self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
         self.pca_data = PrincipalComponentData.from_file(file_arrays)
-        self.training_parameters = ParameterSet.from_file(file_arrays)
+        self.training_parameters = ParameterSet.from_file(
+            file_arrays, ignore_warnings=ignore_warnings
+        )
         if self.downsampling_indices is None or self.pca_data is None:
             raise FileNotFoundError
 
