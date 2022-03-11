@@ -54,7 +54,7 @@ class DownsamplingTraining(ABC):
     def validate_downsampling(
         self, training_dataset_size: int, validating_dataset_size: int
     ) -> tuple[list[float], list[float]]:
-        """Check that the downsampling is working by looking at the
+        r"""Check that the downsampling is working by looking at the
         reconstruction error on a fresh dataset.
 
         Parameters
