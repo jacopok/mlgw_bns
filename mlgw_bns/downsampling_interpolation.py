@@ -39,11 +39,12 @@ class DownsamplingTraining(ABC):
             Defaults to ``1e-6``.
     """
 
-    def __init__(self, dataset: Dataset, degree: int = 3, tol: float = 1e-6):
+    degree: int = 3
+
+    def __init__(self, dataset: Dataset, tol: float = 1e-6):
 
         self.dataset = dataset
         self.tol = tol
-        self.degree = degree
 
     @abstractmethod
     def train(self, training_dataset_size: int) -> DownsamplingIndices:
@@ -88,8 +89,9 @@ class DownsamplingTraining(ABC):
 
         return amp_validation, phi_validation
 
+    @classmethod
     def resample(
-        self, x_ds: np.ndarray, new_x: np.ndarray, y_ds: np.ndarray
+        cls, x_ds: np.ndarray, new_x: np.ndarray, y_ds: np.ndarray
     ) -> np.ndarray:
         """Resample a function :math:`y(x)` from its values
         at certain points :math:`y_{ds} = y(x_{ds})`.
@@ -116,7 +118,7 @@ class DownsamplingTraining(ABC):
             )
 
         return interpolate.splev(
-            new_x, tck=interpolate.splrep(x_ds, y_ds, s=0, k=self.degree), der=0
+            new_x, tck=interpolate.splrep(x_ds, y_ds, s=0, k=cls.degree), der=0
         )
 
     def validate_indices(
