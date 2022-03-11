@@ -7,12 +7,12 @@ from typing import IO, TYPE_CHECKING, Optional, Union
 
 import joblib  # type: ignore
 import numpy as np
-import optuna
 import pkg_resources
 from sklearn.neural_network import MLPRegressor  # type: ignore
 from sklearn.preprocessing import StandardScaler  # type: ignore
 
 if TYPE_CHECKING:
+    import optuna
     import torch  # type: ignore
     import torch.utils.data as Data  # type: ignore
     from torch.autograd import Variable  # type: ignore
@@ -108,7 +108,7 @@ class Hyperparameters:
         }
 
     @classmethod
-    def from_trial(cls, trial: optuna.Trial, n_train_max: int):
+    def from_trial(cls, trial: "optuna.Trial", n_train_max: int):
         """Generate the hyperparameter set starting from an
         :class:`optuna.Trial`.
 
@@ -146,7 +146,7 @@ class Hyperparameters:
         )
 
     @classmethod
-    def from_frozen_trial(cls, frozen_trial: optuna.trial.FrozenTrial):
+    def from_frozen_trial(cls, frozen_trial: "optuna.trial.FrozenTrial"):
 
         params = frozen_trial.params
         n_layers = params.pop("n_layers")
@@ -367,7 +367,7 @@ class TorchNetwork(NeuralNetwork):
         return cls(*joblib.load(filename))
 
 
-def retrieve_best_trials_list() -> list[optuna.trial.FrozenTrial]:
+def retrieve_best_trials_list() -> "list[optuna.trial.FrozenTrial]":
     """Read the list of best trials which is provided
     with the package.
 
@@ -392,7 +392,7 @@ def retrieve_best_trials_list() -> list[optuna.trial.FrozenTrial]:
 
 
 def best_trial_under_n(
-    best_trials: list[optuna.trial.FrozenTrial], training_number: int
+    best_trials: "list[optuna.trial.FrozenTrial]", training_number: int
 ) -> Hyperparameters:
     """Utility function to retrieve
     a set of hyperparameters starting from a list of optimization trials.

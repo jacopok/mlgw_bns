@@ -9,7 +9,6 @@ from typing import IO, ClassVar, Optional, Type, Union
 import h5py
 import joblib  # type: ignore
 import numpy as np
-import optuna
 import pkg_resources
 from numba import njit  # type: ignore
 
