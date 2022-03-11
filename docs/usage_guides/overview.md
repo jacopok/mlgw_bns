@@ -64,4 +64,37 @@ only checks for files with the given name (in the current folder).
 The hyperparameters used here are those provided with the package; 
 to perform an optimization see [](hyperparameter_optimization).
 
+### The parameter ranges for a new model
 
+These may change as the package is updated: the current ranges should be
+
+- `total_mass`: between 2 and 4 solar masses
+- `mass_ratio`: between 1 and 3
+- `lambda_1` (tidal polarizability of the larger star): between 5 and 5000
+- `lambda_2`: between 5 and 5000
+- `chi_1` (aligned spin of the larger star): between -0.5 and 0.5
+- `chi_2`: between -0.5 and 0.5
+- frequencies: between 20 and 2048 Hz
+
+These can be checked, once a `Model` object is initialized as described before,
+by looking at: 
+```python 
+>>> model = Model.default()
+>>> print(model.parameter_ranges)
+ParameterRanges(mass_range=array([2., 4.]), q_range=array([1., 3.]), lambda1_range=array([   5., 5000.]), lambda2_range=array([   5., 5000.]), chi1_range=array([-0.5,  0.5]), chi2_range=array([-0.5,  0.5]))
+```
+for the first six,
+```python
+>>> print(model.dataset.initial_frequency_hz)
+20.
+```
+for the initial frequency and 
+```python
+>>> print(model.dataset.srate_hz / 2) 
+2048.
+```
+for the maximum (Nyquist) frequency.
+
+The actual array of possible frequencies, `model.dataset.frequencies_hz` 
+(or `model.dataset.frequencies` in natural units)
+is wider, to accomodate the possibility of changing the total mass.
