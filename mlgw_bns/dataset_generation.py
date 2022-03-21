@@ -721,6 +721,10 @@ class Dataset:
             the class as opposed to an instance since the parameter generator
             needs to reference the dataset and therefure must be created after it.
             Defaults to UniformParameterGenerator.
+    parameter_ranges: ParameterRanges
+            Ranges for the parameters to be generated.
+            Defaults to ParameterRanges(), which will use the
+            parameters defined as defaults in that class.
     parameter_generator : Optional[ParameterGenerator]
             Certain parameter generators should not be regenerated each time;
             if this is the case, then pass the parameter generator here.
