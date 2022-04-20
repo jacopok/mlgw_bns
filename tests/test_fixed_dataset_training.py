@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from mlgw_bns import Model
 from mlgw_bns.dataset_generation import ParameterSet, UniformParameterGenerator
 from mlgw_bns.fixed_dataset_training import (
     FixedParameterGenerator,
@@ -71,3 +72,8 @@ def test_arbitrary_index_waveform_recovery(fixed_generator_pair):
     assert np.allclose(freq1, freqs)
     assert np.allclose(amp1, amp2)
     assert np.allclose(phase1, phase2)
+
+def test_training_model_on_fixed_data(fixed_generator_pair):
+    fixed_parameter_generator, fixed_waveform_generator = fixed_generator_pair
+
+    model = Model(waveform_generator=fixed_waveform_generator)
