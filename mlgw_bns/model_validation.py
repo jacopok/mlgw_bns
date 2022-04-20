@@ -193,7 +193,7 @@ class ValidateModel:
             the EOB waveforms to the PN baseline.
             Defaults to False.
         seed : int, optional
-            Seed to give to the parameter generation. 
+            Seed to give to the parameter generation.
             Defaults to None.
 
         Returns

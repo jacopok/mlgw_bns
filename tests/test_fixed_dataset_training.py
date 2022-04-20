@@ -73,6 +73,7 @@ def test_arbitrary_index_waveform_recovery(fixed_generator_pair):
     assert np.allclose(amp1, amp2)
     assert np.allclose(phase1, phase2)
 
+
 def test_training_model_on_fixed_data(fixed_generator_pair):
     fixed_parameter_generator, fixed_waveform_generator = fixed_generator_pair
 
