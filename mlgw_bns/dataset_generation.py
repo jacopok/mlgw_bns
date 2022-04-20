@@ -980,7 +980,7 @@ class Dataset:
                 Mass ratio of the binary
         total_mass : Optional[float]
                 Total mass of the binary.
-                Defaults to None, in which case the `total_mass` 
+                Defaults to None, in which case the `total_mass`
                 attribute of the Dataset will be used.
         """
 
