@@ -168,6 +168,10 @@ class Model:
             the dimensionality of the dataset.
             By default 30, which is high enough to reach extremely good
             reconstruction accuracy (mismatches smaller than :math:`10^{-8}`).
+    multibanding : bool
+            Whether to use a multibanded frequency array. 
+            See the multibanding module for more details.
+            Defaults to True.
     waveform_generator : WaveformGenerator, optional
             Generator for the waveforms to be used in the training;
             by default None, in which case the system attempts to import
@@ -180,6 +184,14 @@ class Model:
     nn_kind : Type[NeuralNetwork]
             Neural network implementation to use,
             defaults to :class:`SklearnNetwork`.
+    parameter_ranges : ParameterRanges
+            Ranges for the parameters to pass to the parameter generator.
+            Defaults to `ParameterRanges()`; see the defaults in that class.
+    parameter_generator : Optional[ParameterGenerator]
+            Certain parameter generators should not be regenerated each time;
+            if this is the case, then pass the parameter generator here.
+            Defaults to None.
+
     """
 
     def __init__(
@@ -193,6 +205,7 @@ class Model:
         downsampling_training: Optional[DownsamplingTraining] = None,
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
         parameter_ranges: ParameterRanges = ParameterRanges(),
+        parameter_generator : Optional[ParameterGenerator] = None,
     ):
 
         self.filename = filename
@@ -756,9 +769,8 @@ class Model:
 
         Parameters
         ----------
-        frequencies : Union[float, np.ndarray]
-            One frequency or an array of them, for which to compute
-            the time to merger.
+        frequency : float
+            frequency for which to compute the time to merger.
         params : ParametersWithExtrinsic
             Parameters of the CBC.
         delta_f: float, optional
