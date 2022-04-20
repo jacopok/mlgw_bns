@@ -71,7 +71,7 @@ class PrincipalComponentAnalysisModel:
 
         Parameters
         ----------
-        dataset : np.ndarray
+        data : np.ndarray
                 Data to fit. Does not need to have zero mean.
                 Should have shape
                 ``(number_of_datapoints, number_of_dimensions)``
