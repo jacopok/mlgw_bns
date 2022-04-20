@@ -32,8 +32,8 @@ def test_waveform_parameters_teobresums_output(parameters):
     """Test the output of a dictionary compatible with teobresums."""
     for key, val in {
         "q": 1,
-        "Lambda1": 300,
-        "Lambda2": 300,
+        "LambdaAl2": 300,
+        "LambdaBl2": 300,
         "chi1": 0.3,
         "chi2": 0.3,
         "M": 2.8,

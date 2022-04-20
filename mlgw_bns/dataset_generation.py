@@ -434,8 +434,8 @@ class WaveformParameters:
 
         return {
             "q": self.mass_ratio,
-            "Lambda1": self.lambda_1,
-            "Lambda2": self.lambda_2,
+            "LambdaAl2": self.lambda_1,
+            "LambdaBl2": self.lambda_2,
             "chi1": self.chi_1,
             "chi2": self.chi_2,
             "M": self.dataset.total_mass,
