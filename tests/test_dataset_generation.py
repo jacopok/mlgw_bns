@@ -44,7 +44,7 @@ def test_waveform_parameters_teobresums_output(parameters):
         "domain": 1,
         "srate_interp": 0.056489470607359996,
         "df": 5.3872557265624996e-08,
-        "interp_FD_waveform": 1,  # change this to "yes" as well? is it ignored?
+        # "interp_FD_waveform": 1,  # change this to "yes" as well? is it ignored?
         "inclination": 0.0,
         "output_hpc": "no",
         "time_shift_FD": "yes",

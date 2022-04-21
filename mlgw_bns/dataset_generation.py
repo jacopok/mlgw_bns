@@ -446,7 +446,6 @@ class WaveformParameters:
             "domain": 1,  # Fourier domain
             "srate_interp": srate,
             "df": self.dataset.delta_f_hz * self.dataset.mass_sum_seconds,
-            "interp_FD_waveform": 1,
             "inclination": 0.0,
             "output_hpc": "no",
             "time_shift_FD": "yes",
