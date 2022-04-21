@@ -41,6 +41,7 @@ Welcome to ``mlgw_bns``'s documentation!
    package_reference/neural_network
    package_reference/hyperparameter_optimization
    package_reference/model_validation
+   package_reference/fixed_dataset_training
    
 Indices and tables
 ==================
