@@ -1,3 +1,19 @@
+"""This module provides the functionality to train 
+a model using a fixed set of parameter - waveform pairs (p_i, w_i).
+
+The first step towards this is to make the parameters into a :class:`ParameterSet`,
+and the waveforms into :class:`FDWaveforms`.
+
+Once these are initialized, they can be used with the :func:`make_fixed_generation_pair`
+function, which will return a :class:`FixedParameterGenerator` and a :class:`FixedWaveformGenerator`.
+
+The parameter generator is an iterator, yielding :class:`IndexedWaveformParameters`; 
+these can be passed to the waveform generator.
+
+The waveform generator will only look at the index to retrieve the correct waveform,
+and the parameters are kept only for reference.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -67,7 +83,11 @@ class FixedParameterGenerator(ParameterGenerator):
         )
 
     def __next__(self):
-        return next(self.waveform_parameters)
+        try:
+            return next(self.waveform_parameters)
+        except StopIteration:
+            self.reset()
+            return next(self.waveform_parameters)
 
 
 class FixedWaveformGenerator(BarePostNewtonianGenerator):
