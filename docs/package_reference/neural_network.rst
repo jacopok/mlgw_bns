@@ -1,6 +1,8 @@
 Neural Network
 ==============
 
+.. automodule:: mlgw_bns.neural_network
+
 .. autoclass:: mlgw_bns.neural_network.Hyperparameters
     :members:
 
