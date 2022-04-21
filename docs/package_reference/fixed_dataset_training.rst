@@ -1,5 +1,7 @@
-Neural Network
+Fixed Dataset Training
 ==============
+
+.. automodule:: mlgw_bns.fixed_dataset_training
 
 .. autoclass:: mlgw_bns.fixed_dataset_training.IndexedWaveformParameters
     :members:
