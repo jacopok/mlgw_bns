@@ -52,6 +52,42 @@ class IndexedWaveformParameters(WaveformParameters):
         self.parameter_generator = parameter_generator
 
 
+class IndexedParameterSet(ParameterSet):
+    def waveform_parameters(self, dataset: Dataset) -> list[IndexedWaveformParameters]:  # type: ignore[override]
+        """Return a list of WaveformParameters.
+
+        Parameters
+        ----------
+        dataset : Dataset
+            Dataset, required for the initialization of :class:`WaveformParameters`.
+
+        Returns
+        -------
+        list[WaveformParameters]
+
+        Examples
+        --------
+
+        We generate a :class:`ParameterSet` with a single array of parameters ,
+
+        >>> param_set = ParameterSet(np.array([[1, 2, 3, 4, 5]]))
+        >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
+        >>> wp_list = param_set.waveform_parameters(dataset)
+        >>> print(wp_list[0].array)
+        [1 2 3 4 5]
+        """
+
+        assert dataset.parameter_generator is not None
+        assert isinstance(dataset.parameter_generator, FixedParameterGenerator)
+
+        return [
+            IndexedWaveformParameters(
+                idx, dataset.parameter_generator, *params, dataset
+            )
+            for idx, params in enumerate(self.parameter_array)
+        ]  # type: ignore
+
+
 class FixedParameterGenerator(ParameterGenerator):
     """Generate waveform parameters by going through a fixed list.
 
@@ -66,23 +102,31 @@ class FixedParameterGenerator(ParameterGenerator):
         By default None.
     """
 
+    parameter_set_cls = IndexedParameterSet
+
     def __init__(
         self,
         dataset: "Dataset",
         parameter_set: ParameterSet,
         seed: Optional[int] = None,
+        loop: bool = True,
     ):
         super().__init__(dataset=dataset, seed=seed)
         self.parameter_set = parameter_set
+        self.loop = loop
         self.reset()
 
     def reset(self):
+        # TODO make this use the parameter set's functionality
         self.waveform_parameters: Iterable[IndexedWaveformParameters] = (
             IndexedWaveformParameters(index, self, *params, self.dataset)
             for index, params in enumerate(self.parameter_set.parameter_array)
         )
 
     def __next__(self):
+        if not self.loop:
+            return next(self.waveform_parameters)
+
         try:
             return next(self.waveform_parameters)
         except StopIteration:
@@ -166,7 +210,7 @@ def make_fixed_generation_pair(
     Returns
     -------
     tuple[FixedParameterGenerator, FixedWaveformGenerator]
-        _description_
+        parameter_generator, waveform_generator
     """
 
     dataset = Dataset(
