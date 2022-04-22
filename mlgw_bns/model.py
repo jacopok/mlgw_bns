@@ -191,7 +191,6 @@ class Model:
             Certain parameter generators should not be regenerated each time;
             if this is the case, then pass the parameter generator here.
             Defaults to None.
-
     """
 
     def __init__(
@@ -226,6 +225,7 @@ class Model:
         self.initial_frequency_hz = initial_frequency_hz
         self.srate_hz = srate_hz
         self.multibanding = multibanding
+        self.parameter_generator = parameter_generator
 
         self.dataset = self._make_dataset()
 
@@ -287,6 +287,7 @@ class Model:
             waveform_generator=self.waveform_generator,
             multibanding=self.multibanding,
             parameter_ranges=self.parameter_ranges,
+            parameter_generator=self.parameter_generator
         )
 
     def _handle_missing_filename(self) -> None:
