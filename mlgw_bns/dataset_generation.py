@@ -607,6 +607,7 @@ class ParameterGenerator(ABC, Iterator):
     """
 
     number_of_free_parameters: int = 5
+    parameter_set_cls = ParameterSet
 
     def __init__(self, dataset: "Dataset", seed: Optional[int] = None, **kwargs):
 
@@ -866,6 +867,12 @@ class Dataset:
                 self.delta_f_hz,
             )
 
+    @property
+    def parameter_set_cls(self):
+        if self.parameter_generator is None:
+            return ParameterGenerator.parameter_set_cls
+        return self.parameter_generator.parameter_set_cls
+
     def optimal_df_hz(
         self, power_of_two: bool = True, margin_percent: float = 8.0
     ) -> float:
@@ -1086,7 +1093,7 @@ class Dataset:
 
         return (
             self.frequencies,
-            ParameterSet(parameter_array),
+            self.parameter_set_cls(parameter_array),
             residuals,
         )
 
