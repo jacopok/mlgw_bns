@@ -258,10 +258,8 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
                 Indices for amplitude and phase, respectively.
         """
 
-        from .dataset_generation import ParameterSet
-
         generator = self.dataset.make_parameter_generator()
-        param_set = ParameterSet.from_parameter_generator(
+        param_set = self.dataset.parameter_set_cls.from_parameter_generator(
             generator, training_dataset_size
         )
 
