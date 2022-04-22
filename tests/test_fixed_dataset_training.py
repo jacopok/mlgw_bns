@@ -50,6 +50,8 @@ def test_fixed_waveform_generation_limit(fixed_generator_pair):
     fixed_parameter_generator, fixed_waveform_generator = fixed_generator_pair
 
     dataset = fixed_parameter_generator.dataset
+    freqs, params, residuals = dataset.generate_residuals(6, flatten_phase=False)
+    fixed_parameter_generator.loop = False
     with pytest.raises(StopIteration):
         freqs, params, residuals = dataset.generate_residuals(6, flatten_phase=False)
 
@@ -77,4 +79,9 @@ def test_arbitrary_index_waveform_recovery(fixed_generator_pair):
 def test_training_model_on_fixed_data(fixed_generator_pair):
     fixed_parameter_generator, fixed_waveform_generator = fixed_generator_pair
 
-    model = Model(waveform_generator=fixed_waveform_generator)
+    model = Model(
+        waveform_generator=fixed_waveform_generator,
+        parameter_generator=fixed_parameter_generator,
+        pca_components_number=5,
+    )
+    model.generate(5, 5, 5)
