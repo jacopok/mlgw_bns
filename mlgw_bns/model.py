@@ -191,6 +191,8 @@ class Model:
             Certain parameter generators should not be regenerated each time;
             if this is the case, then pass the parameter generator here.
             Defaults to None.
+    mode: Optional[tuple[int, int]]
+            Higher order mode this model refers to.
     """
 
     def __init__(
@@ -205,6 +207,7 @@ class Model:
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
         parameter_ranges: ParameterRanges = ParameterRanges(),
         parameter_generator : Optional[ParameterGenerator] = None,
+        mode: Optional[tuple[int, int]] = None
     ):
 
         self.filename = filename
@@ -247,6 +250,8 @@ class Model:
         self.downsampling_indices: Optional[DownsamplingIndices] = None
 
         self.nn_kind = nn_kind
+        
+        self.mode = mode
 
     def __str__(self):
 
@@ -825,6 +830,30 @@ class Model:
         derivative = np.sum(phis * weights) / df
 
         return derivative / (2 * np.pi)
+
+
+class ModesModel:
+    """Model including higher-order modes.
+    Internally uses a Model for the reconstruction of each required mode.
+    """
+    
+    def __init__(self, modes: list[tuple[int, int]], **model_kwargs):
+        
+        self.modes = modes
+        
+        self.base_filename = model_kwargs.pop('filename', '')
+        
+        self.models = {}
+        for mode in modes:
+            self.models[mode] = Model(
+                mode=mode, 
+                filename=self.mode_filename(mode), 
+                **model_kwargs
+            )
+
+    @staticmethod
+    def mode_filename(mode: tuple[int, int]) -> str:
+        return f'{self.base_filename}_l{mode[0]}_m{mode[1]}'
 
 
 @njit
