@@ -772,6 +772,7 @@ class Dataset:
         seed: int = 42,
         multibanding: bool = True,
         f_pivot_hz: float = 40.0,
+        modes: list[tuple[int, int]] = [(2, 2)]
     ):
 
         self.initial_frequency_hz = initial_frequency_hz
@@ -801,6 +802,8 @@ class Dataset:
 
         self.multibanding = multibanding
         self.f_pivot_hz = f_pivot_hz
+        
+        self.modes = modes
 
     def __repr__(self) -> str:
         return (
