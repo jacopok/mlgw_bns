@@ -36,6 +36,7 @@ from .principal_component_analysis import (
     PrincipalComponentTraining,
 )
 from .taylorf2 import SUN_MASS_SECONDS
+from .higher_order_modes import ModeGenerator, BarePostNewtonianModeGenerator
 
 DEFAULT_DATASET_BASENAME = "data/default_dataset"
 
@@ -843,16 +844,26 @@ class ModesModel:
         
         self.base_filename = model_kwargs.pop('filename', '')
         
+        waveform_generator = model_kwargs.pop('waveform_generator', BarePostNewtonianModeGenerator)
+        assert isinstance(waveform_generator, ModeGenerator)
+        
         self.models = {}
         for mode in modes:
             self.models[mode] = Model(
                 mode=mode, 
                 filename=self.mode_filename(mode), 
+                waveform_generator=waveform_generator,
                 **model_kwargs
             )
 
     def mode_filename(self, mode: tuple[int, int]) -> str:
         return f'{self.base_filename}_l{mode[0]}_m{mode[1]}'
+
+    def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
+
+        # TODO finish writing this
+        for model in self.models:
+            amp, phi = model._predict_amplitude_phase(frequencies, params)
 
 
 @njit
