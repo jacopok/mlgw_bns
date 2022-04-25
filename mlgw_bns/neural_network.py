@@ -103,7 +103,7 @@ class Hyperparameters:
             "tol": self.tol,
             "validation_fraction": self.validation_fraction,
             "n_iter_no_change": self.n_iter_no_change,
-            "early_stopping": True,
+            "early_stopping": False,
             "shuffle": True,
         }
 
