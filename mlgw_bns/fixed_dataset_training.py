@@ -165,10 +165,16 @@ class FixedWaveformGenerator(BarePostNewtonianGenerator):
 
         assert self.frequencies is not None
 
-        if params.parameter_generator is not self.parameter_generator:
+        try:
+            if params.parameter_generator is not self.parameter_generator:
+                raise NotImplementedError(
+                    "The parameter generator corresponding to these "
+                    "waveforms is not the same one which generated these parameters."
+                )
+        except AttributeError:
             raise NotImplementedError(
                 "The parameter generator corresponding to these "
-                "waveforms is not the same one which generated these parameters."
+                "waveforms is not a FixedParameterGenerator."
             )
 
         if frequencies is None:
