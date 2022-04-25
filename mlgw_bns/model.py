@@ -851,8 +851,7 @@ class ModesModel:
                 **model_kwargs
             )
 
-    @staticmethod
-    def mode_filename(mode: tuple[int, int]) -> str:
+    def mode_filename(self, mode: tuple[int, int]) -> str:
         return f'{self.base_filename}_l{mode[0]}_m{mode[1]}'
 
 
