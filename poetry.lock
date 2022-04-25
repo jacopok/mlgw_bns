@@ -95,11 +95,11 @@ python-versions = ">=3.6"
 
 [[package]]
 name = "babel"
-version = "2.9.1"
+version = "2.10.1"
 description = "Internationalization utilities"
 category = "main"
 optional = true
-python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
+python-versions = ">=3.6"
 
 [package.dependencies]
 pytz = ">=2015.7"
@@ -470,19 +470,20 @@ testing = ["covdefaults (>=1.2.0)", "coverage (>=4)", "pytest (>=4)", "pytest-co
 
 [[package]]
 name = "fonttools"
-version = "4.32.0"
+version = "4.33.2"
 description = "Tools to manipulate font files"
 category = "main"
 optional = false
 python-versions = ">=3.7"
 
 [package.extras]
-all = ["fs (>=2.2.0,<3)", "lxml (>=4.0,<5)", "zopfli (>=0.1.4)", "lz4 (>=1.7.4.2)", "matplotlib", "sympy", "skia-pathops (>=0.5.0)", "brotlicffi (>=0.8.0)", "scipy", "brotli (>=1.0.1)", "munkres", "unicodedata2 (>=14.0.0)", "xattr"]
+all = ["fs (>=2.2.0,<3)", "lxml (>=4.0,<5)", "zopfli (>=0.1.4)", "lz4 (>=1.7.4.2)", "matplotlib", "sympy", "skia-pathops (>=0.5.0)", "uharfbuzz (>=0.23.0)", "brotlicffi (>=0.8.0)", "scipy", "brotli (>=1.0.1)", "munkres", "unicodedata2 (>=14.0.0)", "xattr"]
 graphite = ["lz4 (>=1.7.4.2)"]
 interpolatable = ["scipy", "munkres"]
 lxml = ["lxml (>=4.0,<5)"]
 pathops = ["skia-pathops (>=0.5.0)"]
 plot = ["matplotlib"]
+repacker = ["uharfbuzz (>=0.23.0)"]
 symfont = ["sympy"]
 type1 = ["xattr"]
 ufo = ["fs (>=2.2.0,<3)"]
@@ -510,20 +511,20 @@ docs = ["sphinx"]
 
 [[package]]
 name = "gwdatafind"
-version = "1.0.5"
+version = "1.1.0"
 description = "The GWDataFind data discovery client"
 category = "main"
 optional = false
-python-versions = ">=3.5"
+python-versions = ">=3.6"
 
 [package.dependencies]
+igwn-auth-utils = {version = ">=0.2.0", extras = ["requests"]}
 ligo-segments = "*"
-pyOpenSSL = "*"
-six = ">=1.9.0"
 
 [package.extras]
 docs = ["numpydoc", "sphinx (>=1.8.0)", "sphinx-automodapi", "sphinx-rtd-theme", "sphinx-tabs"]
-test = ["pytest (>=2.8.0)", "pytest-cov"]
+lint = ["flake8", "flake8-bandit", "flake8-docstrings", "radon"]
+test = ["pytest (>=2.8.0)", "pytest-cov", "requests-mock"]
 
 [[package]]
 name = "h5py"
@@ -573,6 +574,26 @@ description = "Internationalized Domain Names in Applications (IDNA)"
 category = "main"
 optional = false
 python-versions = ">=3.5"
+
+[[package]]
+name = "igwn-auth-utils"
+version = "0.2.2"
+description = "Authorisation utilities for IGWN"
+category = "main"
+optional = false
+python-versions = ">=3.6"
+
+[package.dependencies]
+cryptography = ">=2.3"
+requests = {version = ">=2.14", optional = true, markers = "extra == \"requests\""}
+safe-netrc = {version = ">=1.0.0", optional = true, markers = "extra == \"requests\""}
+scitokens = ">=1.7.0"
+
+[package.extras]
+docs = ["sphinx (>=4.0.0)", "sphinx-automodapi", "sphinx-material"]
+lint = ["flake8 (>=3.7.0)", "flake8-bandit"]
+requests = ["requests (>=2.14)", "safe-netrc (>=1.0.0)"]
+test = ["pytest (>=3.9.1)", "pytest-cov", "requests (>=2.14)", "requests-mock", "safe-netrc (>=1.0.0)"]
 
 [[package]]
 name = "imagesize"
@@ -1410,7 +1431,7 @@ python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
 
 [[package]]
 name = "pydeps"
-version = "1.10.14"
+version = "1.10.17"
 description = "Display module dependencies"
 category = "dev"
 optional = false
@@ -1436,11 +1457,25 @@ test = ["pytest", "pytest-doctestplus (>=0.7)"]
 
 [[package]]
 name = "pygments"
-version = "2.11.2"
+version = "2.12.0"
 description = "Pygments is a syntax highlighting package written in Python."
 category = "main"
 optional = false
-python-versions = ">=3.5"
+python-versions = ">=3.6"
+
+[[package]]
+name = "pyjwt"
+version = "2.3.0"
+description = "JSON Web Token implementation in Python"
+category = "main"
+optional = false
+python-versions = ">=3.6"
+
+[package.extras]
+crypto = ["cryptography (>=3.3.1)"]
+dev = ["sphinx", "sphinx-rtd-theme", "zope.interface", "cryptography (>=3.3.1)", "pytest (>=6.0.0,<7.0.0)", "coverage[toml] (==5.0.4)", "mypy", "pre-commit"]
+docs = ["sphinx", "sphinx-rtd-theme", "zope.interface"]
+tests = ["pytest (>=6.0.0,<7.0.0)", "coverage[toml] (==5.0.4)"]
 
 [[package]]
 name = "pylev"
@@ -1452,7 +1487,7 @@ python-versions = "*"
 
 [[package]]
 name = "pylint"
-version = "2.13.6"
+version = "2.13.7"
 description = "python code static checker"
 category = "dev"
 optional = false
@@ -1693,6 +1728,14 @@ typing-extensions = {version = ">=4.0.0,<5.0", markers = "python_version < \"3.9
 jupyter = ["ipywidgets (>=7.5.1,<8.0.0)"]
 
 [[package]]
+name = "safe-netrc"
+version = "1.0.0"
+description = "Safe netrc file parser"
+category = "main"
+optional = false
+python-versions = "*"
+
+[[package]]
 name = "scalene"
 version = "1.5.4"
 description = "Scalene: A high-resolution, low-overhead CPU, GPU, and memory profiler for Python"
@@ -1736,6 +1779,19 @@ python-versions = ">=3.7,<3.11"
 
 [package.dependencies]
 numpy = ">=1.16.5,<1.23.0"
+
+[[package]]
+name = "scitokens"
+version = "1.7.0"
+description = "SciToken reference implementation library"
+category = "main"
+optional = false
+python-versions = "*"
+
+[package.dependencies]
+cryptography = "*"
+PyJWT = ">=1.6.1"
+six = "*"
 
 [[package]]
 name = "secretstorage"
@@ -2039,7 +2095,7 @@ python-versions = ">=3.6"
 
 [[package]]
 name = "tomlkit"
-version = "0.10.1"
+version = "0.10.2"
 description = "Style preserving TOML library"
 category = "dev"
 optional = false
@@ -2295,8 +2351,8 @@ autopage = [
     {file = "autopage-0.5.0.tar.gz", hash = "sha256:5305b43cc0798170d7124e5a2feecf969e45f4a0baf75cb351138114eaf76b83"},
 ]
 babel = [
-    {file = "Babel-2.9.1-py2.py3-none-any.whl", hash = "sha256:ab49e12b91d937cd11f0b67cb259a57ab4ad2b59ac7a3b41d6c06c0ac5b0def9"},
-    {file = "Babel-2.9.1.tar.gz", hash = "sha256:bc0c176f9f6a994582230df350aa6e05ba2ebe4b3ac317eab29d9be5d2768da0"},
+    {file = "Babel-2.10.1-py3-none-any.whl", hash = "sha256:3f349e85ad3154559ac4930c3918247d319f21910d5ce4b25d439ed8693b98d2"},
+    {file = "Babel-2.10.1.tar.gz", hash = "sha256:98aeaca086133efb3e1e2aad0396987490c8425929ddbcfe0550184fdc54cd13"},
 ]
 backcall = [
     {file = "backcall-0.2.0-py2.py3-none-any.whl", hash = "sha256:fbbce6a29f263178a1f7915c1940bde0ec2b2a967566fe1c65c1dfb7422bd255"},
@@ -2562,8 +2618,8 @@ filelock = [
     {file = "filelock-3.6.0.tar.gz", hash = "sha256:9cd540a9352e432c7246a48fe4e8712b10acb1df2ad1f30e8c070b82ae1fed85"},
 ]
 fonttools = [
-    {file = "fonttools-4.32.0-py3-none-any.whl", hash = "sha256:b038d1a0dee0079de7ade57071e2e2aced6e35bd697de244ac62938b2b1628c1"},
-    {file = "fonttools-4.32.0.zip", hash = "sha256:59a90de72149893167e3d552ae2402c6874e006b9adc3feaf5f6d706fe20d392"},
+    {file = "fonttools-4.33.2-py3-none-any.whl", hash = "sha256:b4da40696829845ea8c1cb33ce51c552179754cbee7ab4e8b96a6bcf421f437a"},
+    {file = "fonttools-4.33.2.zip", hash = "sha256:696fe922a271584c3ec8325ba31d4001a4fd6c4953b22900b767f1cb53ce1044"},
 ]
 glob2 = [
     {file = "glob2-0.7.tar.gz", hash = "sha256:85c3dbd07c8aa26d63d7aacee34fa86e9a91a3873bc30bf62ec46e531f92ab8c"},
@@ -2626,8 +2682,8 @@ greenlet = [
     {file = "greenlet-1.1.2.tar.gz", hash = "sha256:e30f5ea4ae2346e62cedde8794a56858a67b878dd79f7df76a0767e356b1744a"},
 ]
 gwdatafind = [
-    {file = "gwdatafind-1.0.5-py3-none-any.whl", hash = "sha256:715e30351aa5d96758d29d9199cab1de08b7667710bef40f738a10981c9c14c0"},
-    {file = "gwdatafind-1.0.5.tar.gz", hash = "sha256:4675b5b88443c7f2c228f99ac13fce0565ab6b2d40900663961ecf4fb5727c8f"},
+    {file = "gwdatafind-1.1.0-py3-none-any.whl", hash = "sha256:d8981e87b6f1b4a5251634bb74b061735362d3f5481aa26197a9f3e7d9d76204"},
+    {file = "gwdatafind-1.1.0.tar.gz", hash = "sha256:eb97eebc5d89c5be4d9db53496f9ad0e2fd0496d99ea2cd4fc3e543674b48da3"},
 ]
 h5py = [
     {file = "h5py-3.6.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:a5320837c60870911645e9a935099bdb2be6a786fcf0dac5c860f3b679e2de55"},
@@ -2658,6 +2714,10 @@ identify = [
 idna = [
     {file = "idna-3.3-py3-none-any.whl", hash = "sha256:84d9dd047ffa80596e0f246e2eab0b391788b0503584e8945f2368256d2735ff"},
     {file = "idna-3.3.tar.gz", hash = "sha256:9d643ff0a55b762d5cdb124b8eaa99c66322e2157b69160bc32796e824360e6d"},
+]
+igwn-auth-utils = [
+    {file = "igwn-auth-utils-0.2.2.tar.gz", hash = "sha256:96fff480f59cf143122595ecc9195d2205e24deecc90761fd3c50d34eca8a0ab"},
+    {file = "igwn_auth_utils-0.2.2-py3-none-any.whl", hash = "sha256:d153899cd2fa5d3d7212764f69ebdf2857e9ae38af52c466d3cfe27c64ecc4b1"},
 ]
 imagesize = [
     {file = "imagesize-1.3.0-py2.py3-none-any.whl", hash = "sha256:1db2f82529e53c3e929e8926a1fa9235aa82d0bd0c580359c67ec31b2fddaa8c"},
@@ -3262,8 +3322,8 @@ pycparser = [
     {file = "pycparser-2.21.tar.gz", hash = "sha256:e644fdec12f7872f86c58ff790da456218b10f863970249516d60a5eaca77206"},
 ]
 pydeps = [
-    {file = "pydeps-1.10.14-py3-none-any.whl", hash = "sha256:ccc96eb67f2caabbdc587a8b7f462aaf59e5d2710e0325661b813d4f362aad41"},
-    {file = "pydeps-1.10.14.tar.gz", hash = "sha256:9f2e592c434003681474978d869f5d6f9bceeb3e3539fe3527ec8e6670f7e0ec"},
+    {file = "pydeps-1.10.17-py3-none-any.whl", hash = "sha256:9f739bb4e44ae280ca58ce66945f025feaea08668a268bb9d08197c27012acfa"},
+    {file = "pydeps-1.10.17.tar.gz", hash = "sha256:bf06061e0c1d4888febde39eb5b4a4a68055cbcf2205769003a43b7642f3140d"},
 ]
 pyerfa = [
     {file = "pyerfa-2.0.0.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:278832de7803f2fb0ef4b14263200f98dfdb3eaa78dc63835d93796fd8fc42c6"},
@@ -3297,16 +3357,20 @@ pyerfa = [
     {file = "pyerfa-2.0.0.1.tar.gz", hash = "sha256:2fd4637ffe2c1e6ede7482c13f583ba7c73119d78bef90175448ce506a0ede30"},
 ]
 pygments = [
-    {file = "Pygments-2.11.2-py3-none-any.whl", hash = "sha256:44238f1b60a76d78fc8ca0528ee429702aae011c265fe6a8dd8b63049ae41c65"},
-    {file = "Pygments-2.11.2.tar.gz", hash = "sha256:4e426f72023d88d03b2fa258de560726ce890ff3b630f88c21cbb8b2503b8c6a"},
+    {file = "Pygments-2.12.0-py3-none-any.whl", hash = "sha256:dc9c10fb40944260f6ed4c688ece0cd2048414940f1cea51b8b226318411c519"},
+    {file = "Pygments-2.12.0.tar.gz", hash = "sha256:5eb116118f9612ff1ee89ac96437bb6b49e8f04d8a13b514ba26f620208e26eb"},
+]
+pyjwt = [
+    {file = "PyJWT-2.3.0-py3-none-any.whl", hash = "sha256:e0c4bb8d9f0af0c7f5b1ec4c5036309617d03d56932877f2f7a0beeb5318322f"},
+    {file = "PyJWT-2.3.0.tar.gz", hash = "sha256:b888b4d56f06f6dcd777210c334e69c737be74755d3e5e9ee3fe67dc18a0ee41"},
 ]
 pylev = [
     {file = "pylev-1.4.0-py2.py3-none-any.whl", hash = "sha256:7b2e2aa7b00e05bb3f7650eb506fc89f474f70493271a35c242d9a92188ad3dd"},
     {file = "pylev-1.4.0.tar.gz", hash = "sha256:9e77e941042ad3a4cc305dcdf2b2dec1aec2fbe3dd9015d2698ad02b173006d1"},
 ]
 pylint = [
-    {file = "pylint-2.13.6-py3-none-any.whl", hash = "sha256:939e67253d1b8569a4c827d933debf603f999ba745775c66e36463922d4e320b"},
-    {file = "pylint-2.13.6.tar.gz", hash = "sha256:8b1265173abaf37c2e7a21989d05fd6b0f8032c6772f85abe3b0652903aac66c"},
+    {file = "pylint-2.13.7-py3-none-any.whl", hash = "sha256:13ddbbd8872c804574149e81197c28877eba75224ba6b76cd8652fc31df55c1c"},
+    {file = "pylint-2.13.7.tar.gz", hash = "sha256:911d3a97c808f7554643bcc5416028cfdc42eae34ed129b150741888c688d5d5"},
 ]
 pyopenssl = [
     {file = "pyOpenSSL-22.0.0-py2.py3-none-any.whl", hash = "sha256:ea252b38c87425b64116f808355e8da644ef9b07e429398bfece610f893ee2e0"},
@@ -3451,6 +3515,10 @@ rich = [
     {file = "rich-12.2.0-py3-none-any.whl", hash = "sha256:c50f3d253bc6a9bb9c79d61a26d510d74abdf1b16881260fab5edfc3edfb082f"},
     {file = "rich-12.2.0.tar.gz", hash = "sha256:ea74bc9dad9589d8eea3e3fd0b136d8bf6e428888955f215824c2894f0da8b47"},
 ]
+safe-netrc = [
+    {file = "safe-netrc-1.0.0.tar.gz", hash = "sha256:55fe78dfc8bda48ee5b26c930a8efdecbb7ff5b5a45e2552381c84f13bb4a98a"},
+    {file = "safe_netrc-1.0.0-py2.py3-none-any.whl", hash = "sha256:5011368564eabd3accc196e499de111e4403c29f48eb6c60a3141b6ad507eb50"},
+]
 scalene = [
     {file = "scalene-1.5.4-cp310-cp310-macosx_10_15_universal2.whl", hash = "sha256:2e9ccf3e1fd12fbd44f056f881582e5bf79f19938d2ce0c158bc12e945accd62"},
     {file = "scalene-1.5.4-cp310-cp310-manylinux_2_24_x86_64.whl", hash = "sha256:1904c615a0616d0a7b507e5507be5da606b519c80831630b12daae6b45da3c7e"},
@@ -3529,6 +3597,10 @@ scipy = [
     {file = "scipy-1.7.3-cp39-cp39-win32.whl", hash = "sha256:2c56b820d304dffcadbbb6cbfbc2e2c79ee46ea291db17e288e73cd3c64fefa9"},
     {file = "scipy-1.7.3-cp39-cp39-win_amd64.whl", hash = "sha256:3f78181a153fa21c018d346f595edd648344751d7f03ab94b398be2ad083ed3e"},
     {file = "scipy-1.7.3.tar.gz", hash = "sha256:ab5875facfdef77e0a47d5fd39ea178b58e60e454a4c85aa1e52fcb80db7babf"},
+]
+scitokens = [
+    {file = "scitokens-1.7.0-py3-none-any.whl", hash = "sha256:d5e533fad0ead554b147e38419ddaeb6e2e3982bc1a7e14a65bf2979dfde8322"},
+    {file = "scitokens-1.7.0.tar.gz", hash = "sha256:c08dc3018c06506a38206ba78cc594df5812979ae38c19ad99614cc0e01eb19b"},
 ]
 secretstorage = [
     {file = "SecretStorage-3.3.2-py3-none-any.whl", hash = "sha256:755dc845b6ad76dcbcbc07ea3da75ae54bb1ea529eb72d15f83d26499a5df319"},
@@ -3658,8 +3730,8 @@ tomli = [
     {file = "tomli-1.2.3.tar.gz", hash = "sha256:05b6166bff487dc068d322585c7ea4ef78deed501cc124060e0f238e89a9231f"},
 ]
 tomlkit = [
-    {file = "tomlkit-0.10.1-py3-none-any.whl", hash = "sha256:3eba517439dcb2f84cf39f4f85fd2c3398309823a3c75ac3e73003638daf7915"},
-    {file = "tomlkit-0.10.1.tar.gz", hash = "sha256:3c517894eadef53e9072d343d37e4427b8f0b6200a70b7c9a19b2ebd1f53b951"},
+    {file = "tomlkit-0.10.2-py3-none-any.whl", hash = "sha256:905cf92c2111ef80d355708f47ac24ad1b6fc2adc5107455940088c9bbecaedb"},
+    {file = "tomlkit-0.10.2.tar.gz", hash = "sha256:30d54c0b914e595f3d10a87888599eab5321a2a69abc773bbefff51599b72db6"},
 ]
 torch = [
     {file = "torch-1.11.0-cp310-cp310-manylinux1_x86_64.whl", hash = "sha256:62052b50fffc29ca7afc0c04ef8206b6f1ca9d10629cb543077e12967e8d0398"},
