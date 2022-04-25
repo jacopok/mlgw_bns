@@ -1,14 +1,21 @@
 import numpy as np
 import pytest
+from EOBRun_module import EOBRunPy
 
 from mlgw_bns import Model
-from mlgw_bns.dataset_generation import ParameterSet, UniformParameterGenerator
+from mlgw_bns.dataset_generation import (
+    ParameterRanges,
+    ParameterSet,
+    TEOBResumSGenerator,
+    UniformParameterGenerator,
+)
 from mlgw_bns.fixed_dataset_training import (
     FixedParameterGenerator,
     FixedWaveformGenerator,
     IndexedWaveformParameters,
     make_fixed_generation_pair,
 )
+from mlgw_bns.model_validation import ValidateModel
 
 
 @pytest.fixture
@@ -84,4 +91,16 @@ def test_training_model_on_fixed_data(fixed_generator_pair):
         parameter_generator=fixed_parameter_generator,
         pca_components_number=5,
     )
-    model.generate(5, 5, 5)
+    model.generate(5, 10, 10)
+    model.set_hyper_and_train_nn()
+
+    # now we want to test the model against different waveforms,
+    # so we need to switch its waveform generation to the regular ones
+    model.dataset.parameter_generator = UniformParameterGenerator(
+        model.dataset, parameter_ranges=ParameterRanges()
+    )
+    model.dataset.waveform_generator = TEOBResumSGenerator(EOBRunPy)
+    vm = ValidateModel(model)
+    ms = vm.validation_mismatches(5)
+
+    assert np.all(m < 0.01 for m in ms)
