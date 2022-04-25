@@ -89,7 +89,7 @@ class PrincipalComponentAnalysisModel:
         # compute eigendecomposition with SVD, which is much faster!
 
         # eigenvalues, eigenvectors = np.linalg.eig(np.cov(zero_mean_data.T))
-        U, S, V = np.linalg.svd(zero_mean_data.T)
+        U, S, V = np.linalg.svd(zero_mean_data.T, full_matrices=False)
         eigenvalues = S ** 2
         eigenvectors = U
 
