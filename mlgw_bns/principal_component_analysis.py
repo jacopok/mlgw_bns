@@ -86,7 +86,11 @@ class PrincipalComponentAnalysisModel:
 
         zero_mean_data = data - mean[np.newaxis, :]
 
-        eigenvalues, eigenvectors = np.linalg.eig(np.cov(zero_mean_data.T))
+        # eigenvalues, eigenvectors = np.linalg.eig(np.cov(zero_mean_data.T))
+        U, S, V = np.linalg.svd(zero_mean_data.T)
+
+        eigenvalues = S ** 2
+        eigenvectors = U
 
         indices_by_magnitude = np.argsort(eigenvalues)[::-1]
 
