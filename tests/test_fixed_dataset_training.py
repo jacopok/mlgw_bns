@@ -96,10 +96,10 @@ def test_training_model_on_fixed_data(fixed_generator_pair):
 
     # now we want to test the model against different waveforms,
     # so we need to switch its waveform generation to the regular ones
-    model.dataset.parameter_generator = UniformParameterGenerator(
+    model.parameter_generator = UniformParameterGenerator(
         model.dataset, parameter_ranges=ParameterRanges()
     )
-    model.dataset.waveform_generator = TEOBResumSGenerator(EOBRunPy)
+    model.waveform_generator = TEOBResumSGenerator(EOBRunPy)
     vm = ValidateModel(model)
     ms = vm.validation_mismatches(5)
 

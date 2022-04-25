@@ -289,6 +289,31 @@ class Model:
             parameter_ranges=self.parameter_ranges,
             parameter_generator=self.parameter_generator
         )
+    
+    @property
+    def parameter_generator(self):
+        return self._parameter_generator
+
+    @parameter_generator.setter
+    def parameter_generator(self, val):
+        self._parameter_generator = val
+        try:
+            self.dataset.parameter_generator = val
+        except AttributeError:
+            pass
+
+    @property
+    def waveform_generator(self):
+        return self._waveform_generator
+
+    @waveform_generator.setter
+    def waveform_generator(self, val):
+        self._waveform_generator = val
+        try:
+            self.dataset.waveform_generator = val
+        except AttributeError:
+            pass
+
 
     def _handle_missing_filename(self) -> None:
         raise ValueError('Please set the "filename" attribute of this object')
