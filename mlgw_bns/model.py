@@ -30,7 +30,12 @@ from .dataset_generation import (
     WaveformParameters,
 )
 from .downsampling_interpolation import DownsamplingTraining, GreedyDownsamplingTraining
-from .higher_order_modes import BarePostNewtonianModeGenerator, Mode, ModeGenerator, spherical_harmonic_spin_2
+from .higher_order_modes import (
+    BarePostNewtonianModeGenerator,
+    Mode,
+    ModeGenerator,
+    spherical_harmonic_spin_2,
+)
 from .neural_network import Hyperparameters, NeuralNetwork, SklearnNetwork
 from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
@@ -862,13 +867,13 @@ class ModesModel:
     def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
 
         # TODO finish writing this
-        h_plus = np.zeros_like(frequencies, dtype=np.complex)
-        h_cross = np.zeros_like(frequencies, dtype=np.complex)
+        h_plus = np.zeros_like(frequencies, dtype=np.complex64)
+        h_cross = np.zeros_like(frequencies, dtype=np.complex64)
         
         for mode, model in self.models.items():
             amp, phi = model.predict_amplitude_phase(frequencies, params)
-            spherical_harmonic_plus = spherical_harmonic_spin_2(mode, params.inclination, parameters.reference_phase)
-            spherical_harmonic_minus = spherical_harmonic_spin_2(mode.opposite(), params.inclination, parameters.reference_phase)
+            spherical_harmonic_plus = spherical_harmonic_spin_2(mode, params.inclination, params.reference_phase)
+            spherical_harmonic_minus = spherical_harmonic_spin_2(mode.opposite(), params.inclination, params.reference_phase)
 
             h_plus += amp * np.exp(1j * phi) * (spherical_harmonic_plus + (-1)**mode.l * spherical_harmonic_minus)
             # h_plus = amp * np.exp(1j * phi) * (spherical_harmonic_plus + (-1)**mode.l * spherical_harmonic_minus)
