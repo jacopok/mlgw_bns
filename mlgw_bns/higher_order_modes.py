@@ -34,6 +34,8 @@ class Mode(NamedTuple):
     l: int
     m: int
 
+    def opposite(self):
+        return self.__cls__(self.l, -self.m)
 
 # all modes with l<5, m>0 are supported by TEOB
 EOB_SUPPORTED_MODES = [Mode(l, m) for l in range(2, 5) for m in range(1, l + 1)]
