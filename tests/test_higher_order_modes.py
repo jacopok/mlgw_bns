@@ -48,7 +48,11 @@ def test_spherical_harmonics():
     azimuth = np.linspace(0, 2 * np.pi, num=50)[np.newaxis, :]
 
     # in the paper both of these are +1
+
+    # this one corresponds to cos(iota) -> - cos(iota), so maybe iota -> pi - iota?
     SIGN_COSINE = -1
+
+    # this one corresponds to a factor (-1)**m
     SIGN_SINE = -1
 
     theoretical_22 = (
