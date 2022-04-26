@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import namedtuple
 from typing import Callable, Optional
 
 import numpy as np
@@ -13,18 +14,23 @@ from .dataset_generation import (
 
 WaveformCallable = Callable[[WaveformParameters, np.ndarray], np.ndarray]
 
-_post_newtonian_amplitudes_by_mode: dict[tuple[int, int], WaveformCallable] = {
-    (2, 2): amplitude_3h_post_newtonian
+Mode = namedtuple("Mode", ["l", "m"])
+
+# TODO fix these, but it's not so bad now - 
+# these are only wrong by a constant scaling
+
+_post_newtonian_amplitudes_by_mode: dict[Mode, WaveformCallable] = {
+    Mode(2, 2): amplitude_3h_post_newtonian
 }
-_post_newtonian_phases_by_mode: dict[tuple[int, int], WaveformCallable] = {
-    (2, 2): phase_5h_post_newtonian_tidal
+_post_newtonian_phases_by_mode: dict[Mode, WaveformCallable] = {
+    Mode(2, 2): phase_5h_post_newtonian_tidal
 }
 
 
 class ModeGenerator(WaveformGenerator):
     """Generic generator of a single mode for a waveform."""
 
-    def __init__(self, mode: tuple[int, int], *args, **kwargs):
+    def __init__(self, mode: Mode, *args, **kwargs):
         super().__init__(*args, **kwargs)  # type: ignore
         # see (https://github.com/python/mypy/issues/5887) for typing problem
         self.mode = mode
@@ -110,8 +116,8 @@ class EffectiveOneBodyModeGenerator(BarePostNewtonianModeGenerator):
         return (f_spa, amplitude, phase)
 
 
-def mode_to_k(mode: tuple[int, int]):
+def mode_to_k(mode: Mode):
     """
     Map (l,m) -> k
     """
-    return int(mode[0] * (mode[0] - 1) / 2 + mode[1] - 2)
+    return int(mode.l * (mode.l - 1) / 2 + mode.m - 2)

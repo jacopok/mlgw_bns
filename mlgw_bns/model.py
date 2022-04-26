@@ -30,13 +30,13 @@ from .dataset_generation import (
     WaveformParameters,
 )
 from .downsampling_interpolation import DownsamplingTraining, GreedyDownsamplingTraining
+from .higher_order_modes import BarePostNewtonianModeGenerator, Mode, ModeGenerator
 from .neural_network import Hyperparameters, NeuralNetwork, SklearnNetwork
 from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
     PrincipalComponentTraining,
 )
 from .taylorf2 import SUN_MASS_SECONDS
-from .higher_order_modes import ModeGenerator, BarePostNewtonianModeGenerator
 
 DEFAULT_DATASET_BASENAME = "data/default_dataset"
 
@@ -192,7 +192,7 @@ class Model:
             Certain parameter generators should not be regenerated each time;
             if this is the case, then pass the parameter generator here.
             Defaults to None.
-    mode: Optional[tuple[int, int]]
+    mode: Optional[Mode]
             Higher order mode this model refers to.
     """
 
@@ -208,7 +208,7 @@ class Model:
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
         parameter_ranges: ParameterRanges = ParameterRanges(),
         parameter_generator : Optional[ParameterGenerator] = None,
-        mode: Optional[tuple[int, int]] = None
+        mode: Optional[Mode] = None
     ):
 
         self.filename = filename
@@ -838,7 +838,7 @@ class ModesModel:
     Internally uses a Model for the reconstruction of each required mode.
     """
     
-    def __init__(self, modes: list[tuple[int, int]], **model_kwargs):
+    def __init__(self, modes: list[Mode], **model_kwargs):
         
         self.modes = modes
         
@@ -856,13 +856,13 @@ class ModesModel:
                 **model_kwargs
             )
 
-    def mode_filename(self, mode: tuple[int, int]) -> str:
+    def mode_filename(self, mode: Mode) -> str:
         return f'{self.base_filename}_l{mode[0]}_m{mode[1]}'
 
     def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
 
         # TODO finish writing this
-        for model in self.models:
+        for mode, model in self.models.items():
             amp, phi = model._predict_amplitude_phase(frequencies, params)
 
 
