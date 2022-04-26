@@ -30,7 +30,7 @@ from .dataset_generation import (
     WaveformParameters,
 )
 from .downsampling_interpolation import DownsamplingTraining, GreedyDownsamplingTraining
-from .higher_order_modes import BarePostNewtonianModeGenerator, Mode, ModeGenerator
+from .higher_order_modes import BarePostNewtonianModeGenerator, Mode, ModeGenerator, spherical_harmonic_spin_2
 from .neural_network import Hyperparameters, NeuralNetwork, SklearnNetwork
 from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
@@ -643,7 +643,7 @@ class Model:
             residuals, params, self.downsampling_indices
         )
 
-    def _predict_amplitude_phase(
+    def predict_amplitude_phase(
         self, frequencies: np.ndarray, params: ParametersWithExtrinsic
     ) -> tuple[np.ndarray, np.ndarray]:
         """Predict the amplitude and phase of a waveform.
@@ -772,7 +772,7 @@ class Model:
 
         """
 
-        amp, phi = self._predict_amplitude_phase(frequencies, params)
+        amp, phi = self.predict_amplitude_phase(frequencies, params)
 
         cartesian_waveform_real, cartesian_waveform_imag = combine_amp_phase(amp, phi)
 
@@ -820,7 +820,7 @@ class Model:
         weights = np.array([3, -32, 168, -672, 0, 672, -168, 32, -3]) / 840.0
 
         try:
-            _, phis = self._predict_amplitude_phase(freqs, params)
+            _, phis = self.predict_amplitude_phase(freqs, params)
             logging.info("Derivative coming from mlgw_bns")
         except FrequencyTooLowError:
             logging.info("Derivative coming from the PN approximant")
@@ -862,9 +862,18 @@ class ModesModel:
     def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
 
         # TODO finish writing this
+        h_plus = np.zeros_like(frequencies, dtype=np.complex)
+        h_cross = np.zeros_like(frequencies, dtype=np.complex)
+        
         for mode, model in self.models.items():
-            amp, phi = model._predict_amplitude_phase(frequencies, params)
+            amp, phi = model.predict_amplitude_phase(frequencies, params)
+            spherical_harmonic_plus = spherical_harmonic_spin_2(mode, params.inclination, parameters.reference_phase)
+            spherical_harmonic_minus = spherical_harmonic_spin_2(mode.opposite(), params.inclination, parameters.reference_phase)
 
+            h_plus += amp * np.exp(1j * phi) * (spherical_harmonic_plus + (-1)**mode.l * spherical_harmonic_minus)
+            # h_plus = amp * np.exp(1j * phi) * (spherical_harmonic_plus + (-1)**mode.l * spherical_harmonic_minus)
+        
+        return h_plus, h_cross
 
 @njit
 def combine_amp_phase(
