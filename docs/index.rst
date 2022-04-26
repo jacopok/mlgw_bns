@@ -42,6 +42,8 @@ Welcome to ``mlgw_bns``'s documentation!
    package_reference/hyperparameter_optimization
    package_reference/model_validation
    package_reference/fixed_dataset_training
+   package_reference/higher_order_modes
+
    
 Indices and tables
 ==================
