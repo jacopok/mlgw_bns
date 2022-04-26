@@ -16,6 +16,7 @@ from collections import namedtuple
 from typing import Callable, NamedTuple, Optional
 
 import numpy as np
+from scipy.special import factorial  # type: ignore
 
 from .dataset_generation import (
     WaveformGenerator,
@@ -33,6 +34,9 @@ class Mode(NamedTuple):
     l: int
     m: int
 
+
+# all modes with l<5, m>0 are supported by TEOB
+EOB_SUPPORTED_MODES = [Mode(l, m) for l in range(2, 5) for m in range(1, l + 1)]
 
 # TODO fix these, but it's not so bad now -
 # these are only wrong by a constant scaling
@@ -84,6 +88,8 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         super().__init__(*args, **kwargs)
         self.eobrun_callable = eobrun_callable
 
+        self.supported_modes = EOB_SUPPORTED_MODES
+
     def effective_one_body_waveform(
         self, params: "WaveformParameters", frequencies: Optional[np.ndarray] = None
     ):
@@ -120,9 +126,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
             par_dict["freqs"] = frequencies_list
 
         par_dict["arg_out"] = "yes"
-        par_dict["output_multipoles"] = "yes"
         par_dict["use_mode_lm"] = [mode_to_k(self.mode)]
-        par_dict["output_lm"] = [mode_to_k(self.mode)]
 
         f_spa, _, _, _, _, hflm, _, _ = self.eobrun_callable(par_dict)
 
@@ -130,6 +134,58 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         phase = hflm[str(mode_to_k(self.mode))][1]
 
         return (f_spa, amplitude, phase)
+
+
+def spherical_harmonic_spin_2(
+    mode: Mode, inclination: float, azimuth: float
+) -> complex:
+    r"""Returns the spin-2 spherical harmonic
+    :math:`^{-2}Y_{\ell m}(\iota, \varphi) =
+    (-1)^s \sqrt{\frac{2 \ell+1}{4 \pi}} d_{m, s}^{\ell} (\iota) e^{im \phi_0}`
+
+    where :math:`s= -2`
+    """
+
+    return (
+        np.sqrt((2 * mode.l + 1) / 4 / np.pi)
+        * wigner_d_function_spin_2(mode, inclination)
+        * np.exp(1j * mode.m * azimuth)
+    )
+
+
+def wigner_d_function_spin_2(mode: Mode, inclination: float) -> complex:
+    """Equation II.8 in https://arxiv.org/pdf/0709.0093.pdf, with :math:`s=-2`."""
+
+    return_value = 0
+
+    cos_i_halves = np.cos(inclination / 2)
+    sin_i_halves = np.sin(inclination / 2)
+
+    ki = max(0, mode.m + 2)
+    kf = min(mode.l + mode.m, mode.l + 2)
+
+    for k in range(ki, kf + 1):
+        norm = (
+            factorial(k)
+            * factorial(mode.l + mode.m - k)
+            * factorial(mode.l + 2 - k)
+            * factorial(k - 2 - mode.m)
+        )
+        return_value += (
+            # (-1) ** (k - 2 - mode.m) # this is how it is in MLGW
+            (-1) ** k
+            * cos_i_halves ** (2 * mode.l + mode.m + 2 - 2 * k)
+            * sin_i_halves ** (2 * k - 2 - mode.m)
+        ) / norm
+
+    const = np.sqrt(
+        factorial(mode.l + mode.m)
+        * factorial(mode.l - mode.m)
+        * factorial(mode.l - 2)
+        * factorial(mode.l + 2)
+    )
+
+    return const * return_value
 
 
 def mode_to_k(mode: Mode) -> int:
