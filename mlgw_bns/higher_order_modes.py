@@ -133,8 +133,8 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
 
         f_spa, _, _, _, _, hflm, _, _ = self.eobrun_callable(par_dict)
 
-        amplitude = hflm[str(mode_to_k(self.mode))][0]
-        phase = hflm[str(mode_to_k(self.mode))][1]
+        amplitude = hflm[str(mode_to_k(self.mode))][0][to_slice]
+        phase = hflm[str(mode_to_k(self.mode))][1][to_slice]
 
         return (f_spa, amplitude, phase)
 
@@ -164,28 +164,28 @@ def wigner_d_function_spin_2(mode: Mode, inclination: float) -> complex:
     cos_i_halves = np.cos(inclination / 2)
     sin_i_halves = np.sin(inclination / 2)
 
-    ki = max(0, mode.m + 2)
-    kf = min(mode.l + mode.m, mode.l + 2)
+    ki = max(0, mode.m - 2)
+    kf = min(mode.l + mode.m, mode.l - 2)
 
     for k in range(ki, kf + 1):
         norm = (
             factorial(k)
             * factorial(mode.l + mode.m - k)
-            * factorial(mode.l + 2 - k)
-            * factorial(k - 2 - mode.m)
+            * factorial(mode.l - 2 - k)
+            * factorial(k + 2 - mode.m)
         )
         return_value += (
             # (-1) ** (k - 2 - mode.m) # this is how it is in MLGW
             (-1) ** k
-            * cos_i_halves ** (2 * mode.l + mode.m + 2 - 2 * k)
-            * sin_i_halves ** (2 * k - 2 - mode.m)
+            * cos_i_halves ** (2 * mode.l + mode.m - 2 - 2 * k)
+            * sin_i_halves ** (2 * k + 2 - mode.m)
         ) / norm
 
     const = np.sqrt(
         factorial(mode.l + mode.m)
         * factorial(mode.l - mode.m)
-        * factorial(mode.l - 2)
         * factorial(mode.l + 2)
+        * factorial(mode.l - 2)
     )
 
     return const * return_value
