@@ -34,7 +34,9 @@ from .higher_order_modes import (
     BarePostNewtonianModeGenerator,
     Mode,
     ModeGenerator,
+    ModeGeneratorFactory,
     spherical_harmonic_spin_2,
+    teob_mode_generator_factory,
 )
 from .neural_network import Hyperparameters, NeuralNetwork, SklearnNetwork
 from .principal_component_analysis import (
@@ -843,24 +845,24 @@ class ModesModel:
     Internally uses a Model for the reconstruction of each required mode.
     """
     
-    def __init__(self, modes: list[Mode], **model_kwargs):
+    def __init__(self, modes: list[Mode], generator_factory: ModeGeneratorFactory = teob_mode_generator_factory, **model_kwargs):
         
         self.modes = modes
         
         self.base_filename = model_kwargs.pop('filename', '')
         
         waveform_generator = model_kwargs.pop('waveform_generator', BarePostNewtonianModeGenerator)
-        assert isinstance(waveform_generator, ModeGenerator)
         
         self.models = {}
         for mode in modes:
+
             self.models[mode] = Model(
                 mode=mode, 
                 filename=self.mode_filename(mode), 
-                waveform_generator=waveform_generator,
+                waveform_generator=generator_factory(mode),
                 **model_kwargs
             )
-
+    
     def mode_filename(self, mode: Mode) -> str:
         return f'{self.base_filename}_l{mode[0]}_m{mode[1]}'
 
@@ -876,7 +878,7 @@ class ModesModel:
             spherical_harmonic_minus = spherical_harmonic_spin_2(mode.opposite(), params.inclination, params.reference_phase)
 
             h_plus += amp * np.exp(1j * phi) * (spherical_harmonic_plus + (-1)**mode.l * spherical_harmonic_minus)
-            # h_plus = amp * np.exp(1j * phi) * (spherical_harmonic_plus + (-1)**mode.l * spherical_harmonic_minus)
+            h_cross += amp * np.exp(1j * phi) * (spherical_harmonic_plus + (-1)**mode.l * spherical_harmonic_minus)
         
         return h_plus, h_cross
 
