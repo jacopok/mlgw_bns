@@ -25,7 +25,8 @@ def test_mode_initialization():
     assert m.m == 1
 
 
-def test_mode_is_required():
+def test_mode_checking():
+
     with pytest.raises(TypeError):
         gen = BarePostNewtonianModeGenerator()
 
@@ -86,13 +87,21 @@ def test_spherical_harmonics():
         assert np.allclose(computed_harm, theoretical_harm)
 
 
+def test_modes_model_waveform_generators():
+    model = ModesModel(
+        modes=[Mode(2, 2), Mode(2, 1)],
+    )
+
+    assert set(model.models) == set([Mode(2, 2), Mode(2, 1)])
+
+    assert model.models[Mode(2, 2)].waveform_generator.mode == Mode(2, 2)
+    assert model.models[Mode(2, 1)].waveform_generator.mode == Mode(2, 1)
+
+
 def test_modes_model_generation():
     model = ModesModel(
         modes=[Mode(2, 2)],
-        waveform_generator=TEOBResumSModeGenerator(
-            eobrun_callable=EOBRunPy, mode=Mode(2, 2)
-        ),
     )
 
-    model.models[Mode(2, 2)].generate()
+    model.models[Mode(2, 2)].generate(5, 40, 20)
     model.models[Mode(2, 2)].set_hyper_and_train_nn()
