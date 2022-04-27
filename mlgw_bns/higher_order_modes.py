@@ -55,26 +55,44 @@ _post_newtonian_phases_by_mode: dict[Mode, WaveformCallable] = {
 class ModeGenerator(WaveformGenerator):
     """Generic generator of a single mode for a waveform."""
 
+    supported_modes = list(_post_newtonian_amplitudes_by_mode.keys())
+
     def __init__(self, mode: Mode, *args, **kwargs):
+
+        self._mode = None
+
         super().__init__(*args, **kwargs)  # type: ignore
         # see (https://github.com/python/mypy/issues/5887) for typing problem
+
         self.mode = mode
 
-        # TODO improve the way these are handled
-        self.supported_modes = list(_post_newtonian_amplitudes_by_mode.keys())
-        if self.mode not in self.supported_modes:
-            raise NotImplementedError(f"{self.mode} is not supported yet!")
+    @property
+    def mode(self) -> Optional[Mode]:
+        return self._mode
+
+    @mode.setter
+    def mode(self, val: Optional[Mode]) -> None:
+
+        if val not in self.supported_modes and val is not None:
+            raise NotImplementedError(
+                f"{val} is not supported yet for {self.__class__}!"
+            )
+
+        self._mode = val
 
 
 class BarePostNewtonianModeGenerator(ModeGenerator):
     def post_newtonian_amplitude(
         self, params: "WaveformParameters", frequencies: np.ndarray
     ) -> np.ndarray:
+
+        assert self.mode is not None
         return _post_newtonian_amplitudes_by_mode[self.mode](params, frequencies)
 
     def post_newtonian_phase(
         self, params: "WaveformParameters", frequencies: np.ndarray
     ) -> np.ndarray:
+        assert self.mode is not None
         return _post_newtonian_phases_by_mode[self.mode](params, frequencies)
 
     def effective_one_body_waveform(
@@ -87,15 +105,17 @@ class BarePostNewtonianModeGenerator(ModeGenerator):
 
 
 class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
+    supported_modes = EOB_SUPPORTED_MODES
+
     def __init__(self, eobrun_callable: Callable, *args, **kwargs):
+
         super().__init__(*args, **kwargs)
         self.eobrun_callable = eobrun_callable
-
-        self.supported_modes = EOB_SUPPORTED_MODES
 
     def effective_one_body_waveform(
         self, params: "WaveformParameters", frequencies: Optional[np.ndarray] = None
     ):
+        assert self.mode is not None
         par_dict: dict = params.teobresums()
 
         # tweak initial frequency backward by a few samples
@@ -197,3 +217,16 @@ def mode_to_k(mode: Mode) -> int:
     TEOBResumS conventions.
     """
     return int(mode.l * (mode.l - 1) / 2 + mode.m - 2)
+
+
+ModeGeneratorFactory = Callable[[Mode], ModeGenerator]
+
+
+def teob_mode_generator_factory(mode: Mode) -> ModeGenerator:
+    try:
+        from EOBRun_module import EOBRunPy  # type: ignore
+
+        return TEOBResumSModeGenerator(eobrun_callable=EOBRunPy, mode=mode)
+    except ModuleNotFoundError as e:
+
+        return BarePostNewtonianModeGenerator(mode=mode)
