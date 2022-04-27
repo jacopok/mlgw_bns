@@ -10,6 +10,7 @@ from mlgw_bns.higher_order_modes import (
     TEOBResumSModeGenerator,
     spherical_harmonic_spin_2,
 )
+from mlgw_bns.model import ModesModel
 
 
 def test_mode_initialization():
@@ -95,3 +96,15 @@ def test_spherical_harmonics():
         computed_harm = spherical_harmonic_spin_2(mode, inclination, azimuth)
 
         assert np.allclose(computed_harm, theoretical_harm)
+
+
+def test_modes_model_generation():
+    model = ModesModel(
+        modes=[Mode(2, 2)],
+        waveform_generator=TEOBResumSModeGenerator(
+            eobrun_callable=EOBRunPy, mode=Mode(2, 2)
+        ),
+    )
+
+    model.models[Mode(2, 2)].generate()
+    model.models[Mode(2, 2)].set_hyper_and_train_nn()
