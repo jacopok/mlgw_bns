@@ -48,40 +48,28 @@ def test_spherical_harmonics():
     inclination = np.linspace(0, np.pi, num=50)[:, np.newaxis]
     azimuth = np.linspace(0, 2 * np.pi, num=50)[np.newaxis, :]
 
-    # in the paper both of these are +1
-
-    # this one corresponds to cos(iota) -> - cos(iota), so maybe iota -> pi - iota?
-    SIGN_COSINE = -1
-
-    # this one corresponds to a factor (-1)**m
-    SIGN_SINE = -1
-
     theoretical_22 = (
-        np.sqrt(5 / 64 / np.pi)
-        * (1 + SIGN_COSINE * np.cos(inclination)) ** 2
-        * np.exp(2j * azimuth)
+        np.sqrt(5 / 64 / np.pi) * (1 + np.cos(inclination)) ** 2 * np.exp(2j * azimuth)
     )
 
-    theoretical_21 = SIGN_SINE * (
+    theoretical_21 = (
         np.sqrt(5 / 16 / np.pi)
         * np.sin(inclination)
-        * (1 + SIGN_COSINE * np.cos(inclination))
+        * (1 + np.cos(inclination))
         * np.exp(1j * azimuth)
     )
 
     theoretical_20 = np.sqrt(15 / 32 / np.pi) * np.sin(inclination) ** 2
 
-    theoretical_2_negative1 = SIGN_SINE * (
+    theoretical_2_negative1 = (
         np.sqrt(5 / 16 / np.pi)
         * np.sin(inclination)
-        * (1 - SIGN_COSINE * np.cos(inclination))
+        * (1 - np.cos(inclination))
         * np.exp(-1j * azimuth)
     )
 
     theoretical_2_negative2 = (
-        np.sqrt(5 / 64 / np.pi)
-        * (1 - SIGN_COSINE * np.cos(inclination)) ** 2
-        * np.exp(-2j * azimuth)
+        np.sqrt(5 / 64 / np.pi) * (1 - np.cos(inclination)) ** 2 * np.exp(-2j * azimuth)
     )
 
     theoretical_harmonics = {
