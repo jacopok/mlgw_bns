@@ -88,6 +88,17 @@ def test_generated_waveform_length(variable_parameters, teob_generator):
     )
 
 
+def test_generated_waveform_length_given_frequencies(
+    variable_parameters, teob_generator
+):
+
+    freq, amp, phi = teob_generator.effective_one_body_waveform(
+        variable_parameters, frequencies=np.linspace(1e-4, 1e-4, num=123)
+    )
+
+    assert len(freq) == len(amp) == len(phi) == 123
+
+
 @pytest.mark.benchmark(group="waveform-generation", min_rounds=3)
 def test_teob_generation_time(benchmark, parameters, teob_generator):
     benchmark(teob_generator.effective_one_body_waveform, params=parameters)
