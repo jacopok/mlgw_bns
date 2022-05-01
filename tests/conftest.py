@@ -9,10 +9,11 @@ import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
 
-from mlgw_bns import Model
+from mlgw_bns import Model, ParametersWithExtrinsic
 from mlgw_bns.data_management import ParameterRanges
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
 from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
+from mlgw_bns.model import Mode, ModesModel
 
 
 def pytest_addoption(parser):
@@ -132,6 +133,29 @@ def default_model():
     yield Model.default()
 
 
+@pytest.fixture(scope="session")
+def modes_model():
+    model = ModesModel(
+        modes=[
+            Mode(2, 2),
+            #    Mode(2, 1)
+        ],
+    )
+    yield model
+
+
+@pytest.fixture(scope="session")
+def generated_modes_model(modes_model):
+    modes_model.generate(8, 50, 50)
+    yield modes_model
+
+
+@pytest.fixture(scope="session")
+def trained_modes_model(generated_modes_model):
+    generated_modes_model.set_hyper_and_train_nn()
+    yield generated_modes_model
+
+
 @pytest.fixture
 def file():
     fname = "test_file.h5"
@@ -150,4 +174,18 @@ def random_array():
 
     return rng.multivariate_normal(
         np.zeros(100), cov=np.diag(1 / np.arange(1, 101) ** 2), size=(100,)
+    )
+
+
+@pytest.fixture
+def params_with_extrinsic():
+    yield ParametersWithExtrinsic(
+        mass_ratio=2.0,
+        lambda_1=500,
+        lambda_2=400,
+        chi_1=0.1,
+        chi_2=-0.1,
+        distance_mpc=10,
+        inclination=0.5,
+        total_mass=2.8,
     )
