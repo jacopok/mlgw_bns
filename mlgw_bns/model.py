@@ -865,6 +865,15 @@ class ModesModel:
     
     def mode_filename(self, mode: Mode) -> str:
         return f'{self.base_filename}_l{mode[0]}_m{mode[1]}'
+    
+    def generate(self, *args, **kwargs):
+        for model in self.models.values():
+            model.generate(*args, **kwargs)
+
+    def set_hyper_and_train_nn(self, *args, **kwargs):
+        for model in self.models.values():
+            model.set_hyper_and_train_nn(*args, **kwargs)
+
 
     def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic) -> tuple[np.ndarray, np.ndarray]:
         """Predict the plus- and cross-polarized frequency-domain waveform corresponding to 
@@ -874,7 +883,6 @@ class ModesModel:
         """
         
 
-        # TODO finish writing this
         h_plus = np.zeros_like(frequencies, dtype=np.complex64)
         h_cross = np.zeros_like(frequencies, dtype=np.complex64)
         
