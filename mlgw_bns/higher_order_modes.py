@@ -35,7 +35,7 @@ class Mode(NamedTuple):
     m: int
 
     def opposite(self):
-        return self.__cls__(self.l, -self.m)
+        return self.__class__(self.l, -self.m)
 
 
 # all modes with l<5, m>0 are supported by TEOB
@@ -195,7 +195,6 @@ def wigner_d_function_spin_2(mode: Mode, inclination: float) -> complex:
             * factorial(k + 2 - mode.m)
         )
         return_value += (
-            # (-1) ** (k - 2 - mode.m) # this is how it is in MLGW
             (-1) ** k
             * cos_i_halves ** (2 * mode.l + mode.m - 2 - 2 * k)
             * sin_i_halves ** (2 * k + 2 - mode.m)
@@ -215,6 +214,8 @@ def mode_to_k(mode: Mode) -> int:
     """
     Map a mode to a unique integer identifier; needed because of
     TEOBResumS conventions.
+
+    Actually a bad idea, since it is non-injective when including m=0.
     """
     return int(mode.l * (mode.l - 1) / 2 + mode.m - 2)
 
