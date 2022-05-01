@@ -289,21 +289,14 @@ def random_parameters(model: Model, seed: int) -> ParametersWithExtrinsic:
         ("total_mass", 5.0),
     ],
 )
-def test_parameters_out_of_bounds_error(trained_model, param_name, value):
+def test_parameters_out_of_bounds_error(
+    trained_model, param_name, value, params_with_extrinsic
+):
 
     freqs = np.linspace(20.0, 2048.0)
 
     with pytest.raises(ValueError):
-        params = ParametersWithExtrinsic(
-            mass_ratio=2.0,
-            lambda_1=500,
-            lambda_2=400,
-            chi_1=0.1,
-            chi_2=-0.1,
-            distance_mpc=10,
-            inclination=0.5,
-            total_mass=2.8,
-        )
+        params = params_with_extrinsic
         setattr(params, param_name, value)
         trained_model.predict(freqs, params)
 
