@@ -98,10 +98,8 @@ def test_modes_model_waveform_generators():
     assert model.models[Mode(2, 1)].waveform_generator.mode == Mode(2, 1)
 
 
-def test_modes_model_generation():
-    model = ModesModel(
-        modes=[Mode(2, 2)],
-    )
+def test_modes_model_prediction(
+    trained_modes_model, params_with_extrinsic, frequencies
+):
 
-    model.models[Mode(2, 2)].generate(5, 40, 20)
-    model.models[Mode(2, 2)].set_hyper_and_train_nn()
+    trained_modes_model.predict(frequencies, params_with_extrinsic)
