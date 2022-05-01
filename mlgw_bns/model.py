@@ -866,7 +866,13 @@ class ModesModel:
     def mode_filename(self, mode: Mode) -> str:
         return f'{self.base_filename}_l{mode[0]}_m{mode[1]}'
 
-    def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
+    def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic) -> tuple[np.ndarray, np.ndarray]:
+        """Predict the plus- and cross-polarized frequency-domain waveform corresponding to 
+        the given parameters, accounting for the effects of the included modes.
+        
+        References: https://arxiv.org/pdf/2004.06503.pdf (appendix E) for the modes decomposition.
+        """
+        
 
         # TODO finish writing this
         h_plus = np.zeros_like(frequencies, dtype=np.complex64)
@@ -877,8 +883,25 @@ class ModesModel:
             spherical_harmonic_plus = spherical_harmonic_spin_2(mode, params.inclination, params.reference_phase)
             spherical_harmonic_minus = spherical_harmonic_spin_2(mode.opposite(), params.inclination, params.reference_phase)
 
-            h_plus += amp * np.exp(1j * phi) * (spherical_harmonic_plus + (-1)**mode.l * spherical_harmonic_minus)
-            h_cross += amp * np.exp(1j * phi) * (spherical_harmonic_plus + (-1)**mode.l * spherical_harmonic_minus)
+            h_plus += amp / 2 * (
+                np.exp(- 1j * phi) * (
+                    spherical_harmonic_plus + (-1)**mode.l * np.conj(spherical_harmonic_minus)
+                    )
+                +
+                np.exp(+ 1j * phi) * (
+                    np.conj(spherical_harmonic_plus) + (-1)**mode.l * spherical_harmonic_minus
+                    )                
+            )
+            
+            h_cross += amp * 1j / 2 * (
+                np.exp(- 1j * phi) * (
+                    spherical_harmonic_plus - (-1)**mode.l * np.conj(spherical_harmonic_minus)
+                    )
+                +
+                np.exp(+ 1j * phi) * (
+                    - np.conj(spherical_harmonic_plus) + (-1)**mode.l * spherical_harmonic_minus
+                    )
+            )
         
         return h_plus, h_cross
 
