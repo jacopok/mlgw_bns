@@ -34,7 +34,9 @@ jobs:
         python -m pip install poetry
         poetry install -v
     - name: Run tests
-      run: poetry run pytest -v --junit-xml tests/test_results.xml
+      run: |
+        poetry run coverage run -m pytest -v --junit-xml tests/test_results.xml
+        poetry run coverage lcov
 
     - name: Upload Test Results
       if: always()
@@ -45,7 +47,7 @@ jobs:
           **/*.xml
 
     - name: Upload coverage data to coveralls.io
-      run: coveralls --service=github
+      run: poetry run coveralls --service=github
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         COVERALLS_FLAG_NAME: ${{ matrix.test-name }}
