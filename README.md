@@ -3,6 +3,7 @@
 [![PyPI version](https://badge.fury.io/py/mlgw-bns.svg)](https://badge.fury.io/py/mlgw-bns)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Coverage Status](https://coveralls.io/repos/github/jacopok/mlgw_bns/badge.svg?branch=master)](https://coveralls.io/github/jacopok/mlgw_bns?branch=master)
+[![Downloads](https://pepy.tech/badge/mlgw-bns/week)](https://pepy.tech/project/mlgw-bns)
 
 # Machine Learning for Gravitational Waves from Binary Neutron Star mergers
 
