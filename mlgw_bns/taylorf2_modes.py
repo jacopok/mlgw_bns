@@ -1,6 +1,20 @@
-"""Post-Newtonian modes. 
+r"""Post-Newtonian modes. 
 
 Appendix E of http://arxiv.org/abs/2001.10914
+
+A good approximation for the phases is (eq. 4.8)
+:math:`\phi_{\ell m} (f) \approx \frac{m}{2} \phi_{22} (2f / m)`
+
+The convensions are defined in http://arxiv.org/abs/1601.05588:
+we need 
+
+:math:`\delta = \frac{m_1 - m_2}{M} = \frac{q-1}{q+1}`
+
+as well as 
+
+:math:`\chi_a^z = \frac{1}{2} (\vec{chi_1} - \vec{\chi_2}) \cdot \hat{L}_N = \frac{1}{2} (\chi_1 - \chi_2)`
+
+and similarly for the symmetric component :math:`\chi_s^z`, with a plus sign.
 """
 
 import numpy as np
