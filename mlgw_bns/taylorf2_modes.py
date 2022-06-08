@@ -17,21 +17,39 @@ as well as
 and similarly for the symmetric component :math:`\chi_s^z`, with a plus sign.
 """
 
+from typing import TYPE_CHECKING, Callable, NamedTuple
+
 import numpy as np
 from numba import njit  # type: ignore
 
-from .taylor_f2 import phase_5h_post_newtonian_tidal
-from higher_order_modes import Mode
+from .taylorf2 import phase_5h_post_newtonian_tidal
+
+if TYPE_CHECKING:
+    from .dataset_generation import WaveformParameters
 
 H_callable = Callable[[np.ndarray, float, float, float, float], np.ndarray]
 
+
+class Mode(NamedTuple):
+    """A mode in the harmonic decomposition of the GW emission from a system."""
+
+    l: int
+    m: int
+
+    def opposite(self):
+        return self.__class__(self.l, -self.m)
+
+
 def H_22(
-    v: np.array,
+    v: np.ndarray,
     eta: float,
     delta: float,
     chi_a_z: float,
     chi_s_z: float,
 ) -> np.ndarray:
+
+    v2 = v * v
+    v4 = v2 * v2
 
     v2_coefficient = 451 * eta / 168 - 323 / 224
 
@@ -70,15 +88,15 @@ def H_22(
     #     - 177520268561 / 8583708672
     # )
 
+    return 1 + v2 * v2_coefficient + v4 * v4_coefficient
+
 
 def amp_lm(H_lm_callable: H_callable, mode: Mode):
-
     def function(params: "WaveformParameters", frequencies: np.ndarray) -> np.ndarray:
-        
 
         v = (2 * np.pi * frequencies / mode.m) ** (1 / 3)
-        
-        delta = (params.q - 1) / (params.q + 1)
+
+        delta = (params.mass_ratio - 1) / (params.mass_ratio + 1)
         chi_a_z = (params.chi_1 - params.chi_2) / 2
         chi_s_z = (params.chi_1 + params.chi_2) / 2
 
@@ -91,5 +109,9 @@ def amp_lm(H_lm_callable: H_callable, mode: Mode):
 
     return function
 
-def phi_22_SPA(params: "WaveformParameters", frequencies: np.ndarray) -> np.ndarray:
-    return phase_5h_post_newtonian_tidal(params, frequencies)
+
+def phi_lm(mode: Mode):
+    def function(params: "WaveformParameters", frequencies: np.ndarray) -> np.ndarray:
+        return phase_5h_post_newtonian_tidal(params, frequencies) * (mode.m / 2)
+
+    return function
