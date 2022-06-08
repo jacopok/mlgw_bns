@@ -36,10 +36,10 @@ EOB_SUPPORTED_MODES = [Mode(l, m) for l in range(2, 5) for m in range(1, l + 1)]
 # these are only wrong by a constant scaling
 
 _post_newtonian_amplitudes_by_mode: dict[Mode, WaveformCallable] = {
-    Mode(2, 2): amp_lm(H_22, Mode(2, 2))
+    Mode(2, 2): amp_lm(H_22, Mode(2, 2)),
 }
 _post_newtonian_phases_by_mode: dict[Mode, WaveformCallable] = {
-    Mode(2, 2): phase_5h_post_newtonian_tidal
+    Mode(2, 2): phi_lm(Mode(2, 2))
 }
 
 
