@@ -361,8 +361,8 @@ class Residuals(SavableData):
         number_of_points = self.phase_residuals.shape[1]
 
         reference_freq = (
-            frequencies[-1] * (1 - first_section_flat)
-            - frequencies[0] * first_section_flat
+            frequencies[-1] * first_section_flat
+            - frequencies[0] * (1 - first_section_flat)
         )
 
         index = np.searchsorted(frequencies, reference_freq)
