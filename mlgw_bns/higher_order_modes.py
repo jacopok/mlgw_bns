@@ -24,18 +24,9 @@ from .dataset_generation import (
     amplitude_3h_post_newtonian,
     phase_5h_post_newtonian_tidal,
 )
+from .taylorf2_modes import H_22, Mode, amp_lm, phi_lm
 
 WaveformCallable = Callable[[WaveformParameters, np.ndarray], np.ndarray]
-
-# Mode = namedtuple("Mode", ["l", "m"])
-class Mode(NamedTuple):
-    """A mode in the harmonic decomposition of the GW emission from a system."""
-
-    l: int
-    m: int
-
-    def opposite(self):
-        return self.__class__(self.l, -self.m)
 
 
 # all modes with l<5, m>0 are supported by TEOB
@@ -45,7 +36,7 @@ EOB_SUPPORTED_MODES = [Mode(l, m) for l in range(2, 5) for m in range(1, l + 1)]
 # these are only wrong by a constant scaling
 
 _post_newtonian_amplitudes_by_mode: dict[Mode, WaveformCallable] = {
-    Mode(2, 2): amplitude_3h_post_newtonian
+    Mode(2, 2): amp_lm(H_22, Mode(2, 2))
 }
 _post_newtonian_phases_by_mode: dict[Mode, WaveformCallable] = {
     Mode(2, 2): phase_5h_post_newtonian_tidal
