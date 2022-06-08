@@ -141,11 +141,12 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
 
         par_dict["arg_out"] = "yes"
         par_dict["use_mode_lm"] = [mode_to_k(self.mode)]
-
+        
         f_spa, _, _, _, _, hflm, _, _ = self.eobrun_callable(par_dict)
 
         amplitude = hflm[str(mode_to_k(self.mode))][0][to_slice]
         phase = hflm[str(mode_to_k(self.mode))][1][to_slice]
+        f_spa = f_spa[to_slice]
 
         return (f_spa, amplitude, phase)
 
