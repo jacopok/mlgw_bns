@@ -360,7 +360,12 @@ class Residuals(SavableData):
 
         number_of_points = self.phase_residuals.shape[1]
 
-        index = int(first_section_flat * number_of_points)
+        reference_freq = (
+            frequencies[-1] * (1 - first_section_flat)
+            - frequencies[0] * first_section_flat
+        )
+
+        index = np.searchsorted(frequencies, reference_freq)
 
         for i, phase_arr in enumerate(self.phase_residuals):
             slope = (phase_arr[index] - phase_arr[0]) / (
