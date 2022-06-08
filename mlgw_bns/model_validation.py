@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC
-from typing import Optional, Protocol, Type
+from typing import Optional, Type
 
 import numpy as np
 import pycbc.psd  # type: ignore
@@ -16,17 +16,17 @@ from .model import Model
 from .resample_residuals import cartesian_waveforms_at_frequencies
 
 
-class ValidatableModel(Protocol):
+# class ValidatableModel(Protocol):
 
-    dataset: Dataset
-    downsampling_indices: DownsamplingIndices
-    downsampling_training: DownsamplingTraining
+#     dataset: Dataset
+#     downsampling_indices: DownsamplingIndices
+#     downsampling_training: DownsamplingTraining
 
-    def predict_waveforms_bulk(self):
-        pass
+#     def predict_waveforms_bulk(self):
+#         pass
 
-    def predict_residuals_bulk(self):
-        pass
+#     def predict_residuals_bulk(self):
+#         pass
 
 
 class ValidateModel:
