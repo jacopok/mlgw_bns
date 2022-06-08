@@ -118,6 +118,15 @@ class ParametersWithExtrinsic:
     time_shift: float = 0.0
 
     def intrinsic(self, dataset: Dataset) -> WaveformParameters:
+        """Returns a WaveformParameters object, 
+        which only references a Dataset and thus can be 
+        used with training-level waveform generators.
+        
+        Parameters
+        ----------
+        dataset: Dataset
+            Reference dataset.
+        """
         return WaveformParameters(
             mass_ratio=self.mass_ratio,
             lambda_1=self.lambda_1,
