@@ -667,8 +667,7 @@ class Model:
         with the difference that it does not compute the
         Cartesian waveform.
 
-        Also, it only gives one polarization
-        and does not account for the distance
+        Also, it does not account for the distance.
 
         Parameters
         ----------
@@ -859,9 +858,7 @@ class ModesModel:
         self.modes = modes
         
         self.base_filename = model_kwargs.pop('filename', '')
-        
-        waveform_generator = model_kwargs.pop('waveform_generator', BarePostNewtonianModeGenerator)
-        
+                
         self.models = {}
         for mode in modes:
 
@@ -875,11 +872,11 @@ class ModesModel:
     def mode_filename(self, mode: Mode) -> str:
         return f'{self.base_filename}_l{mode[0]}_m{mode[1]}'
     
-    def generate(self, *args, **kwargs):
+    def generate(self, *args, **kwargs) -> None:
         for model in self.models.values():
             model.generate(*args, **kwargs)
 
-    def set_hyper_and_train_nn(self, *args, **kwargs):
+    def set_hyper_and_train_nn(self, *args, **kwargs) -> None:
         for model in self.models.values():
             model.set_hyper_and_train_nn(*args, **kwargs)
 
