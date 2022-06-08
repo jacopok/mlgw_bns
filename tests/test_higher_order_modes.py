@@ -99,7 +99,13 @@ def test_modes_model_waveform_generators():
 
 
 def test_modes_model_prediction(
-    trained_modes_model, params_with_extrinsic, frequencies
+    default_model, trained_modes_model, params_with_extrinsic, frequencies
 ):
 
-    trained_modes_model.predict(frequencies, params_with_extrinsic)
+    hp_modes, hc_modes = trained_modes_model.predict(frequencies, params_with_extrinsic)
+    hp_default, hc_default = default_model.predict(frequencies, params_with_extrinsic)
+
+    assert np.allclose(abs(hp_modes), abs(hp_default), atol=0.0, rtol=1)
+    assert np.allclose(abs(hc_modes), abs(hc_default), atol=0.0, rtol=1)
+
+    assert np.allclose(np.unwrap(np.angle(hp_modes)), np.unwrap(np.angle(hp_default)))
