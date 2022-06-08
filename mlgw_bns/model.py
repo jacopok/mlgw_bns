@@ -894,28 +894,31 @@ class ModesModel:
         
         for mode, model in self.models.items():
             amp, phi = model.predict_amplitude_phase(frequencies, params)
-            spherical_harmonic_plus = spherical_harmonic_spin_2(mode, params.inclination, params.reference_phase)
-            spherical_harmonic_minus = spherical_harmonic_spin_2(mode.opposite(), params.inclination, params.reference_phase)
+            # spherical_harmonic_plus = spherical_harmonic_spin_2(mode, params.inclination, params.reference_phase)
+            # spherical_harmonic_minus = spherical_harmonic_spin_2(mode.opposite(), params.inclination, params.reference_phase)
 
-            h_plus += amp / 2 * (
-                np.exp(- 1j * phi) * (
-                    spherical_harmonic_plus + (-1)**mode.l * np.conj(spherical_harmonic_minus)
-                    )
-                +
-                np.exp(+ 1j * phi) * (
-                    np.conj(spherical_harmonic_plus) + (-1)**mode.l * spherical_harmonic_minus
-                    )                
-            )
+            # h_plus += amp / 2 * (
+            #     np.exp(- 1j * phi) * (
+            #         spherical_harmonic_plus + (-1)**mode.l * np.conj(spherical_harmonic_minus)
+            #         )
+            #     +
+            #     np.exp(- 1j * phi) * (
+            #         np.conj(spherical_harmonic_plus) + (-1)**mode.l * spherical_harmonic_minus
+            #         )
+            # )
             
-            h_cross += amp * 1j / 2 * (
-                np.exp(- 1j * phi) * (
-                    spherical_harmonic_plus - (-1)**mode.l * np.conj(spherical_harmonic_minus)
-                    )
-                +
-                np.exp(+ 1j * phi) * (
-                    - np.conj(spherical_harmonic_plus) + (-1)**mode.l * spherical_harmonic_minus
-                    )
-            )
+            # h_cross += amp * 1j / 2 * (
+            #     np.exp(+ 1j * phi) * (
+            #         spherical_harmonic_plus - (-1)**mode.l * np.conj(spherical_harmonic_minus)
+            #         )
+            #     +
+            #     np.exp(- 1j * phi) * (
+            #         - np.conj(spherical_harmonic_plus) + (-1)**mode.l * spherical_harmonic_minus
+            #         )
+            # )
+            
+            h_plus += h_plus_from_mode(amp, phi, mode, params.inclination, params.reference_phase)
+            h_cross += h_cross_from_mode(amp, phi, mode, params.inclination, params.reference_phase)
         
         return h_plus, h_cross
 
@@ -1018,3 +1021,64 @@ def compute_polarizations(
     hc = pre_cross * waveform_imag - 1j * pre_cross * waveform_real
 
     return hp, hc
+
+
+def h_plus_from_mode(amp: np.ndarray, phi: np.ndarray, mode: Mode, inclination: float, reference_phase: float) -> np.ndarray:
+    """Contribution to the plus polarization from a single mode 
+    with both values of m: so, (l, m) as well as (l, -m) with m > 0.
+    """
+    
+    sin_phi = np.sin(phi)
+    cos_phi = np.cos(phi)
+    
+    spherical_harmonic_plus = spherical_harmonic_spin_2(mode, inclination, reference_phase)
+    spherical_harmonic_minus = spherical_harmonic_spin_2(mode.opposite(), inclination, reference_phase)
+
+    Y_plus_re = spherical_harmonic_plus.real
+    Y_plus_im = spherical_harmonic_plus.imag
+    Y_minus_re = spherical_harmonic_minus.real
+    Y_minus_im = spherical_harmonic_minus.imag
+    
+    ml = (-1)**mode.l
+    
+    h_plus_re = amp / 2 * (
+        + cos_phi * (Y_plus_re + ml * Y_minus_re)
+        + sin_phi * (Y_plus_im - ml * Y_minus_im)
+    )
+    
+    h_plus_im = amp / 2 * (
+        + cos_phi * (-Y_plus_im + ml * Y_minus_im)
+        + sin_phi * (Y_plus_re + ml * Y_minus_re)
+    )
+    
+    return h_plus_re - 1j * h_plus_im
+
+def h_cross_from_mode(amp: np.ndarray, phi: np.ndarray, mode: Mode, inclination: float, reference_phase: float) -> np.ndarray:
+    """Contribution to the cross polarization from a single mode 
+    with both values of m: so, (l, m) as well as (l, -m) with m > 0.
+    """
+    
+    sin_phi_3hp = np.sin(phi + 3 * np.pi / 2)
+    cos_phi_3hp = np.cos(phi + 3 * np.pi / 2)
+    
+    spherical_harmonic_plus = spherical_harmonic_spin_2(mode, inclination, reference_phase)
+    spherical_harmonic_minus = spherical_harmonic_spin_2(mode.opposite(), inclination, reference_phase)
+
+    Y_plus_re = spherical_harmonic_plus.real
+    Y_plus_im = spherical_harmonic_plus.imag
+    Y_minus_re = spherical_harmonic_minus.real
+    Y_minus_im = spherical_harmonic_minus.imag
+    
+    ml = (-1)**mode.l
+    
+    h_cross_re = - amp / 2 * (
+        + cos_phi_3hp * (Y_plus_re - ml * Y_minus_re)
+        + sin_phi_3hp * (Y_plus_im + ml * Y_minus_im)
+    )
+    
+    h_cross_im = - amp / 2 * (
+        - cos_phi_3hp * (Y_plus_im + ml * Y_minus_im)
+        + sin_phi_3hp * (Y_plus_re - ml * Y_minus_re)
+    )
+
+    return h_cross_re - 1j * h_cross_im
