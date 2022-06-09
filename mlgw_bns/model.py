@@ -857,7 +857,7 @@ class ModesModel:
         
         self.modes = modes
         
-        self.base_filename = model_kwargs.pop('filename', '')
+        self._base_filename = model_kwargs.pop('filename', '')
                 
         self.models = {}
         for mode in modes:
@@ -872,6 +872,16 @@ class ModesModel:
     def mode_filename(self, mode: Mode) -> str:
         return f'{self.base_filename}_l{mode[0]}_m{mode[1]}'
     
+    @property
+    def base_filename(self) -> str:
+        return self._base_filename
+
+    @base_filename.setter
+    def base_filename(self, value: str):
+        self._base_filename = value
+        for mode, model in self.models.items():
+            model.filename = self.mode_filename(mode)
+    
     def generate(self, *args, **kwargs) -> None:
         for model in self.models.values():
             model.generate(*args, **kwargs)
@@ -879,6 +889,14 @@ class ModesModel:
     def set_hyper_and_train_nn(self, *args, **kwargs) -> None:
         for model in self.models.values():
             model.set_hyper_and_train_nn(*args, **kwargs)
+
+    def save(self, *args, **kwargs) -> None:
+        for model in self.models.values():
+            model.save(*args, **kwargs)
+
+    def load(self, *args, **kwargs) -> None:
+        for model in self.models.values():
+            model.load(*args, **kwargs)
 
 
     def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic) -> tuple[np.ndarray, np.ndarray]:
