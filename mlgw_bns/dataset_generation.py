@@ -449,6 +449,7 @@ class WaveformParameters:
             "inclination": 0.0,
             "output_hpc": "no",
             "time_shift_FD": "yes",
+            "ode_tmax": 1e12,
         }
 
     def taylor_f2(
