@@ -89,6 +89,7 @@ def test_training_model_on_fixed_data(fixed_generator_pair):
     model = Model(
         waveform_generator=fixed_waveform_generator,
         parameter_generator=fixed_parameter_generator,
+        initial_frequency_hz=20.0,
         pca_components_number=5,
     )
     model.generate(5, 10, 10)
