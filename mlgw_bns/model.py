@@ -809,8 +809,9 @@ class Model:
             Time or times left until merger.
         """
 
-        df = frequency / 1000
-        freqs = frequency + df * np.arange(-4, 5)
+        if delta_f is None:
+            delta_f = frequency / 1000
+        freqs = frequency + delta_f * np.arange(-4, 5)
         weights = np.array([3, -32, 168, -672, 0, 672, -168, 32, -3]) / 840.0
 
         try:
@@ -822,7 +823,7 @@ class Model:
                 params.intrinsic(self.dataset), freqs * params.mass_sum_seconds
             )
 
-        derivative = np.sum(phis * weights) / df
+        derivative = np.sum(phis * weights) / delta_f
 
         return derivative / (2 * np.pi)
 
