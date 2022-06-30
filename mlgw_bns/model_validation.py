@@ -49,10 +49,21 @@ class ValidateModel:
 
         self.model = model
 
+        f_length = (
+            int(
+                (
+                    model.dataset.effective_srate_hz / 2
+                    - model.dataset.effective_initial_frequency_hz
+                )
+                / model.dataset.delta_f_hz
+            )
+            + 1
+        )
+
         self.psd_name: str = psd_name
         self.psd: pycbc.types.FrequencySeries = pycbc.psd.from_string(
             psd_name,
-            length=len(model.dataset.frequencies) // downsample_by,
+            length=f_length // downsample_by,
             delta_f=model.dataset.delta_f_hz * downsample_by,
             low_freq_cutoff=model.dataset.initial_frequency_hz,
         )
