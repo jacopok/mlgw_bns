@@ -14,11 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Changelog file!
+- Changelog!
+- Some badges in the README:
+    - coverage report with [coveralls](https://coveralls.io/)
+    - downloads per month
 
 ### Changed
 
 - Default model given now starts from 5Hz
+
+### Fixed
+
 - PCA now uses SVD
 - Fix TEOB call error, which occurred when the integration time exceeded 1e9M
 - Fix `ValidateModel` frequency arrays
