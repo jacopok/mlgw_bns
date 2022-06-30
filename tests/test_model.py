@@ -140,9 +140,11 @@ def test_model_nn_prediction(
     # at the beginning of integration
     # TODO remove this once the TEOB bug is fixed
 
+    red_factor = 8
+
     n_additional = 256
     f_0 = teob_dict["initial_frequency"]
-    delta_f = teob_dict["df"]
+    delta_f = teob_dict["df"] * red_factor
     new_f0 = f_0 - delta_f * n_additional
     teob_dict["initial_frequency"] = new_f0
 
@@ -152,7 +154,7 @@ def test_model_nn_prediction(
     hc_teob = (rhc_teob - 1j * ihc_teob)[n_additional:]
     f_spa = f_spa[n_additional:]
 
-    n_downsample = len(f_spa) // number_of_sample_points
+    n_downsample = len(f_spa) // number_of_sample_points // red_factor
 
     freqs_hz = f_spa[::n_downsample]
 
@@ -213,7 +215,7 @@ def test_model_nn_prediction_random_extrinsic(
     teob_dict["use_geometric_units"] = "no"
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
     teob_dict["srate_interp"] /= params.mass_sum_seconds
-    teob_dict["df"] /= params.mass_sum_seconds / 8.0
+    teob_dict["df"] /= params.mass_sum_seconds / 1024.
 
     # tweak initial frequency backward by a few samples
     # this is needed because of a bug in TEOBResumS
