@@ -154,9 +154,11 @@ def test_model_nn_prediction(
     hc_teob = (rhc_teob - 1j * ihc_teob)[n_additional:]
     f_spa = f_spa[n_additional:]
 
-    n_downsample = len(f_spa) // number_of_sample_points // red_factor
+    n_downsample = len(f_spa) // number_of_sample_points
 
     freqs_hz = f_spa[::n_downsample]
+
+    assert abs(len(freqs_hz) - number_of_sample_points) <= 1
 
     hp, hc = benchmark(model.predict, freqs_hz, params)
 
@@ -215,7 +217,7 @@ def test_model_nn_prediction_random_extrinsic(
     teob_dict["use_geometric_units"] = "no"
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
     teob_dict["srate_interp"] /= params.mass_sum_seconds
-    teob_dict["df"] /= params.mass_sum_seconds / 1024.
+    teob_dict["df"] /= params.mass_sum_seconds / 1024.0
 
     # tweak initial frequency backward by a few samples
     # this is needed because of a bug in TEOBResumS
