@@ -12,9 +12,9 @@ TRAINED_MODEL_MAX_MISMATCH = 1.5e-2
 # if the maximum mismatch is 1.5e-2,
 # the average mismatch should be this many times
 # smaller than the maximum mismatch;
-# so, if this is 15 then the average
-# mismatch will need to be smaller than 1e-3
-AVERAGE_MISMATCH_REDUCTION_FACTOR = 15
+# so, if this is 30 then the average
+# mismatch will need to be smaller than 3e-3
+AVERAGE_MISMATCH_REDUCTION_FACTOR = 5
 
 
 def test_validating_model(generated_model):
