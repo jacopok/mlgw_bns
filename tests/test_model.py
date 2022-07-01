@@ -14,7 +14,7 @@ TRAINED_MODEL_MAX_MISMATCH = 1.5e-2
 # smaller than the maximum mismatch;
 # so, if this is 30 then the average
 # mismatch will need to be smaller than 3e-3
-AVERAGE_MISMATCH_REDUCTION_FACTOR = 5
+AVERAGE_MISMATCH_REDUCTION_FACTOR = 10
 
 
 def test_validating_model(generated_model):
@@ -29,13 +29,18 @@ def test_model_saving(generated_model):
     with generated_model.file_arrays as file:
         assert "downsampling/amplitude_indices" in file
         assert file["downsampling/amplitude_indices"][0] == 0
+        assert "principal_component_analysis/eigenvalues" in file
 
-        assert 50 < file["downsampling/amplitude_indices"][10] < 2000
+
+def test_downsampling_indices_characteristics(generated_model):
+
+    generated_model.save()
+
+    with generated_model.file_arrays as file:
+        assert 50 < file["downsampling/amplitude_indices"][10] < 10_000
 
         # this holds when training on residuals
         # assert 20_000 < file["downsampling/amplitude_indices"][10] < 30_000
-
-        assert "principal_component_analysis/eigenvalues" in file
 
 
 def test_quick_model_with_validation_mismatches(trained_model):
@@ -140,9 +145,9 @@ def test_model_nn_prediction(
     # at the beginning of integration
     # TODO remove this once the TEOB bug is fixed
 
-    red_factor = 8
+    red_factor = 128
 
-    n_additional = 256
+    n_additional = 256 // red_factor
     f_0 = teob_dict["initial_frequency"]
     delta_f = teob_dict["df"] * red_factor
     new_f0 = f_0 - delta_f * n_additional
@@ -158,7 +163,7 @@ def test_model_nn_prediction(
 
     freqs_hz = f_spa[::n_downsample]
 
-    assert abs(len(freqs_hz) - number_of_sample_points) <= 1
+    assert abs(len(freqs_hz) - number_of_sample_points) <= 4
 
     hp, hc = benchmark(model.predict, freqs_hz, params)
 
