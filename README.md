@@ -29,6 +29,10 @@ pip install mlgw-bns
 
 For more details see [the documentation](https://mlgw-bns.readthedocs.io/en/latest/usage_guides/install.html).
 
+## Changelog
+
+Changes across versions are documented since version 0.10.1 in the [CHANGELOG](https://github.com/jacopok/mlgw_bns/blob/master/CHANGELOG.md).
+
 ## Inner workings
 
 The main steps taken by `mlgw_bns` to train on a dataset are as follows:
