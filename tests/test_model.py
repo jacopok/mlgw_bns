@@ -171,6 +171,7 @@ def test_model_nn_prediction(
     delta_f = teob_dict["df"] * red_factor
     new_f0 = f_0 - delta_f * n_additional
     teob_dict["initial_frequency"] = new_f0
+    teob_dict["df"] = delta_f
 
     f_spa, rhp_teob, ihp_teob, rhc_teob, ihc_teob = EOBRunPy(teob_dict)
 
@@ -178,11 +179,13 @@ def test_model_nn_prediction(
     hc_teob = (rhc_teob - 1j * ihc_teob)[n_additional:]
     f_spa = f_spa[n_additional:]
 
-    n_downsample = len(f_spa) // number_of_sample_points
+    n_downsample = round(len(f_spa) / number_of_sample_points)
 
     freqs_hz = f_spa[::n_downsample]
 
-    assert abs(len(freqs_hz) - number_of_sample_points) <= 4
+    assert (
+        abs((len(freqs_hz) - number_of_sample_points) / number_of_sample_points) <= 0.1
+    )
 
     hp, hc = benchmark(model.predict, freqs_hz, params)
 
