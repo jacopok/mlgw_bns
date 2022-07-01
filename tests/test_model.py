@@ -17,6 +17,25 @@ TRAINED_MODEL_MAX_MISMATCH = 1.5e-2
 AVERAGE_MISMATCH_REDUCTION_FACTOR = 10
 
 
+def waveforms_are_close(
+    h1, h2, validation_model, freqs_hz, tolerance_amp, tolerance_mismatch
+):
+    assert validation_model.mismatch(h1, h2, frequencies=freqs_hz) < tolerance_mismatch
+
+    # the mismatch does not account for the magnitude of the waveforms,
+    # so we check that separately.
+    number_of_sample_points = len(h1)
+
+    assert np.allclose(
+        abs(h1)[: number_of_sample_points // 4],
+        abs(h2)[: number_of_sample_points // 4],
+        atol=0.0,
+        rtol=tolerance_amp,
+    )
+
+    assert np.allclose(abs(h1), abs(h2), atol=0.0, rtol=tolerance_amp * 20)
+
+
 def test_validating_model(generated_model):
 
     vm = ValidateModel(generated_model)
@@ -93,7 +112,7 @@ def test_default_model_residuals(default_model):
 @pytest.mark.benchmark(group="model-prediction")
 @pytest.mark.parametrize(
     "number_of_sample_points",
-    [128, 256, 512, 1024, 2048, 4096, 8192, 16384],
+    [128, 512, 2048, 8192],
 )
 @pytest.mark.parametrize(
     "model_name, tolerance_mismatch, tolerance_amp",
@@ -145,7 +164,7 @@ def test_model_nn_prediction(
     # at the beginning of integration
     # TODO remove this once the TEOB bug is fixed
 
-    red_factor = 128
+    red_factor = 1024
 
     n_additional = 256 // red_factor
     f_0 = teob_dict["initial_frequency"]
@@ -167,37 +186,16 @@ def test_model_nn_prediction(
 
     hp, hc = benchmark(model.predict, freqs_hz, params)
 
-    vm = ValidateModel(model)
+    vm = ValidateModel(model, downsample_by=2048)
 
     hp_teob = hp_teob[::n_downsample]
     hc_teob = hc_teob[::n_downsample]
 
-    # The model used here uses quite few training data, so we are not able to
-    # achieve very small mismatches.
-    assert vm.mismatch(hp, hp_teob, frequencies=freqs_hz) < tolerance_mismatch
-    assert vm.mismatch(hc, hc_teob, frequencies=freqs_hz) < tolerance_mismatch
-
-    # the mismatch does not account for the magnitude of the waveforms,
-    # so we check that separately.
-    assert np.allclose(
-        abs(hp)[: number_of_sample_points // 4],
-        abs(hp_teob)[: number_of_sample_points // 4],
-        atol=0.0,
-        rtol=tolerance_amp,
-    )
-
-    assert np.allclose(
-        abs(hc)[: number_of_sample_points // 4],
-        abs(hc_teob)[: number_of_sample_points // 4],
-        atol=0.0,
-        rtol=tolerance_amp,
-    )
-
-    assert np.allclose(abs(hp), abs(hp_teob), atol=0.0, rtol=tolerance_amp * 20)
-    assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=tolerance_amp * 20)
+    waveforms_are_close(hp, hp_teob, vm, freqs_hz, tolerance_amp, tolerance_mismatch)
+    waveforms_are_close(hc, hc_teob, vm, freqs_hz, tolerance_amp, tolerance_mismatch)
 
 
-@pytest.mark.parametrize("seed", list(range(10)))
+@pytest.mark.parametrize("seed", list(range(5)))
 @pytest.mark.parametrize(
     "model_name, tolerance_mismatch, tolerance_amp",
     [
@@ -230,7 +228,7 @@ def test_model_nn_prediction_random_extrinsic(
     # at the beginning of integration
     # TODO remove this once the TEOB bug is fixed
 
-    n_additional = 128
+    n_additional = 2
     f_0 = teob_dict["initial_frequency"]
     delta_f = teob_dict["df"]
     new_f0 = f_0 - delta_f * n_additional
@@ -246,29 +244,8 @@ def test_model_nn_prediction_random_extrinsic(
 
     vm = ValidateModel(model)
 
-    # The model used here uses quite few training data, so we are not able to
-    # achieve very small mismatches.
-    assert vm.mismatch(hp, hp_teob, frequencies=freqs_hz) < tolerance_mismatch
-    assert vm.mismatch(hc, hc_teob, frequencies=freqs_hz) < tolerance_mismatch
-
-    # the mismatch does not account for the magnitude of the waveforms,
-    # so we check that separately.
-    assert np.allclose(
-        abs(hp)[: len(hp) // 4],
-        abs(hp_teob)[: len(hp) // 4],
-        atol=0.0,
-        rtol=tolerance_amp,
-    )
-
-    assert np.allclose(
-        abs(hc)[: len(hp) // 4],
-        abs(hc_teob)[: len(hp) // 4],
-        atol=0.0,
-        rtol=tolerance_amp,
-    )
-
-    assert np.allclose(abs(hp), abs(hp_teob), atol=0.0, rtol=tolerance_amp * 20)
-    assert np.allclose(abs(hc), abs(hc_teob), atol=0.0, rtol=tolerance_amp * 20)
+    waveforms_are_close(hp, hp_teob, vm, freqs_hz, tolerance_amp, tolerance_mismatch)
+    waveforms_are_close(hc, hc_teob, vm, freqs_hz, tolerance_amp, tolerance_mismatch)
 
 
 def random_parameters(model: Model, seed: int) -> ParametersWithExtrinsic:
