@@ -41,7 +41,7 @@ class DownsamplingTraining(ABC):
 
     degree: int = 3
 
-    def __init__(self, dataset: Dataset, tol: float = 1e-6):
+    def __init__(self, dataset: Dataset, tol: float = 1e-5):
 
         self.dataset = dataset
         self.tol = tol
