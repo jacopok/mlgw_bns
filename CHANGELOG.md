@@ -6,9 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.10.2] - 2022-07-01
+
+### Fixed
+
+- Improve evaluation speed, by reducing downsampled array size (set tolerance to 1e-5)
+    - now the speeds, going down to 5Hz, are the same as those we had for 20Hz
+- Improve test execution speed (in `tests/test_model.py`)
+
 ### Added
 
-- `ModesModel` including higher order modes' contributions
+- Test profiling availability
 
 ## [0.10.1] - 2022-06-30
 
@@ -30,5 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `ValidateModel` frequency arrays
 - Various fixes to tests
 
-[Unreleased]: https://github.com/jacopok/mlgw_bns/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/jacopok/mlgw_bns/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/jacopok/mlgw_bns/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/jacopok/mlgw_bns/compare/v0.10.0...v0.10.1
