@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import lru_cache
@@ -667,6 +668,11 @@ class Model:
         )
 
         if rescaled_frequencies[0] < self.dataset.effective_initial_frequency_hz:
+
+            warnings.warn(UserWarning(
+                f"""Extending to low frequencies with a Post-Newtonian waveform,
+                the limit for this model is {self.dataset.effective_initial_frequency_hz}Hz
+                """))
             extend_with_pn = True
             limit_index = np.searchsorted(rescaled_frequencies, self.dataset.effective_initial_frequency_hz)
             low_freqs_hz = rescaled_frequencies[:limit_index] # type: ignore
