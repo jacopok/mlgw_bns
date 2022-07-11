@@ -666,12 +666,17 @@ class Model:
             params.total_mass / self.dataset.total_mass
         )
 
-        try:
-            assert (
-                rescaled_frequencies[0] >= self.dataset.effective_initial_frequency_hz
-            )
-        except AssertionError as e:
-            raise FrequencyTooLowError() from e
+        if rescaled_frequencies[0] < self.dataset.effective_initial_frequency_hz:
+            extend_with_pn = True
+            limit_index = np.searchsorted(rescaled_frequencies, self.dataset.effective_initial_frequency_hz)
+            low_freqs_hz = rescaled_frequencies[:limit_index] # type: ignore
+            rescaled_frequencies = rescaled_frequencies[limit_index:] # type: ignore
+            
+            low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz / (
+                params.total_mass / self.dataset.total_mass
+            ))
+        else:
+            extend_with_pn = False
 
         try:
             assert rescaled_frequencies[-1] <= self.dataset.effective_srate_hz / 2.0
@@ -701,24 +706,43 @@ class Model:
 
         pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
 
-        amp = (
-            self.downsampling_training.resample(
+        resampled_amp = self.downsampling_training.resample(
                 self.dataset.frequencies_hz[
                     self.downsampling_indices.amplitude_indices
                 ],
                 rescaled_frequencies,
                 amp_ds,
             )
+        
+        
+        resampled_phi = self.downsampling_training.resample(
+                self.dataset.frequencies_hz[self.downsampling_indices.phase_indices],
+                rescaled_frequencies,
+                phi_ds,
+        )
+
+        if extend_with_pn:
+            resampled_amp = np.concatenate((
+                self.dataset.waveform_generator.post_newtonian_amplitude(
+                intrinsic_params,
+                low_freqs,
+                ),
+                resampled_amp
+            ))
+            resampled_phi = np.concatenate((
+                self.dataset.waveform_generator.post_newtonian_phase(
+                intrinsic_params,
+                low_freqs,
+                ),
+                resampled_phi
+            ))
+        amp = ( resampled_amp
             * pre
             / params.distance_mpc
         )
 
         phi = (
-            self.downsampling_training.resample(
-                self.dataset.frequencies_hz[self.downsampling_indices.phase_indices],
-                rescaled_frequencies,
-                phi_ds,
-            )
+            resampled_phi
             + params.reference_phase
             + (2 * np.pi * params.time_shift) * frequencies
         )
