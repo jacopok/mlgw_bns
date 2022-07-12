@@ -678,9 +678,8 @@ class Model:
             low_freqs_hz = rescaled_frequencies[:limit_index] # type: ignore
             rescaled_frequencies = rescaled_frequencies[limit_index:] # type: ignore
             
-            low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz / (
-                params.total_mass / self.dataset.total_mass
-            ))
+            low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz) 
+            
         else:
             extend_with_pn = False
 
@@ -738,6 +737,14 @@ class Model:
                 ),
                 resampled_amp
             ))
+            
+            phi_connection = (
+                self.dataset.waveform_generator.post_newtonian_phase(
+                intrinsic_params,
+                np.array([low_freqs[0], self.dataset.effective_initial_frequency_hz]),
+                )[1]
+            )
+            
             resampled_phi = np.concatenate((
                 self.dataset.waveform_generator.post_newtonian_phase(
                 intrinsic_params,
@@ -745,6 +752,7 @@ class Model:
                 ),
                 resampled_phi
             ))
+                        
         amp = ( resampled_amp
             * pre
             / params.distance_mpc
