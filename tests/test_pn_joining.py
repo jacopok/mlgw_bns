@@ -12,11 +12,9 @@ from .test_model import random_parameters
 @pytest.mark.requires_default
 def test_default_model_pn_connection(default_model):
     par = random_parameters(default_model, 1)
-    par.total_mass = default_model.dataset.total_mass
+    par.total_mass = 2.4
 
-    f_low = default_model.dataset.effective_initial_frequency_hz
-
-    assert f_low < 5.0
+    f_low = default_model.dataset.effective_initial_frequency_hz * (2.8 / 2.4)
 
     freqs = np.linspace(f_low - 1e-4, f_low + 1e-4, num=2000)
 
