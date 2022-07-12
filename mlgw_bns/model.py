@@ -684,6 +684,9 @@ class Model:
         else:
             extend_with_pn = False
 
+        if len(rescaled_frequencies) < 1:
+            raise ValueError('At least one point should be in the model band')
+
         try:
             assert rescaled_frequencies[-1] <= self.dataset.effective_srate_hz / 2.0
         except AssertionError as e:
