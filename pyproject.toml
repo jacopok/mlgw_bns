@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mlgw_bns"
-version = "0.10.2"
+version = "0.11.0-alpha.0"
 description = "Accelerating gravitational wave template generation with machine learning."
 license = "GNU GPL3"
 authors = ["Jacopo Tissino <jacopo@tissino.it>"]
