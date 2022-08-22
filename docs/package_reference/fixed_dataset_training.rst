@@ -1,5 +1,5 @@
 Fixed Dataset Training
-==============
+======================
 
 .. automodule:: mlgw_bns.fixed_dataset_training
 
