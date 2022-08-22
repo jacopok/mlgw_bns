@@ -40,10 +40,14 @@ extensions = [
     "sphinx.ext.autosectionlabel",
     "sphinx.ext.viewcode",
     "sphinx_search.extension",
+    "sphinxcontrib.bibtex"
 ]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
+
+# Add the bibliography
+bibtex_bibfiles = ['refs.bib']
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
