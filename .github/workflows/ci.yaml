@@ -17,10 +17,6 @@ jobs:
       run: |
         cd ..
         git clone https://bitbucket.org/eob_ihes/teobresums/
-        cd teobresums/Python
-        echo "[build-system]" >> pyproject.toml
-        echo "requires = [\"numpy>=1.17\", \"setuptools\"]" >> pyproject.toml
-        cd ../..
     - name: Install TEOBResumS deps
       run: |
         sudo apt-get install -y libconfig-dev libgsl-dev
