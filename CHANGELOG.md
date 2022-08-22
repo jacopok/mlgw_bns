@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     post-Newtonian expressions. 
     (Right now, this is still [not smooth](https://github.com/jacopok/mlgw_bns/issues/36).)
 - Mention of this changelog in the README
+- Reference documentation about the mathematical details of higher order modes.
 
 ## [0.10.2] - 2022-07-01
 
