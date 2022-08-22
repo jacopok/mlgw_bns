@@ -18,6 +18,13 @@ Welcome to ``mlgw_bns``'s documentation!
 
 .. toctree::
    :maxdepth: 2
+   :caption: Explanation
+   :name: explanation
+
+   explanation/higher_order_modes.md
+
+.. toctree::
+   :maxdepth: 2
    :caption: Usage guides
    :name: usage_guides
 
