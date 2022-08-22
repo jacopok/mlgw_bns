@@ -29,11 +29,13 @@ sphinx-rtd-theme = {version="^1.0.0", optional=true}
 readthedocs-sphinx-search = {version="^0.1.1", optional=true}
 myst-parser = {version="^0.15.2", optional=true}
 MarkupSafe = {version = "2.0.1", optional=true}
+sphinxcontrib-bibtex = {version="^2.4.2", optional=true}
+
 toml = "^0.10.2"
 
 [tool.poetry.extras]
 torch = ["torch"]
-docs = ["Sphinx", "sphinx-rtd-theme", "readthedocs-sphinx-search", "myst-parser", "markupsafe"]
+docs = ["Sphinx", "sphinx-rtd-theme", "readthedocs-sphinx-search", "myst-parser", "markupsafe", "sphinxcontrib-bibtex"]
 
 [tool.poetry.dev-dependencies]
 TEOBResumSPy = {path='../teobresums/Python', develop=true, optional=false}
@@ -60,7 +62,6 @@ colorama = "^0.4.4"
 click = "8.0.2"
 coveralls = "^3.3.1"
 pytest-profiling = "^1.7.0"
-sphinxcontrib-bibtex = "^2.4.2"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
