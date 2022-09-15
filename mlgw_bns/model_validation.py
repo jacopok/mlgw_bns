@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from abc import ABC
-from typing import Optional, Type
+from functools import cached_property
+from pathlib import Path
+from typing import Callable, Optional, Type
 
 import numpy as np
-import pycbc.psd  # type: ignore
+
 from scipy import integrate  # type: ignore
+from scipy.interpolate import interp1d  # type: ignore
 from scipy.optimize import minimize_scalar  # type: ignore
 from tqdm import tqdm  # type: ignore
 
@@ -14,6 +17,8 @@ from .dataset_generation import Dataset, ParameterSet, WaveformGenerator
 from .downsampling_interpolation import DownsamplingIndices, DownsamplingTraining
 from .model import Model
 from .resample_residuals import cartesian_waveforms_at_frequencies
+
+PSD_PATH = Path(__file__).parent / "data"
 
 
 class ValidateModel:
@@ -26,56 +31,25 @@ class ValidateModel:
     psd_name: str
             Name of the power spectral density to use in the computation
             of the mismatches.
-            The name should correspond to one of the PSDs provided by
-            `pycbc <https://pycbc.org/pycbc/latest/html/pycbc.psd.html>`_.
-            Defaults to "EinsteinTelescopeP1600143".
-            This is compatible with
-            the `official ET sensitivities <http://www.et-gw.eu/index.php/etsensitivities>`_
-            only down to 5Hz (`issue <https://github.com/gwastro/pycbc/issues/3938>`_).
-    downsample_by: int
-            Factor by which to increase the spacing in the frequencies
-            used for the computation of the PSD and mismatches, compared
-            to the "standard FFT grid" with spacing
-            :math:`\Delta f = 1/ T`.
-            Defaults to 256.
+            Currently only 'ET' (default) is supported
     """
 
     def __init__(
         self,
         model: Model,
-        psd_name: str = "EinsteinTelescopeP1600143",
-        downsample_by: int = 256,
+        psd_name: str = "ET",
     ):
 
         self.model = model
-
-        f_length = (
-            int(
-                (
-                    model.dataset.effective_srate_hz / 2
-                    - model.dataset.effective_initial_frequency_hz
-                )
-                / model.dataset.delta_f_hz
-            )
-            + 1
-        )
-
         self.psd_name: str = psd_name
-        self.psd: pycbc.types.FrequencySeries = pycbc.psd.from_string(
-            psd_name,
-            length=f_length // downsample_by,
-            delta_f=model.dataset.delta_f_hz * downsample_by,
-            low_freq_cutoff=model.dataset.initial_frequency_hz,
-        )
+        self.psd_data = np.loadtxt(PSD_PATH / f"{self.psd_name}_psd.txt")
 
-        psd_frequencies: pycbc.types.array.Array = self.psd.sample_frequencies
+        self.frequencies = self.psd_data[:, 0]
+        self.psd_values = np.ones_like(self.frequencies)
+        # self.psd_values = self.psd_data[:, 1]
 
-        mask = self.psd > 0
-
-        self.frequencies = psd_frequencies[mask]
-        self.psd_values = self.psd[mask]
-
-    def psd_at_frequencies(self, frequencies: np.ndarray) -> np.ndarray:
+    @cached_property
+    def psd_at_frequencies(self) -> Callable[[np.ndarray], np.ndarray]:
         """Compute the given PSD
 
         Parameters
@@ -88,7 +62,11 @@ class ValidateModel:
         np.ndarray
             Values of the PSD, :math:`S_n(f_i)`.
         """
-        return np.array([self.psd.at_frequency(freq) for freq in frequencies])
+        return interp1d(
+            self.frequencies,
+            self.psd_values,
+            # bounds_error=False, fill_value=1.0
+        )
 
     def param_set(
         self, number_of_parameter_tuples: int, seed: Optional[int] = None
@@ -301,27 +279,14 @@ class ValidateModel:
         max_delta_t: float
             Maximum time shift for the two waveforms which are being compared,
             in seconds.
-            Defaults to 0.05.
+            Defaults to 0.07.
         """
 
         if frequencies is None:
-            psd_values = self.psd_values
             frequencies = self.frequencies
+            psd_values = self.psd_values
         else:
-            # TODO deal with the possibility that the frequencies may
-            # lie outside the range of the PSD's frequencies
-            # (recompute whole PSD?)
-            # (or just ignore the part outside of the bounds?)
-            # for now we do the latter
-            mask = np.bitwise_and(
-                min(self.frequencies) < frequencies,
-                frequencies < max(self.frequencies) - 2 * self.model.dataset.delta_f_hz,
-            )
-
-            psd_values = self.psd_at_frequencies(frequencies[mask])
-            frequencies = frequencies[mask]
-            waveform_1 = waveform_1[mask]
-            waveform_2 = waveform_2[mask]
+            psd_values = self.psd_at_frequencies(frequencies)
 
         def product(a: np.ndarray, b: np.ndarray) -> float:
             integral = integrate.trapezoid(np.conj(a) * b / psd_values, x=frequencies)
