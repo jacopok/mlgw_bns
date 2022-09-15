@@ -44,8 +44,7 @@ class ValidateModel:
         self.psd_data = np.loadtxt(PSD_PATH / f"{self.psd_name}_psd.txt")
 
         self.frequencies = self.psd_data[:, 0]
-        self.psd_values = np.ones_like(self.frequencies)
-        # self.psd_values = self.psd_data[:, 1]
+        self.psd_values = self.psd_data[:, 1]
 
     @cached_property
     def psd_at_frequencies(self) -> Callable[[np.ndarray], np.ndarray]:
