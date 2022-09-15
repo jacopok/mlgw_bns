@@ -10,16 +10,16 @@ jobs:
     strategy:
       matrix:
         platform: [ubuntu-latest]
-        python-version: ['3.7']
+        python-version: ['3.8', '3.9']
 
     steps:
-    - name: Clone and install TEOBResumS repo
-      run: |
-        cd ..
-        git clone https://bitbucket.org/eob_ihes/teobresums/
-    - name: Install TEOBResumS deps
-      run: |
-        sudo apt-get install -y libconfig-dev libgsl-dev
+    # - name: Clone and install TEOBResumS repo
+    #   run: |
+    #     cd ..
+    #     git clone https://bitbucket.org/eob_ihes/teobresums/
+    # - name: Install TEOBResumS deps
+    #   run: |
+    #     sudo apt-get install -y libconfig-dev libgsl-dev
     - uses: actions/checkout@v1
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v2
