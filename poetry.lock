@@ -107,7 +107,10 @@ mypy-extensions = ">=0.4.3"
 pathspec = ">=0.9.0,<1"
 platformdirs = ">=2"
 tomli = ">=0.2.6,<2.0.0"
-typing-extensions = ">=3.10.0.0"
+typing-extensions = [
+    {version = ">=3.10.0.0", markers = "python_version < \"3.10\""},
+    {version = ">=3.10.0.0,<3.10.0.1 || >3.10.0.1", markers = "python_version >= \"3.10\""},
+]
 
 [package.extras]
 colorama = ["colorama (>=0.4.3)"]
@@ -1687,8 +1690,8 @@ testing = ["func-timeout", "jaraco.itertools", "pytest (>=6)", "pytest-black (>=
 
 [metadata]
 lock-version = "1.1"
-python-versions = ">=3.8,<3.10"
-content-hash = "c215cb24a4742874d05801e76c9331034882d7a1fb86223d5ef86a8d331b0350"
+python-versions = ">=3.8,<3.11"
+content-hash = "c17e0c3456d1b2b8dd0113efd37ebc1d824d1b678245a8cefd2af7310cd9e6b6"
 
 [metadata.files]
 alabaster = [

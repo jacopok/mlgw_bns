@@ -11,7 +11,7 @@ repository = "https://github.com/jacopok/mlgw_bns"
 
 
 [tool.poetry.dependencies]
-python = ">=3.8,<3.10"
+python = ">=3.8,<3.11"
 numpy = ">=1.18,<1.24" # for all kinds of array manipulation
 optuna = "^2.10.0" # for optimization of hyperparameters
 scikit-learn = "^1.0.1" # provides the neural networks
