@@ -304,6 +304,6 @@ class ValidateModel:
         )
 
         if not res.success:
-            raise ValueError('Mismatch optimization did not succeed!')
+            raise ValueError("Mismatch optimization did not succeed!")
 
         return 1 - (-res.fun) / norm
