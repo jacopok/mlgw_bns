@@ -37,7 +37,6 @@ def waveforms_are_close(
 
 
 def test_validating_model(generated_model):
-
     vm = ValidateModel(generated_model)
 
 
@@ -189,7 +188,7 @@ def test_model_nn_prediction(
 
     hp, hc = benchmark(model.predict, freqs_hz, params)
 
-    vm = ValidateModel(model, downsample_by=2048)
+    vm = ValidateModel(model)
 
     hp_teob = hp_teob[::n_downsample]
     hc_teob = hc_teob[::n_downsample]
