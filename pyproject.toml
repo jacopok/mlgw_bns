@@ -43,6 +43,14 @@ optional=true
 [tool.poetry.group.torch.dependencies]
 torch = "^1.10.2"
 
+
+[tool.poetry.group.pycbc]
+optional=true
+
+[tool.poetry.group.pycbc.dependencies]
+pycbc = ">=2.0.5"
+
+
 [tool.poetry.group.dev]
 optional=true
 
