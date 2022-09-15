@@ -163,7 +163,7 @@ def test_model_nn_prediction(
     # at the beginning of integration
     # TODO remove this once the TEOB bug is fixed
 
-    red_factor = 1024
+    red_factor = 128
 
     n_additional = 256 // red_factor
     f_0 = teob_dict["initial_frequency"]
