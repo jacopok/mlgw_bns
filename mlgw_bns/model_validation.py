@@ -302,4 +302,8 @@ class ValidateModel:
         res = minimize_scalar(
             to_minimize, method="brent", bracket=(-max_delta_t, max_delta_t)
         )
+
+        if not res.success:
+            raise ValueError('Mismatch optimization did not succeed!')
+
         return 1 - (-res.fun) / norm
