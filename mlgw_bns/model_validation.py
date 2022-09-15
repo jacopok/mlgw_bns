@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Callable, Optional, Type
 
 import numpy as np
-
 from scipy import integrate  # type: ignore
 from scipy.interpolate import interp1d  # type: ignore
 from scipy.optimize import minimize_scalar  # type: ignore
@@ -65,7 +64,6 @@ class ValidateModel:
         return interp1d(
             self.frequencies,
             self.psd_values,
-            # bounds_error=False, fill_value=1.0
         )
 
     def param_set(
