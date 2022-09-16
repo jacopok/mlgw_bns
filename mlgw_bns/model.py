@@ -11,6 +11,7 @@ import h5py
 import joblib  # type: ignore
 import numpy as np
 import pkg_resources
+import yaml
 from numba import njit  # type: ignore
 
 from .data_management import (
@@ -96,7 +97,6 @@ class ParametersWithExtrinsic:
             in which the merger happens at the right edge of the
             timeseries. This also means that, in the frequency domain,
             the phase at high frequencies is roughly constant.
-
     """
 
     mass_ratio: float
@@ -267,6 +267,13 @@ class Model:
             + f"parameter_ranges={self.parameter_ranges})"
         )
 
+    @property    
+    def metadata_dict(self) -> dict:
+        return {
+            'initial_frequency_hz': self.initial_frequency_hz,
+            'srate_hz': self.srate_hz,
+        }
+
     @classmethod
     def default(cls, filename: Optional[str] = None):
         model = cls(DEFAULT_DATASET_BASENAME)
@@ -339,6 +346,23 @@ class Model:
             self._handle_missing_filename()
 
         return f"{self.filename}_arrays.h5"
+
+    @property
+    def filename_metadata(self) -> str:
+        if self.filename is None:
+            self._handle_missing_filename()
+
+        return f"{self.filename}.yaml"
+
+    def save_metadata(self):
+        
+        with open(self.filename_metadata, 'w') as f:
+            yaml.dump(self.metadata_dict, f)
+    
+    def load_metadata(self) -> dict:
+        
+        with open(self.filename_metadata, 'r') as f:
+            return yaml.load(f, Loader=yaml.FullLoader)
 
     @property
     def file_arrays(self) -> h5py.File:
