@@ -252,7 +252,7 @@ class Model:
     def __str__(self):
 
         n_waveforms = (
-            f"waveforms_available = {len(self.training_dataset)}"
+            f"waveforms_available = {len(self.training_dataset)}, "
             if self.training_dataset_available
             else ""
         )
