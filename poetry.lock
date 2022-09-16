@@ -2063,6 +2063,14 @@ python-versions = ">=3.7"
 test = ["pre-commit", "pytest"]
 
 [[package]]
+name = "types-PyYAML"
+version = "6.0.11"
+description = "Typing stubs for PyYAML"
+category = "main"
+optional = false
+python-versions = "*"
+
+[[package]]
 name = "types-setuptools"
 version = "57.4.18"
 description = "Typing stubs for setuptools"
@@ -2142,7 +2150,7 @@ docs = ["Sphinx", "sphinx-rtd-theme", "readthedocs-sphinx-search", "myst-parser"
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.8,<3.11"
-content-hash = "357125ab42781ae8760ded92672d00685291216d4771c2420d26af90d0b154db"
+content-hash = "d88ce81144f76634b80e431e997ad7066fad45be5ad3cd08b7786080426cb968"
 
 [metadata.files]
 alabaster = [
@@ -3702,6 +3710,10 @@ tqdm = [
 traitlets = [
     {file = "traitlets-5.4.0-py3-none-any.whl", hash = "sha256:93663cc8236093d48150e2af5e2ed30fc7904a11a6195e21bab0408af4e6d6c8"},
     {file = "traitlets-5.4.0.tar.gz", hash = "sha256:3f2c4e435e271592fe4390f1746ea56836e3a080f84e7833f0f801d9613fec39"},
+]
+types-PyYAML = [
+    {file = "types-PyYAML-6.0.11.tar.gz", hash = "sha256:7f7da2fd11e9bc1e5e9eb3ea1be84f4849747017a59fc2eee0ea34ed1147c2e0"},
+    {file = "types_PyYAML-6.0.11-py3-none-any.whl", hash = "sha256:8f890028123607379c63550179ddaec4517dc751f4c527a52bb61934bf495989"},
 ]
 types-setuptools = [
     {file = "types-setuptools-57.4.18.tar.gz", hash = "sha256:8ee03d823fe7fda0bd35faeae33d35cb5c25b497263e6a58b34c4cfd05f40bcf"},
