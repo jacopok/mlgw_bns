@@ -36,6 +36,31 @@ def waveforms_are_close(
     assert np.allclose(abs(h1), abs(h2), atol=0.0, rtol=tolerance_amp * 20)
 
 
+def test_model_str(model):
+    assert str(model) == (
+        "Model(filename=test_model, "
+        "auxiliary_data_available=False, nn_available=False, "
+        "training_dataset_available=False, "
+        "parameter_ranges=ParameterRanges(mass_range=(2.0, 4.0), "
+        "q_range=(1.0, 3.0), lambda1_range=(5.0, 5000.0), "
+        "lambda2_range=(5.0, 5000.0), chi1_range=(-0.5, 0.5), "
+        "chi2_range=(-0.5, 0.5)))"
+    )
+
+
+def test_new_model_without_name():
+    m = Model()
+
+    with pytest.raises(ValueError):
+        m.filename_arrays
+    with pytest.raises(ValueError):
+        m.filename_nn
+    with pytest.raises(ValueError):
+        m.filename_hyper
+
+    assert not m.nn_available
+
+
 def test_validating_model(generated_model):
     vm = ValidateModel(generated_model)
 
@@ -136,30 +161,20 @@ def test_model_nn_prediction(
     request,
     benchmark,
     number_of_sample_points,
+    parameters_with_extrinsic,
 ):
     """Test whether the prediction for the plus and cross polarizations
     provided by the model matches the value given by
     """
     model = request.getfixturevalue(model_name)
 
-    params = ParametersWithExtrinsic(
-        mass_ratio=1.2,
-        lambda_1=500.0,
-        lambda_2=50.0,
-        chi_1=0.1,
-        chi_2=-0.1,
-        distance_mpc=1.0,
-        inclination=0.0,
-        reference_phase=0.0,
-        time_shift=0.0,
-        total_mass=2.8,
+    teob_dict = parameters_with_extrinsic.teobresums_dict(
+        model.dataset, use_effective_frequencies=False
     )
-
-    teob_dict = params.teobresums_dict(model.dataset, use_effective_frequencies=False)
     teob_dict["use_geometric_units"] = "no"
-    teob_dict["initial_frequency"] /= params.mass_sum_seconds
-    teob_dict["srate_interp"] /= params.mass_sum_seconds
-    teob_dict["df"] /= params.mass_sum_seconds
+    teob_dict["initial_frequency"] /= parameters_with_extrinsic.mass_sum_seconds
+    teob_dict["srate_interp"] /= parameters_with_extrinsic.mass_sum_seconds
+    teob_dict["df"] /= parameters_with_extrinsic.mass_sum_seconds
 
     # tweak initial frequency backward by a few samples
     # this is needed because of a bug in TEOBResumS
@@ -190,7 +205,7 @@ def test_model_nn_prediction(
         abs((len(freqs_hz) - number_of_sample_points) / number_of_sample_points) <= 0.1
     )
 
-    hp, hc = benchmark(model.predict, freqs_hz, params)
+    hp, hc = benchmark(model.predict, freqs_hz, parameters_with_extrinsic)
 
     vm = ValidateModel(model)
 
@@ -315,3 +330,12 @@ def test_bounds_of_mass_range_work(trained_model, total_mass):
     )
 
     trained_model.predict(freqs, params)
+
+
+@pytest.mark.requires_default
+def test_time_until_merger_calculation(default_model, parameters_with_extrinsic):
+
+    t = default_model.time_until_merger(20.0, parameters_with_extrinsic)
+    assert 150 < t < 200
+    t2 = default_model.time_until_merger(20.0, parameters_with_extrinsic, delta_f=1)
+    np.isclose(t2, t)
