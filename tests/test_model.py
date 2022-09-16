@@ -37,7 +37,6 @@ def waveforms_are_close(
 
 
 def test_validating_model(generated_model):
-
     vm = ValidateModel(generated_model)
 
 
@@ -68,7 +67,9 @@ def test_quick_model_with_validation_mismatches(trained_model):
 
     mismatches = vm.validation_mismatches(16)
 
-    assert all(m < TRAINED_MODEL_MAX_MISMATCH for m in mismatches)
+    for m in mismatches:
+        assert m < TRAINED_MODEL_MAX_MISMATCH
+
     assert np.average(np.log(mismatches)) < np.log(
         TRAINED_MODEL_MAX_MISMATCH / AVERAGE_MISMATCH_REDUCTION_FACTOR
     )
@@ -81,7 +82,9 @@ def test_default_model_with_validation_mismatches(default_model):
 
     mismatches = vm.validation_mismatches(16)
 
-    assert all(m < DEFAULT_MODEL_MAX_MISMATCH for m in mismatches)
+    for m in mismatches:
+        assert m < DEFAULT_MODEL_MAX_MISMATCH
+
     assert np.average(np.log(mismatches)) < np.log(
         DEFAULT_MODEL_MAX_MISMATCH / AVERAGE_MISMATCH_REDUCTION_FACTOR
     )
@@ -164,7 +167,7 @@ def test_model_nn_prediction(
     # at the beginning of integration
     # TODO remove this once the TEOB bug is fixed
 
-    red_factor = 1024
+    red_factor = 128
 
     n_additional = 256 // red_factor
     f_0 = teob_dict["initial_frequency"]
@@ -189,7 +192,7 @@ def test_model_nn_prediction(
 
     hp, hc = benchmark(model.predict, freqs_hz, params)
 
-    vm = ValidateModel(model, downsample_by=2048)
+    vm = ValidateModel(model)
 
     hp_teob = hp_teob[::n_downsample]
     hc_teob = hc_teob[::n_downsample]

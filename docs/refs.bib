@@ -14,6 +14,43 @@
   file = {/home/jacopo/Zotero/storage/9EXL7JMP/Ajith et al_2011_Data formats for numerical relativity waves.pdf;/home/jacopo/Zotero/storage/IEHLKX77/0709.html}
 }
 
+@article{barsottiGravitationalWaveSurrogates2022,
+  title = {Gravitational Wave Surrogates through Automated Machine Learning},
+  author = {Barsotti, Dami{\'a}n and Cerino, Franco and Tiglio, Manuel and Villanueva, Aar{\'o}n},
+  year = {2022},
+  month = apr,
+  journal = {Classical and Quantum Gravity},
+  volume = {39},
+  number = {8},
+  eprint = {2110.08901},
+  eprinttype = {arxiv},
+  primaryclass = {gr-qc},
+  pages = {085011},
+  issn = {0264-9381, 1361-6382},
+  doi = {10.1088/1361-6382/ac5ba1},
+  abstract = {We analyze a prospect for predicting gravitational waveforms from compact binaries based on automated machine learning (AutoML) from around a hundred different possible regression models, without having to resort to tedious and manual case-by-case analyses and fine-tuning. The particular study of this article is within the context of the gravitational waves emitted by the collision of two spinless black holes in initial quasi-circular orbit. We find, for example, that approaches such as Gaussian process regression with radial bases as kernels do provide a sufficiently accurate solution, an approach which is generalizable to multiple dimensions with low computational evaluation cost. The results here presented suggest that AutoML might provide a framework for regression in the field of surrogates for gravitational waveforms. Our study is within the context of surrogates of numerical relativity simulations based on Reduced Basis and the Empirical Interpolation Method, where we find that for the particular case analyzed AutoML can produce surrogates which are essentially indistinguishable from the NR simulations themselves.},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Machine Learning,General Relativity and Quantum Cosmology},
+  file = {/home/jacopo/Zotero/storage/QDR75ZQD/Barsotti et al. - 2022 - Gravitational wave surrogates through automated ma.pdf;/home/jacopo/Zotero/storage/TBGP6HKL/2110.html}
+}
+
+@misc{fragkouliDeepResidualError2022,
+  title = {Deep {{Residual Error}} and {{Bag-of-Tricks Learning}} for {{Gravitational Wave Surrogate Modeling}}},
+  author = {Fragkouli, Styliani-Christina and Nousi, Paraskevi and Passalis, Nikolaos and Iosif, Panagiotis and Stergioulas, Nikolaos and Tefas, Anastasios},
+  year = {2022},
+  month = mar,
+  number = {arXiv:2203.08434},
+  eprint = {2203.08434},
+  eprinttype = {arxiv},
+  primaryclass = {astro-ph, physics:gr-qc},
+  publisher = {{arXiv}},
+  doi = {10.48550/arXiv.2203.08434},
+  abstract = {Deep learning methods have been employed in gravitational-wave astronomy to accelerate the construction of surrogate waveforms for the inspiral of spin-aligned black hole binaries, among other applications. We demonstrate, that the residual error of an artificial neural network that models the coefficients of the surrogate waveform expansion (especially those of the phase of the waveform) has sufficient structure to be learnable by a second network. Adding this second network, we were able to reduce the maximum mismatch for waveforms in a validation set by more than an order of magnitude. We also explored several other ideas for improving the accuracy of the surrogate model, such as the exploitation of similarities between waveforms, the augmentation of the training set, the dissection of the input space, using dedicated networks per output coefficient and output augmentation. In several cases, small improvements can be observed, but the most significant improvement still comes from the addition of a second network that models the residual error. Since the residual error for more general surrogate waveform models (when e.g. eccentricity is included) may also have a specific structure, one can expect our method to be applicable to cases where the gain in accuracy could lead to significant gains in computational time.},
+  archiveprefix = {arXiv},
+  keywords = {Astrophysics - High Energy Astrophysical Phenomena,Astrophysics - Instrumentation and Methods for Astrophysics,Computer Science - Machine Learning,General Relativity and Quantum Cosmology},
+  file = {/home/jacopo/Zotero/storage/T8JXX3YT/Fragkouli et al. - 2022 - Deep Residual Error and Bag-of-Tricks Learning for.pdf;/home/jacopo/Zotero/storage/GP6IL9HT/2203.html}
+}
+
 @article{garcia-quirosIMRPhenomXHMMultimodeFrequencydomain2020,
   title = {{{IMRPhenomXHM}}: {{A}} Multi-Mode Frequency-Domain Model for the Gravitational Wave Signal from Non-Precessing Black-Hole Binaries},
   shorttitle = {{{IMRPhenomXHM}}},
@@ -32,6 +69,23 @@
   archiveprefix = {arXiv},
   keywords = {General Relativity and Quantum Cosmology},
   file = {/home/jacopo/Zotero/storage/KQE2CSP7/García-Quirós et al_2020_IMRPhenomXHM.pdf;/home/jacopo/Zotero/storage/SZZWDKJA/2001.html}
+}
+
+@misc{islamSurrogateModelGravitational2022,
+  title = {Surrogate Model for Gravitational Wave Signals from Non-Spinning, Comparable- to Large-Mass-Ratio Black Hole Binaries Built on Black Hole Perturbation Theory Waveforms Calibrated to Numerical Relativity},
+  author = {Islam, Tousif and Field, Scott E. and Hughes, Scott A. and Khanna, Gaurav and Varma, Vijay and Giesler, Matthew and Scheel, Mark A. and Kidder, Lawrence E. and Pfeiffer, Harald P.},
+  year = {2022},
+  month = apr,
+  number = {arXiv:2204.01972},
+  eprint = {2204.01972},
+  eprinttype = {arxiv},
+  primaryclass = {gr-qc},
+  publisher = {{arXiv}},
+  doi = {10.48550/arXiv.2204.01972},
+  abstract = {We present a reduced-order surrogate model of gravitational waveforms from non-spinning binary black hole systems with comparable to large mass-ratio configurations. This surrogate model, \textbackslash texttt\{BHPTNRSur1dq1e4\}, is trained on waveform data generated by point-particle black hole perturbation theory (ppBHPT) with mass ratios varying from 2.5 to 10,000. \textbackslash texttt\{BHPTNRSur1dq1e4\} extends an earlier waveform model, \textbackslash texttt\{EMRISur1dq1e4\}, by using an updated transition-to-plunge model, covering longer durations up to 30,500 \$m\_1\$ (where \$m\_1\$ is the mass of the primary black hole), includes several more spherical harmonic modes up to \$\textbackslash ell=10\$, and calibrates subdominant modes to numerical relativity (NR) data. In the comparable mass-ratio regime, including mass ratios as low as \$2.5\$, the gravitational waveforms generated through ppBHPT agree surprisingly well with those from NR after this simple calibration step. We also compare our model to recent SXS and RIT NR simulations at mass ratios ranging from \$15\$ to \$32\$, and find the dominant quadrupolar modes agree to better than \$\textbackslash approx 10\^\{-3\}\$. We expect our model to be useful to study intermediate-mass-ratio binary systems in current and future gravitational-wave detectors.},
+  archiveprefix = {arXiv},
+  keywords = {General Relativity and Quantum Cosmology},
+  file = {/home/jacopo/Zotero/storage/QHJ7NJTN/Islam et al. - 2022 - Surrogate model for gravitational wave signals fro.pdf;/home/jacopo/Zotero/storage/KNFXAALF/2204.html}
 }
 
 @article{khanIncludingHigherOrder2020,
@@ -116,6 +170,23 @@
   file = {/home/jacopo/Zotero/storage/32P42H5S/Nagar et al_2021_All in one.pdf;/home/jacopo/Zotero/storage/W6ZKI4VF/2101.html}
 }
 
+@misc{nousiAutoencoderdrivenSpiralRepresentation2021,
+  title = {Autoencoder-Driven {{Spiral Representation Learning}} for {{Gravitational Wave Surrogate Modelling}}},
+  author = {Nousi, Paraskevi and Fragkouli, Styliani-Christina and Passalis, Nikolaos and Iosif, Panagiotis and Apostolatos, Theocharis and Pappas, George and Stergioulas, Nikolaos and Tefas, Anastasios},
+  year = {2021},
+  month = jul,
+  number = {arXiv:2107.04312},
+  eprint = {2107.04312},
+  eprinttype = {arxiv},
+  primaryclass = {astro-ph, physics:gr-qc},
+  publisher = {{arXiv}},
+  doi = {10.48550/arXiv.2107.04312},
+  abstract = {Recently, artificial neural networks have been gaining momentum in the field of gravitational wave astronomy, for example in surrogate modelling of computationally expensive waveform models for binary black hole inspiral and merger. Surrogate modelling yields fast and accurate approximations of gravitational waves and neural networks have been used in the final step of interpolating the coefficients of the surrogate model for arbitrary waveforms outside the training sample. We investigate the existence of underlying structures in the empirical interpolation coefficients using autoencoders. We demonstrate that when the coefficient space is compressed to only two dimensions, a spiral structure appears, wherein the spiral angle is linearly related to the mass ratio. Based on this finding, we design a spiral module with learnable parameters, that is used as the first layer in a neural network, which learns to map the input space to the coefficients. The spiral module is evaluated on multiple neural network architectures and consistently achieves better speed-accuracy trade-off than baseline models. A thorough experimental study is conducted and the final result is a surrogate model which can evaluate millions of input parameters in a single forward pass in under 1ms on a desktop GPU, while the mismatch between the corresponding generated waveforms and the ground-truth waveforms is better than the compared baseline methods. We anticipate the existence of analogous underlying structures and corresponding computational gains also in the case of spinning black hole binaries.},
+  archiveprefix = {arXiv},
+  keywords = {Astrophysics - High Energy Astrophysical Phenomena,Computer Science - Machine Learning,General Relativity and Quantum Cosmology},
+  file = {/home/jacopo/Zotero/storage/9S9CJL8U/Nousi et al. - 2021 - Autoencoder-driven Spiral Representation Learning .pdf;/home/jacopo/Zotero/storage/M54YX6L9/2107.html}
+}
+
 @article{ossokineMultipolarEffectiveOneBodyWaveforms2020,
   title = {Multipolar {{Effective-One-Body Waveforms}} for {{Precessing Binary Black Holes}}: {{Construction}} and {{Validation}}},
   shorttitle = {Multipolar {{Effective-One-Body Waveforms}} for {{Precessing Binary Black Holes}}},
@@ -135,6 +206,22 @@
   archiveprefix = {arXiv},
   keywords = {General Relativity and Quantum Cosmology},
   file = {/home/jacopo/Zotero/storage/BGK5UV6F/Ossokine et al. - 2020 - Multipolar Effective-One-Body Waveforms for Preces.pdf;/home/jacopo/Zotero/storage/E3ZUZE6M/2004.html}
+}
+
+@article{purrerFrequencydomainReducedOrder2014,
+  title = {Frequency-Domain Reduced Order Models for Gravitational Waves from Aligned-Spin Compact Binaries},
+  author = {P{\"u}rrer, Michael},
+  year = {2014},
+  month = oct,
+  journal = {Classical and Quantum Gravity},
+  volume = {31},
+  number = {19},
+  pages = {195010},
+  issn = {0264-9381, 1361-6382},
+  doi = {10.1088/0264-9381/31/19/195010},
+  abstract = {Black-hole binary coalescences are one of the most promising sources for the first detection of gravitational waves. Fast and accurate theoretical models of the gravitational radiation emitted from these coalescences are highly important for the detection and extraction of physical parameters. Spinning effective-one-body models for binaries with aligned-spins have been shown to be highly faithful, but are slow to generate and thus have not yet been used for parameter estimation (PE) studies. I provide a frequency-domain singular value decomposition-based surrogate reduced order model that is thousands of times faster for typical system masses and has a faithfulness mismatch of better than {$\sim$}0.1\% with the original SEOBNRv1 model for advanced LIGO detectors. This model enables PE studies up to signal-to-noise ratios (SNRs) of 20 and even up to 50 for total masses below 50 M{$\odot$}. This paper discusses various choices for approximations and interpolation over the parameter space that can be made for reduced order models of spinning compact binaries, provides a detailed discussion of errors arising in the construction and assesses the fidelity of such models.},
+  langid = {english},
+  file = {/home/jacopo/Zotero/storage/SUA9USA2/Pürrer - 2014 - Frequency-domain reduced order models for gravitat.pdf}
 }
 
 @article{qiPyROQPythonbasedReduced2021,
@@ -170,6 +257,40 @@
   archiveprefix = {arXiv},
   keywords = {Already read,General Relativity and Quantum Cosmology},
   file = {/home/jacopo/Zotero/storage/VYWXTTBP/Schmidt et al. - 2020 - Machine Learning Gravitational Waves from Binary B.pdf;/home/jacopo/Zotero/storage/P9FHEMML/2011.html}
+}
+
+@misc{thomasAcceleratingMultimodalGravitational2022,
+  title = {Accelerating Multimodal Gravitational Waveforms from Precessing Compact Binaries with Artificial Neural Networks},
+  author = {Thomas, Lucy M. and Pratten, Geraint and Schmidt, Patricia},
+  year = {2022},
+  month = may,
+  number = {arXiv:2205.14066},
+  eprint = {2205.14066},
+  eprinttype = {arxiv},
+  primaryclass = {astro-ph, physics:gr-qc},
+  publisher = {{arXiv}},
+  doi = {10.48550/arXiv.2205.14066},
+  abstract = {Gravitational waves from the coalescences of black hole and neutron stars afford us the unique opportunity to determine the sources' properties, such as their masses and spins, with unprecedented accuracy. To do so, however, theoretical models of the emitted signal that are i) extremely accurate and ii) computationally highly efficient are necessary. The inclusion of more detailed physics such as higher-order multipoles and relativistic spin-induced orbital precession increases the complexity and hence also computational cost of waveform models, which presents a severe bottleneck to the parameter inference problem. A popular method to generate waveforms more efficiently is to build a fast surrogate model of a slower one. In this paper, we show that traditional surrogate modelling methods combined with artificial neural networks can be used to build a computationally highly efficient while still accurate emulation of multipolar time-domain waveform models of precessing binary black holes. We apply this method to the state-of-the-art waveform model SEOBNRv4PHM and find significant computational improvements: On a traditional CPU, the typical generation of a single waveform using our neural network surrogate SEOBNN\_v4PHM\_4dq2 takes 18ms for a binary black hole with a total mass of \$44 M\_\{\textbackslash odot\}\$ when generated from 20Hz. In comparison to SEOBNRv4PHM itself, this amounts to an improvement in computational efficiency by two orders of magnitude. Utilising additional GPU acceleration, we find that this speed-up can be increased further with the generation of batches of waveforms simultaneously. Even without additional GPU acceleration, this dramatic decrease in waveform generation cost can reduce the inference timescale from weeks to hours.},
+  archiveprefix = {arXiv},
+  keywords = {Astrophysics - High Energy Astrophysical Phenomena,General Relativity and Quantum Cosmology},
+  file = {/home/jacopo/Zotero/storage/QY9JYZ7M/Thomas et al. - 2022 - Accelerating multimodal gravitational waveforms fr.pdf;/home/jacopo/Zotero/storage/MVJZN2RQ/2205.html}
+}
+
+@article{tiglioReducedOrderSurrogate2022,
+  title = {Reduced Order and Surrogate Models for Gravitational Waves},
+  author = {Tiglio, Manuel and Villanueva, Aar{\'o}n},
+  year = {2022},
+  month = apr,
+  journal = {Living Reviews in Relativity},
+  volume = {25},
+  number = {1},
+  pages = {2},
+  issn = {1433-8351},
+  doi = {10.1007/s41114-022-00035-w},
+  abstract = {We present an introduction to some of the state of the art in reduced order and surrogate modeling in gravitational-wave (GW) science. Approaches that we cover include principal component analysis, proper orthogonal (singular value) decompositions, the reduced basis approach, the empirical interpolation method, reduced order quadratures, and compressed likelihood evaluations. We divide the review into three parts: representation/compression of known data, predictive models, and data analysis. The targeted audience is practitioners in GW science, a field in which building predictive models and data analysis tools that are both accurate and fast to evaluate, especially when dealing with large amounts of data and intensive computations, are necessary yet can be challenging. As such, practical presentations and, sometimes, heuristic approaches are here preferred over rigor when the latter is not available. This review aims to be self-contained, within reasonable page limits, with little previous knowledge (at the undergraduate level) requirements in mathematics, scientific computing, and related disciplines. Emphasis is placed on optimality, as well as the curse of dimensionality and approaches that might have the promise of beating it. We also review most of the state of the art of GW surrogates. Some numerical algorithms, conditioning details, scalability, parallelization and other practical points are discussed. The approaches presented are to a large extent non-intrusive (in the sense that no differential equations are invoked) and data-driven and can therefore be applicable to other disciplines. We close with open challenges in high dimension surrogates, which are not unique to GW science.},
+  langid = {english},
+  keywords = {Gravitational waves,Machine learning,Reduced order models,Surrogate modeling},
+  file = {/home/jacopo/Zotero/storage/TUTIR6AF/Tiglio and Villanueva - 2022 - Reduced order and surrogate models for gravitation.pdf}
 }
 
 
