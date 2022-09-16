@@ -9,7 +9,7 @@ import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
 
-from mlgw_bns import Model
+from mlgw_bns import Model, ParametersWithExtrinsic
 from mlgw_bns.data_management import ParameterRanges
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
 from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
@@ -150,4 +150,20 @@ def random_array():
 
     return rng.multivariate_normal(
         np.zeros(100), cov=np.diag(1 / np.arange(1, 101) ** 2), size=(100,)
+    )
+
+
+@pytest.fixture
+def parameters_with_extrinsic():
+    return ParametersWithExtrinsic(
+        mass_ratio=1.2,
+        lambda_1=500.0,
+        lambda_2=50.0,
+        chi_1=0.1,
+        chi_2=-0.1,
+        distance_mpc=1.0,
+        inclination=0.0,
+        reference_phase=0.0,
+        time_shift=0.0,
+        total_mass=2.8,
     )
