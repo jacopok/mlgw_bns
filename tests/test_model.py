@@ -36,11 +36,12 @@ def waveforms_are_close(
     assert np.allclose(abs(h1), abs(h2), atol=0.0, rtol=tolerance_amp * 20)
 
 
-def test_model_str(model):
-    assert str(model) == (
+def test_model_str(trained_model):
+    assert str(trained_model) == (
         "Model(filename=test_model, "
-        "auxiliary_data_available=False, nn_available=False, "
-        "training_dataset_available=False, "
+        "auxiliary_data_available=True, nn_available=True, "
+        "training_dataset_available=True, "
+        "waveforms_available = 100, "
         "parameter_ranges=ParameterRanges(mass_range=(2.0, 4.0), "
         "q_range=(1.0, 3.0), lambda1_range=(5.0, 5000.0), "
         "lambda2_range=(5.0, 5000.0), chi1_range=(-0.5, 0.5), "
