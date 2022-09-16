@@ -43,8 +43,16 @@ class ValidateModel:
         self.psd_name: str = psd_name
         self.psd_data = np.loadtxt(PSD_PATH / f"{self.psd_name}_psd.txt")
 
-        self.frequencies = self.psd_data[:, 0]
-        self.psd_values = self.psd_data[:, 1]
+        all_frequencies = self.psd_data[:, 0]
+        mask = np.where(
+            np.logical_and(
+                all_frequencies < self.model.dataset.effective_srate_hz / 2,
+                all_frequencies > self.model.dataset.effective_initial_frequency_hz,
+            )
+        )
+
+        self.frequencies = self.psd_data[:, 0][mask]
+        self.psd_values = self.psd_data[:, 1][mask]
 
     @cached_property
     def psd_at_frequencies(self) -> Callable[[np.ndarray], np.ndarray]:
