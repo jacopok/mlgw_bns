@@ -19,11 +19,13 @@ h5py = "^3.6.0" # for management of h5 files
 numba = ">=0.56.2" # acceleration of numerical computations
 joblib = "^1.1.0" # to save pickled objects such as neural networks
 tqdm = "^4.62.3" # makes progressbars
-sortedcontainers = "^2.4.0"
-plotly = "^5.5.0"
-types-setuptools = "^57.4.7"
-toml = "^0.10.2"
+sortedcontainers = "^2.4.0" # for the management of index lists while downsampling
+plotly = "^5.5.0" # to make plots for optuna studies
+types-setuptools = "^57.4.7" # technical
+toml = "^0.10.2" # technical
 
+[tool.poetry.extras]
+docs = ['Sphinx', 'sphinx-rtd-theme', 'readthedocs-sphinx-search', 'myst-parser', 'MarkupSafe', 'sphinxcontrib-bibtex']
 
 [tool.poetry.group.docs]
 optional=true
