@@ -139,7 +139,7 @@ class SavableData:
 
 
 @dataclass
-class ParameterRanges(SavableData):
+class ParameterRanges:
     """Parameter ranges for waveform generation.
 
     The parameters should all be numpy arrays,
@@ -175,14 +175,6 @@ class ParameterRanges(SavableData):
     lambda2_range: tuple[float, float] = (5.0, 5000.0)
     chi1_range: tuple[float, float] = (-0.5, 0.5)
     chi2_range: tuple[float, float] = (-0.5, 0.5)
-
-    group_name: ClassVar[str] = "parameter_ranges"
-
-    def __iter__(self) -> Iterator[Any]:
-        """Override this method for the purpose of saving
-        as an h5 file, which only works with arrays."""
-        for array_name in self._arrays_list():
-            yield np.array(getattr(self, array_name))
 
     def check_parameters_in_ranges(self, params: ParametersWithExtrinsic) -> None:
         def within(x: float, x_range: tuple[float, float], name: str):

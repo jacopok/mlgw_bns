@@ -437,7 +437,6 @@ class Model:
         arr_list: list[SavableData] = [
             self.downsampling_indices,
             self.pca_data,
-            self.parameter_ranges,
         ]
 
         if include_training_data:
@@ -486,10 +485,6 @@ class Model:
         )
         if self.downsampling_indices is None or self.pca_data is None:
             raise FileNotFoundError
-
-        parameter_ranges = ParameterRanges.from_file(file_arrays)
-        assert parameter_ranges is not None
-        self.parameter_ranges = parameter_ranges
 
         self.dataset = self._make_dataset()
 
