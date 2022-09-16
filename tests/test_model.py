@@ -36,57 +36,6 @@ def waveforms_are_close(
     assert np.allclose(abs(h1), abs(h2), atol=0.0, rtol=tolerance_amp * 20)
 
 
-def test_model_str(trained_model):
-    assert str(trained_model) == (
-        "Model(filename=test_model, "
-        "auxiliary_data_available=True, nn_available=True, "
-        "training_dataset_available=True, "
-        "waveforms_available = 100, "
-        "parameter_ranges=ParameterRanges(mass_range=(2.0, 4.0), "
-        "q_range=(1.0, 3.0), lambda1_range=(5.0, 5000.0), "
-        "lambda2_range=(5.0, 5000.0), chi1_range=(-0.5, 0.5), "
-        "chi2_range=(-0.5, 0.5)))"
-    )
-
-
-def test_new_model_without_name():
-    m = Model()
-
-    with pytest.raises(ValueError):
-        m.filename_arrays
-    with pytest.raises(ValueError):
-        m.filename_nn
-    with pytest.raises(ValueError):
-        m.filename_hyper
-
-    assert not m.nn_available
-
-
-def test_validating_model(generated_model):
-    vm = ValidateModel(generated_model)
-
-
-def test_model_saving(generated_model):
-
-    generated_model.save()
-
-    with generated_model.file_arrays as file:
-        assert "downsampling/amplitude_indices" in file
-        assert file["downsampling/amplitude_indices"][0] == 0
-        assert "principal_component_analysis/eigenvalues" in file
-
-
-def test_downsampling_indices_characteristics(generated_model):
-
-    generated_model.save()
-
-    with generated_model.file_arrays as file:
-        assert 50 < file["downsampling/amplitude_indices"][10] < 10_000
-
-        # this holds when training on residuals
-        # assert 20_000 < file["downsampling/amplitude_indices"][10] < 30_000
-
-
 def test_quick_model_with_validation_mismatches(trained_model):
 
     vm = ValidateModel(trained_model)
