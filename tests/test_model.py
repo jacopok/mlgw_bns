@@ -14,7 +14,7 @@ TRAINED_MODEL_MAX_MISMATCH = 1.5e-2
 # smaller than the maximum mismatch;
 # so, if this is 30 then the average
 # mismatch will need to be smaller than 3e-3
-AVERAGE_MISMATCH_REDUCTION_FACTOR = 5
+AVERAGE_MISMATCH_REDUCTION_FACTOR = 10
 
 
 def waveforms_are_close(
@@ -83,7 +83,7 @@ def test_default_model_with_validation_mismatches(default_model):
     mismatches = vm.validation_mismatches(16)
 
     for m in mismatches:
-        assert m < TRAINED_MODEL_MAX_MISMATCH
+        assert m < DEFAULT_MODEL_MAX_MISMATCH
 
     assert np.average(np.log(mismatches)) < np.log(
         DEFAULT_MODEL_MAX_MISMATCH / AVERAGE_MISMATCH_REDUCTION_FACTOR
