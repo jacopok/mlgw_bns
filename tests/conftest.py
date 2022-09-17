@@ -112,7 +112,9 @@ def model():
     name = "test_model"
     model = Model(name, pca_components_number=20)
     yield model
-    os.remove(model.file_arrays.filename)
+
+    for filename in [model.filename_arrays, model.filename_metadata, model.filename_nn]:
+        os.remove(filename)
 
 
 @pytest.fixture(scope="session")
