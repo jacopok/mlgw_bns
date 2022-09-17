@@ -202,10 +202,10 @@ class Model:
         srate_hz: float = 4096.0,
         pca_components_number: int = 30,
         multibanding: bool = True,
+        parameter_ranges: ParameterRanges = ParameterRanges(),
         waveform_generator: Optional[WaveformGenerator] = None,
         downsampling_training: Optional[DownsamplingTraining] = None,
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
-        parameter_ranges: ParameterRanges = ParameterRanges(),
         parameter_generator : Optional[ParameterGenerator] = None,
     ):
 
@@ -273,6 +273,8 @@ class Model:
         return {
             'initial_frequency_hz': self.initial_frequency_hz,
             'srate_hz': self.srate_hz,
+            'pca_components_number': self.pca_components_number,
+            'multibanding': self.multibanding,
             'parameter_ranges': asdict(self.parameter_ranges),
         }
 
@@ -375,9 +377,8 @@ class Model:
     def set_metadata(self, meta_dict: dict) -> None:
         
         for key, value in meta_dict.items():
-            if isinstance(value, dict):
-                if key == 'parameter_ranges':
-                    value = from_dict(data_class=ParameterRanges, data=value)
+            if key == 'parameter_ranges':
+                value = from_dict(data_class=ParameterRanges, data=value)
             setattr(self, key, value)
 
     @property
