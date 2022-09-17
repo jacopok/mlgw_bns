@@ -626,7 +626,7 @@ class Model:
 
         # increase the number of maximum iterations by a lot:
         # here we do not want to stop the training early.
-        hyper.max_iter *= 10
+        hyper.max_iter *= 100
 
         self.nn = self.train_nn(hyper)
 
