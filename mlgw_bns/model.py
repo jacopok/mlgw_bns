@@ -198,7 +198,7 @@ class Model:
     def __init__(
         self,
         filename: Optional[str] = None,
-        initial_frequency_hz: float = 5.0,
+        initial_frequency_hz: float = 10.0,
         srate_hz: float = 4096.0,
         pca_components_number: int = 30,
         multibanding: bool = True,
