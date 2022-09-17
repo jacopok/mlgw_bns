@@ -2160,7 +2160,7 @@ docs = ["Sphinx", "sphinx-rtd-theme", "readthedocs-sphinx-search", "myst-parser"
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.8,<3.11"
-content-hash = "61caa2d3552fac1c9da3386907d5ca62370bbacf0542f2dd60a0951fa2cc8ba2"
+content-hash = "2cebc2bf889bb7647b18882c1fbbfdf9bfa7aa1b4e4f1e1e00184a420a23c1dc"
 
 [metadata.files]
 alabaster = [
