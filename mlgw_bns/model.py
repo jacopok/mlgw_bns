@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import warnings
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import lru_cache
 from typing import IO, ClassVar, Optional, Type, Union
 
@@ -12,6 +12,7 @@ import joblib  # type: ignore
 import numpy as np
 import pkg_resources
 import yaml
+from dacite import from_dict
 from numba import njit  # type: ignore
 
 from .data_management import (
@@ -272,16 +273,18 @@ class Model:
         return {
             'initial_frequency_hz': self.initial_frequency_hz,
             'srate_hz': self.srate_hz,
+            'parameter_ranges': asdict(self.parameter_ranges),
         }
 
     @classmethod
     def default(cls, filename: Optional[str] = None):
         model = cls(DEFAULT_DATASET_BASENAME)
 
+        stream_meta = pkg_resources.resource_stream(__name__, model.filename_metadata)
         stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
         stream_nn = pkg_resources.resource_stream(__name__, model.filename_nn)
 
-        model.load(streams=(stream_arrays, stream_nn))
+        model.load(streams=(stream_meta, stream_arrays, stream_nn))
 
         model.filename = filename
 
@@ -359,10 +362,23 @@ class Model:
         with open(self.filename_metadata, 'w') as f:
             yaml.dump(self.metadata_dict, f)
     
-    def load_metadata(self) -> dict:
+    def load_metadata(self, stream: Optional[IO[bytes]] = None) -> dict:
         
-        with open(self.filename_metadata, 'r') as f:
-            return yaml.load(f, Loader=yaml.FullLoader)
+        if stream is None:
+            with open(self.filename_metadata, 'r') as f:
+                return yaml.load(f, Loader=yaml.FullLoader)
+        
+        else:
+            return yaml.load(stream, Loader=yaml.FullLoader)
+        
+
+    def set_metadata(self, meta_dict: dict) -> None:
+        
+        for key, value in meta_dict.items():
+            if isinstance(value, dict):
+                if key == 'parameter_ranges':
+                    value = from_dict(data_class=ParameterRanges, data=value)
+            setattr(self, key, value)
 
     @property
     def file_arrays(self) -> h5py.File:
@@ -481,7 +497,7 @@ class Model:
         if self.nn is not None:
             self.nn.save(self.filename_nn)
 
-    def load(self, streams: Optional[tuple[IO[bytes], IO[bytes]]] = None) -> None:
+    def load(self, streams: Optional[tuple[IO[bytes], IO[bytes], IO[bytes]]] = None) -> None:
         """Load model from the files present in the current folder.
 
         Parameters
@@ -492,17 +508,21 @@ class Model:
         """
 
         if streams is not None:
+            stream_meta: Union[IO[bytes], None]
             filename_arrays: Union[IO[bytes], str]
             filename_nn: Union[IO[bytes], str]
 
-            filename_arrays, filename_nn = streams
+            stream_meta, filename_arrays, filename_nn = streams
             file_arrays = h5py.File(filename_arrays, mode="r")
             ignore_warnings = True
         else:
+            stream_meta = None
             file_arrays = self.file_arrays
             filename_nn = self.filename_nn
             ignore_warnings = False
 
+
+        self.set_metadata(self.load_metadata(stream_meta))
         self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
         self.pca_data = PrincipalComponentData.from_file(file_arrays)
         self.training_parameters = ParameterSet.from_file(
