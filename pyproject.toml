@@ -14,7 +14,7 @@ repository = "https://github.com/jacopok/mlgw_bns"
 python = ">=3.8,<3.11"
 numpy = ">=1.18,<1.24" # for all kinds of array manipulation
 optuna = "^2.10.0" # for optimization of hyperparameters
-scikit-learn = "^1.0.1" # provides the neural networks
+scikit-learn = "1.1.2" # provides the neural networks
 h5py = "^3.6.0" # for management of h5 files
 numba = ">=0.56.2" # acceleration of numerical computations
 joblib = "^1.1.0" # to save pickled objects such as neural networks

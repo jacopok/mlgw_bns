@@ -33,7 +33,7 @@ python-versions = "*"
 
 [[package]]
 name = "astroid"
-version = "2.12.9"
+version = "2.12.10"
 description = "An abstract syntax tree for Python with inference support."
 category = "dev"
 optional = false
@@ -549,7 +549,7 @@ python-versions = ">=3.5"
 
 [[package]]
 name = "igwn-auth-utils"
-version = "0.2.3"
+version = "0.3.0"
 description = "Authorisation utilities for IGWN"
 category = "dev"
 optional = false
@@ -557,14 +557,13 @@ python-versions = ">=3.6"
 
 [package.dependencies]
 cryptography = ">=2.3"
-requests = {version = ">=2.14", optional = true, markers = "extra == \"requests\""}
-safe-netrc = {version = ">=1.0.0", optional = true, markers = "extra == \"requests\""}
+requests = ">=2.14"
+safe-netrc = ">=1.0.0"
 scitokens = ">=1.7.0"
 
 [package.extras]
 docs = ["sphinx (>=4.0.0)", "sphinx-immaterial-igwn"]
 lint = ["flake8 (>=3.7.0)", "flake8-bandit"]
-requests = ["requests (>=2.14)", "safe-netrc (>=1.0.0)"]
 test = ["pytest (>=3.9.1)", "pytest-cov", "requests (>=2.14)", "requests-mock", "safe-netrc (>=1.0.0)"]
 
 [[package]]
@@ -1350,16 +1349,16 @@ plugins = ["importlib-metadata"]
 
 [[package]]
 name = "PyJWT"
-version = "2.4.0"
+version = "2.5.0"
 description = "JSON Web Token implementation in Python"
 category = "dev"
 optional = false
-python-versions = ">=3.6"
+python-versions = ">=3.7"
 
 [package.extras]
-crypto = ["cryptography (>=3.3.1)"]
-dev = ["coverage[toml] (==5.0.4)", "cryptography (>=3.3.1)", "mypy", "pre-commit", "pytest (>=6.0.0,<7.0.0)", "sphinx", "sphinx-rtd-theme", "zope.interface"]
-docs = ["sphinx", "sphinx-rtd-theme", "zope.interface"]
+crypto = ["cryptography (>=3.3.1)", "types-cryptography (>=3.3.21)"]
+dev = ["coverage[toml] (==5.0.4)", "cryptography (>=3.3.1)", "pre-commit", "pytest (>=6.0.0,<7.0.0)", "sphinx (>=4.5.0,<5.0.0)", "sphinx-rtd-theme", "types-cryptography (>=3.3.21)", "zope.interface"]
+docs = ["sphinx (>=4.5.0,<5.0.0)", "sphinx-rtd-theme", "zope.interface"]
 tests = ["coverage[toml] (==5.0.4)", "pytest (>=6.0.0,<7.0.0)"]
 
 [[package]]
@@ -2161,7 +2160,7 @@ docs = ["Sphinx", "sphinx-rtd-theme", "readthedocs-sphinx-search", "myst-parser"
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.8,<3.11"
-content-hash = "58ce910a244c09bd99b1095e112605017853e1bd3eb1c1ce37dd59b0ff69c8f0"
+content-hash = "61caa2d3552fac1c9da3386907d5ca62370bbacf0542f2dd60a0951fa2cc8ba2"
 
 [metadata.files]
 alabaster = [
@@ -2177,8 +2176,8 @@ appnope = [
     {file = "appnope-0.1.3.tar.gz", hash = "sha256:02bd91c4de869fbb1e1c50aafc4098827a7a54ab2f39d9dcba6c9547ed920e24"},
 ]
 astroid = [
-    {file = "astroid-2.12.9-py3-none-any.whl", hash = "sha256:27a22f40e45af6d362498647a0940e8ae9c35f71cb572a1b6f8f810122a11918"},
-    {file = "astroid-2.12.9.tar.gz", hash = "sha256:0dafbfcf4ebdecd3c8f6d742c9d9c88508229ca823d5c98ab872d964f3321e56"},
+    {file = "astroid-2.12.10-py3-none-any.whl", hash = "sha256:997e0c735df60d4a4caff27080a3afc51f9bdd693d3572a4a0b7090b645c36c5"},
+    {file = "astroid-2.12.10.tar.gz", hash = "sha256:81f870105d892e73bf535da77a8261aa5bde838fa4ed12bb2f435291a098c581"},
 ]
 astropy = [
     {file = "astropy-5.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:5d0e5f8ff0ae1317a095ac48a38e3708de470534f2930c4833d166ef3c44d99d"},
@@ -2671,8 +2670,8 @@ idna = [
     {file = "idna-3.4.tar.gz", hash = "sha256:814f528e8dead7d329833b91c5faa87d60bf71824cd12a7530b5526063d02cb4"},
 ]
 igwn-auth-utils = [
-    {file = "igwn-auth-utils-0.2.3.tar.gz", hash = "sha256:17ea61ef47dd642a572e887f37f5181613d8882ed4b917b1279cdb188859de3c"},
-    {file = "igwn_auth_utils-0.2.3-py3-none-any.whl", hash = "sha256:8c26e62f59673e7bc67304768706fdae029cbd4516b9885061d417c331766710"},
+    {file = "igwn-auth-utils-0.3.0.tar.gz", hash = "sha256:496d9aa87032f10ca01967ed008bc9a19826ab03ae293084dbcbe08820e39d43"},
+    {file = "igwn_auth_utils-0.3.0-py3-none-any.whl", hash = "sha256:7fd419630b95e14c393c690c9d5ce51adbbb427e165aee89b25a7bef9722f780"},
 ]
 imagesize = [
     {file = "imagesize-1.4.1-py2.py3-none-any.whl", hash = "sha256:0d8d18d08f840c19d0ee7ca1fd82490fdc3729b7ac93f49870406ddde8ef8d8b"},
@@ -3318,8 +3317,8 @@ Pygments = [
     {file = "Pygments-2.13.0.tar.gz", hash = "sha256:56a8508ae95f98e2b9bdf93a6be5ae3f7d8af858b43e02c5a2ff083726be40c1"},
 ]
 PyJWT = [
-    {file = "PyJWT-2.4.0-py3-none-any.whl", hash = "sha256:72d1d253f32dbd4f5c88eaf1fdc62f3a19f676ccbadb9dbc5d07e951b2b26daf"},
-    {file = "PyJWT-2.4.0.tar.gz", hash = "sha256:d42908208c699b3b973cbeb01a969ba6a96c821eefb1c5bfe4c390c01d67abba"},
+    {file = "PyJWT-2.5.0-py3-none-any.whl", hash = "sha256:8d82e7087868e94dd8d7d418e5088ce64f7daab4b36db654cbaedb46f9d1ca80"},
+    {file = "PyJWT-2.5.0.tar.gz", hash = "sha256:e77ab89480905d86998442ac5788f35333fa85f65047a534adc38edf3c88fc3b"},
 ]
 pylint = [
     {file = "pylint-2.15.2-py3-none-any.whl", hash = "sha256:cc3da458ba810c49d330e09013dec7ced5217772dec8f043ccdd34dae648fde8"},
