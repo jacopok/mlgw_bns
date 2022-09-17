@@ -46,15 +46,24 @@ def test_model_saving_downsampling_indices_and_pca(generated_model):
 def test_model_metadata_saving(generated_model):
 
     generated_model.save()
-
     saved_metadata_dict = generated_model.load_metadata()
-
     model_metadata_dict = generated_model.metadata_dict
 
     assert model_metadata_dict == saved_metadata_dict
-
     assert "initial_frequency_hz" in model_metadata_dict
     assert "srate_hz" in model_metadata_dict
+
+
+def test_model_metadata_loading(generated_model):
+
+    generated_model.save()
+    generated_model.initial_frequency_hz = 1000.0
+    generated_model.parameter_ranges.mass_range = (1.0, 5.0)
+
+    generated_model.load()
+
+    assert generated_model.initial_frequency_hz < 20.0
+    assert generated_model.parameter_ranges.mass_range == (2.0, 4.0)
 
 
 def test_downsampling_indices_characteristics(generated_model):
