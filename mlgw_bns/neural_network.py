@@ -96,9 +96,6 @@ class Hyperparameters:
             "hidden_layer_sizes": self.hidden_layer_sizes,
             "activation": self.activation,
             "alpha": self.alpha,
-            "batch_size": min(
-                self.batch_size, int(self.n_train * (1 - self.validation_fraction))
-            ),
             "learning_rate_init": self.learning_rate_init,
             "tol": self.tol,
             "validation_fraction": self.validation_fraction,
