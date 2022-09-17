@@ -33,14 +33,28 @@ def test_new_model_without_name():
     assert not m.nn_available
 
 
-def test_model_saving(generated_model):
+def test_model_saving_downsampling_indices_and_pca(generated_model):
 
     generated_model.save()
 
-    with generated_model.file_arrays as file:
-        assert "downsampling/amplitude_indices" in file
-        assert file["downsampling/amplitude_indices"][0] == 0
-        assert "principal_component_analysis/eigenvalues" in file
+    with generated_model.file_arrays as f:
+        assert "downsampling/amplitude_indices" in f
+        assert f["downsampling/amplitude_indices"][0] == 0
+        assert "principal_component_analysis/eigenvalues" in f
+
+
+def test_model_metadata_saving(generated_model):
+
+    generated_model.save()
+
+    saved_metadata_dict = generated_model.load_metadata()
+
+    model_metadata_dict = generated_model.metadata_dict
+
+    assert model_metadata_dict == saved_metadata_dict
+
+    assert "initial_frequency_hz" in model_metadata_dict
+    assert "srate_hz" in model_metadata_dict
 
 
 def test_downsampling_indices_characteristics(generated_model):
@@ -52,5 +66,3 @@ def test_downsampling_indices_characteristics(generated_model):
 
         # this holds when training on residuals
         # assert 20_000 < file["downsampling/amplitude_indices"][10] < 30_000
-
-
