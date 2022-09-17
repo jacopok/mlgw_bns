@@ -476,6 +476,7 @@ class Model:
             arr.save_to_file(self.file_arrays)
 
     def save(self, include_training_data: bool = True) -> None:
+        self.save_metadata()
         self.save_arrays(include_training_data)
         if self.nn is not None:
             self.nn.save(self.filename_nn)
