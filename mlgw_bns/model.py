@@ -121,6 +121,24 @@ class ParametersWithExtrinsic:
             dataset=dataset,
         )
 
+    @classmethod
+    def gw170817(cls) -> ParametersWithExtrinsic:
+        """Convenience method: an easy-to-access
+        set of parameters, roughly corresponding to the
+        best-fit values for GW170817.
+        """
+        
+        return cls(
+            mass_ratio=1.,
+            lambda_1=400.,
+            lambda_2=400.,
+            chi_1=0.,
+            chi_2=0.,
+            distance_mpc=40.,
+            inclination=5/6*np.pi,
+            total_mass=2.8,
+        )
+
     @property
     def mass_sum_seconds(self) -> float:
         return self.total_mass * SUN_MASS_SECONDS
