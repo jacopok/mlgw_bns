@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reference documentation about the mathematical details of higher order modes
 - Removed dependence on `pycbc` for PSD computations (see [this PR](https://github.com/jacopok/mlgw_bns/pull/38)): 
     this significantly decreases the dependency load of the package
+- Also saving metadata with each saved model - this means the model does not rely on the settings
+    used being the same as when the model was generated. 
+    Metadata is saved as a human-readable yaml file.
 
 ### Removed
 
