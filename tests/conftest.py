@@ -114,7 +114,10 @@ def model():
     yield model
 
     for filename in [model.filename_arrays, model.filename_metadata, model.filename_nn]:
-        os.remove(filename)
+        try:
+            os.remove(filename)
+        except FileNotFoundError:
+            pass
 
 
 @pytest.fixture(scope="session")
