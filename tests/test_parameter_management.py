@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from mlgw_bns.dataset_generation import ParameterSet
+from mlgw_bns.model import ParametersWithExtrinsic
 
 
 def test_wrong_number_of_parameters_fail():
@@ -17,3 +18,9 @@ def test_slicing_of_paramter_object():
     p2 = p[:1]
 
     assert isinstance(p2, ParameterSet)
+
+
+def test_170817_params():
+    par = ParametersWithExtrinsic.gw170817()
+
+    assert par.total_mass == 2.8

@@ -36,7 +36,7 @@ class DownsamplingTraining(ABC):
             Defaults to 3.
     tol : float
             Tolerance for the interpolation error.
-            Defaults to ``1e-6``.
+            Defaults to ``1e-5``.
     """
 
     degree: int = 3
