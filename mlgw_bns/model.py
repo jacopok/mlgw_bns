@@ -734,7 +734,7 @@ class Model:
                 """))
             extend_with_pn = True
             limit_index = np.searchsorted(rescaled_frequencies, self.dataset.effective_initial_frequency_hz)
-            low_freqs_hz = rescaled_frequencies[:limit_index] # type: ignore
+            low_freqs_hz = np.append(rescaled_frequencies[:limit_index], self.dataset.effective_initial_frequency_hz) # type: ignore
             rescaled_frequencies = rescaled_frequencies[limit_index:] # type: ignore
             
             low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz) 
@@ -792,26 +792,21 @@ class Model:
             resampled_amp = np.concatenate((
                 self.dataset.waveform_generator.post_newtonian_amplitude(
                 intrinsic_params,
-                low_freqs,
+                low_freqs[:-1],
                 ),
                 resampled_amp
             ))
             
-            phi_connection = (
-                self.dataset.waveform_generator.post_newtonian_phase(
+            low_f_phi = self.dataset.waveform_generator.post_newtonian_phase(
                 intrinsic_params,
-                np.array([low_freqs[0], self.dataset.effective_initial_frequency_hz]),
-                )[1]
+                low_freqs,
             )
             
             resampled_phi = np.concatenate((
-                self.dataset.waveform_generator.post_newtonian_phase(
-                intrinsic_params,
-                low_freqs,
-                ),
-                resampled_phi
+                low_f_phi[:-1],
+                resampled_phi + low_f_phi[-1]
             ))
-                        
+
         amp = ( resampled_amp
             * pre
             / params.distance_mpc
