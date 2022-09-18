@@ -96,15 +96,15 @@ class Hyperparameters:
             "hidden_layer_sizes": self.hidden_layer_sizes,
             "activation": self.activation,
             "alpha": self.alpha,
-            "batch_size": min(
-                self.batch_size, int(self.n_train * (1 - self.validation_fraction))
-            ),
             "learning_rate_init": self.learning_rate_init,
             "tol": self.tol,
             "validation_fraction": self.validation_fraction,
             "n_iter_no_change": self.n_iter_no_change,
             "early_stopping": False,
             "shuffle": True,
+            "batch_size": min(
+                self.batch_size, int(self.n_train * (1 - self.validation_fraction))
+            ),
         }
 
     @classmethod
@@ -255,9 +255,14 @@ class SklearnNetwork(NeuralNetwork):
 
     def fit(self, x_data: np.ndarray, y_data: np.ndarray) -> None:
         self.param_scaler = StandardScaler().fit(x_data)
-        scaled_x = self.param_scaler.transform(x_data)
 
+        old_batch_size = self.nn.batch_size
+        self.nn.batch_size = min(self.nn.batch_size, x_data.shape[1])
+
+        scaled_x = self.param_scaler.transform(x_data)
         self.nn.fit(scaled_x, y_data)
+
+        self.nn.batch_size = old_batch_size
 
     def predict(self, x_data: np.ndarray) -> np.ndarray:
         scaled_x = self.param_scaler.transform(x_data)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import warnings
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import lru_cache
 from typing import IO, ClassVar, Optional, Type, Union
 
@@ -11,6 +11,8 @@ import h5py
 import joblib  # type: ignore
 import numpy as np
 import pkg_resources
+import yaml
+from dacite import from_dict
 from numba import njit  # type: ignore
 
 from .data_management import (
@@ -96,7 +98,6 @@ class ParametersWithExtrinsic:
             in which the merger happens at the right edge of the
             timeseries. This also means that, in the frequency domain,
             the phase at high frequencies is roughly constant.
-
     """
 
     mass_ratio: float
@@ -118,6 +119,24 @@ class ParametersWithExtrinsic:
             chi_1=self.chi_1,
             chi_2=self.chi_2,
             dataset=dataset,
+        )
+
+    @classmethod
+    def gw170817(cls) -> ParametersWithExtrinsic:
+        """Convenience method: an easy-to-access
+        set of parameters, roughly corresponding to the
+        best-fit values for GW170817.
+        """
+        
+        return cls(
+            mass_ratio=1.,
+            lambda_1=400.,
+            lambda_2=400.,
+            chi_1=0.,
+            chi_2=0.,
+            distance_mpc=40.,
+            inclination=5/6*np.pi,
+            total_mass=2.8,
         )
 
     @property
@@ -197,14 +216,14 @@ class Model:
     def __init__(
         self,
         filename: Optional[str] = None,
-        initial_frequency_hz: float = 5.0,
+        initial_frequency_hz: float = 10.0,
         srate_hz: float = 4096.0,
         pca_components_number: int = 30,
         multibanding: bool = True,
+        parameter_ranges: ParameterRanges = ParameterRanges(),
         waveform_generator: Optional[WaveformGenerator] = None,
         downsampling_training: Optional[DownsamplingTraining] = None,
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
-        parameter_ranges: ParameterRanges = ParameterRanges(),
         parameter_generator : Optional[ParameterGenerator] = None,
     ):
 
@@ -267,14 +286,25 @@ class Model:
             + f"parameter_ranges={self.parameter_ranges})"
         )
 
+    @property    
+    def metadata_dict(self) -> dict:
+        return {
+            'initial_frequency_hz': self.initial_frequency_hz,
+            'srate_hz': self.srate_hz,
+            'pca_components_number': self.pca_components_number,
+            'multibanding': self.multibanding,
+            'parameter_ranges': asdict(self.parameter_ranges),
+        }
+
     @classmethod
     def default(cls, filename: Optional[str] = None):
         model = cls(DEFAULT_DATASET_BASENAME)
 
+        stream_meta = pkg_resources.resource_stream(__name__, model.filename_metadata)
         stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
         stream_nn = pkg_resources.resource_stream(__name__, model.filename_nn)
 
-        model.load(streams=(stream_arrays, stream_nn))
+        model.load(streams=(stream_meta, stream_arrays, stream_nn))
 
         model.filename = filename
 
@@ -339,6 +369,35 @@ class Model:
             self._handle_missing_filename()
 
         return f"{self.filename}_arrays.h5"
+
+    @property
+    def filename_metadata(self) -> str:
+        if self.filename is None:
+            self._handle_missing_filename()
+
+        return f"{self.filename}.yaml"
+
+    def save_metadata(self):
+        
+        with open(self.filename_metadata, 'w') as f:
+            yaml.dump(self.metadata_dict, f)
+    
+    def load_metadata(self, stream: Optional[IO[bytes]] = None) -> dict:
+        
+        if stream is None:
+            with open(self.filename_metadata, 'r') as f:
+                return yaml.load(f, Loader=yaml.FullLoader)
+        
+        else:
+            return yaml.load(stream, Loader=yaml.FullLoader)
+        
+
+    def set_metadata(self, meta_dict: dict) -> None:
+        
+        for key, value in meta_dict.items():
+            if key == 'parameter_ranges':
+                value = from_dict(data_class=ParameterRanges, data=value)
+            setattr(self, key, value)
 
     @property
     def file_arrays(self) -> h5py.File:
@@ -437,7 +496,6 @@ class Model:
         arr_list: list[SavableData] = [
             self.downsampling_indices,
             self.pca_data,
-            self.parameter_ranges,
         ]
 
         if include_training_data:
@@ -453,11 +511,12 @@ class Model:
             arr.save_to_file(self.file_arrays)
 
     def save(self, include_training_data: bool = True) -> None:
+        self.save_metadata()
         self.save_arrays(include_training_data)
         if self.nn is not None:
             self.nn.save(self.filename_nn)
 
-    def load(self, streams: Optional[tuple[IO[bytes], IO[bytes]]] = None) -> None:
+    def load(self, streams: Optional[tuple[IO[bytes], IO[bytes], IO[bytes]]] = None) -> None:
         """Load model from the files present in the current folder.
 
         Parameters
@@ -468,17 +527,21 @@ class Model:
         """
 
         if streams is not None:
+            stream_meta: Union[IO[bytes], None]
             filename_arrays: Union[IO[bytes], str]
             filename_nn: Union[IO[bytes], str]
 
-            filename_arrays, filename_nn = streams
+            stream_meta, filename_arrays, filename_nn = streams
             file_arrays = h5py.File(filename_arrays, mode="r")
             ignore_warnings = True
         else:
+            stream_meta = None
             file_arrays = self.file_arrays
             filename_nn = self.filename_nn
             ignore_warnings = False
 
+
+        self.set_metadata(self.load_metadata(stream_meta))
         self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
         self.pca_data = PrincipalComponentData.from_file(file_arrays)
         self.training_parameters = ParameterSet.from_file(
@@ -486,10 +549,6 @@ class Model:
         )
         if self.downsampling_indices is None or self.pca_data is None:
             raise FileNotFoundError
-
-        parameter_ranges = ParameterRanges.from_file(file_arrays)
-        assert parameter_ranges is not None
-        self.parameter_ranges = parameter_ranges
 
         self.dataset = self._make_dataset()
 
@@ -585,7 +644,7 @@ class Model:
 
         # increase the number of maximum iterations by a lot:
         # here we do not want to stop the training early.
-        hyper.max_iter *= 10
+        hyper.max_iter *= 100
 
         self.nn = self.train_nn(hyper)
 
