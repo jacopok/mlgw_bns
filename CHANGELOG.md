@@ -18,10 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Also saving metadata with each saved model - this means the model does not rely on the settings
     used being the same as when the model was generated. 
     Metadata is saved as a human-readable yaml file.
+- New convenience classmethod, `ParametersWithExtrinsic.gw170817()`, to get some quick parameters
 
 ### Removed
 
 - Python 3.7 support
+
+### Changed
+
+- Standard model is now trained with `sklearn` version 1.1.2.
 
 ## [0.10.2] - 2022-07-01
 
