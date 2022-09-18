@@ -46,3 +46,14 @@ def test_saving_and_retrieval_of_data_inside_model(generated_model):
     # does not play well with arrays
     assert np.array_equal(di.amplitude_indices, di2.amplitude_indices)
     assert np.array_equal(di.phase_indices, di2.phase_indices)
+
+
+def test_residuals_are_zero_for_the_initial_frequency(generated_model):
+
+    residuals = generated_model.training_dataset
+
+    phases = residuals.phase_residuals
+
+    # initial phases should have been set to zero
+    assert all(phases[:, 0] == 0.0)
+    assert not any(phases[:, 1] == 0.0)
