@@ -175,19 +175,19 @@ $$ \begin{align}
     \widetilde{H}_{\ell m} (f) {}^{(-2)}Y_{\ell m} +
     \widetilde{H}^*_{\ell m} (-f) {}^{(-2)}Y_{\ell m}
 \right)  \\
-&= \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{0 < m \leq \ell} \left(
+&\approx \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{1 < m \leq \ell} \left(
     \widetilde{H}_{\ell m} (f) {}^{(-2)}Y_{\ell m} +
     \widetilde{H}^*_{\ell m} (-f) {}^{(-2)}Y_{\ell m} +
     \widetilde{H}_{\ell -m} (f) {}^{(-2)}Y_{\ell -m} +
     \widetilde{H}^*_{\ell -m} (-f) {}^{(-2)}Y_{\ell - m}
 \right)  \\
-&= \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{0 < m \leq \ell} \left(
+&= \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{1 < m \leq \ell} \left(
     \widetilde{H}_{\ell m} (f) {}^{(-2)}Y_{\ell m} +
     (-1)^\ell\widetilde{H}_{\ell -m} (f) {}^{(-2)}Y_{\ell m} +
     \widetilde{H}_{\ell -m} (f) {}^{(-2)}Y_{\ell -m} +
     (-1)^\ell \widetilde{H}_{\ell m} (f) {}^{(-2)}Y_{\ell - m}
 \right)  \\
-&= \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{0 < m \leq \ell} \left(
+&= \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{1 < m \leq \ell} \left(
     \widetilde{H}_{\ell m} (f) 
     \left(
         {}^{(-2)}Y_{\ell m} +
@@ -200,8 +200,25 @@ $$ \begin{align}
         {}^{(-2)}Y_{\ell -m}
     \right)
 \right)  \\
+&\approx \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{1 < m \leq \ell} \left(
+    \widetilde{H}_{\ell m} (f) 
+    \left(
+        {}^{(-2)}Y_{\ell m} +
+        (-1)^\ell {}^{(-2)}Y_{\ell - m}
+    \right)
+\right) 
 \end{align}
 $$
+
+In the last step, we have approximated the contribution of the $\widetilde{H}_{\ell -m}$
+modes as zero. This is because we are working with positive frequencies, and modes with 
+negative (positive) $m$ computed at positive (negative) frequency are negligible.
+
+Also, we have been neglecting the $m = 0$ term, which is also typically small.
+
+```{danger}
+Find references for these statements! 
+```
 
 A similar computation leads to 
 
@@ -212,7 +229,6 @@ $$ h_\times(f) = - \frac{i}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{0<m \leq
 \right)
 $$
 
-```{danger}
-Not sure about this last formula at all --- need to set the rotation matrices in 
-{cite:p}`khanIncludingHigherOrder2020` to the identity. 
-```
+These are the final expressions we need, since they express the frequency-domain
+polarizations $h_+(f)$ and $h_\times(f)$ as a function of the frequency-domain modes
+$\widetilde{H}_{\ell m} (f)$.
