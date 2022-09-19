@@ -8,7 +8,7 @@ from mlgw_bns.model_validation import ValidateModel
 from .test_model import random_parameters
 
 PHI_TOL = 1e-6
-LOG_AMP_TOL = 1e-2
+LOG_AMP_TOL = 6e-3
 
 
 @pytest.mark.requires_default
