@@ -40,7 +40,8 @@ from .principal_component_analysis import (
 )
 from .taylorf2 import SUN_MASS_SECONDS
 
-DEFAULT_DATASET_BASENAME = "data/default_dataset"
+PRETRAINED_MODEL_FOLDER = "data/"
+MODELS_AVAILABLE = ["default", "fast"]
 
 
 class FrequencyTooLowError(ValueError):
@@ -297,8 +298,14 @@ class Model:
         }
 
     @classmethod
-    def default(cls, filename: Optional[str] = None):
-        model = cls(DEFAULT_DATASET_BASENAME)
+    def default(cls, model_name: Optional[str]=None, filename: Optional[str] = None):
+        
+        if model_name is None:
+            model_name = MODELS_AVAILABLE[0]
+
+        if model_name not in MODELS_AVAILABLE:
+            raise(ValueError(f'Model {model_name} not available!'))
+        model = cls(PRETRAINED_MODEL_FOLDER + model_name)
 
         stream_meta = pkg_resources.resource_stream(__name__, model.filename_metadata)
         stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
