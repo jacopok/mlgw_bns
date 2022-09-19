@@ -549,7 +549,7 @@ python-versions = ">=3.5"
 
 [[package]]
 name = "igwn-auth-utils"
-version = "0.3.0"
+version = "0.3.1"
 description = "Authorisation utilities for IGWN"
 category = "dev"
 optional = false
@@ -2670,8 +2670,8 @@ idna = [
     {file = "idna-3.4.tar.gz", hash = "sha256:814f528e8dead7d329833b91c5faa87d60bf71824cd12a7530b5526063d02cb4"},
 ]
 igwn-auth-utils = [
-    {file = "igwn-auth-utils-0.3.0.tar.gz", hash = "sha256:496d9aa87032f10ca01967ed008bc9a19826ab03ae293084dbcbe08820e39d43"},
-    {file = "igwn_auth_utils-0.3.0-py3-none-any.whl", hash = "sha256:7fd419630b95e14c393c690c9d5ce51adbbb427e165aee89b25a7bef9722f780"},
+    {file = "igwn-auth-utils-0.3.1.tar.gz", hash = "sha256:9698bbd9c46eddf4fe65d157c16a2ee185e4ccf5f98ecc24b08d4bd79378ccae"},
+    {file = "igwn_auth_utils-0.3.1-py3-none-any.whl", hash = "sha256:e0ac5433410aaca5916479b3d61ee221235dcb451b05ef2272818a7fde437d41"},
 ]
 imagesize = [
     {file = "imagesize-1.4.1-py2.py3-none-any.whl", hash = "sha256:0d8d18d08f840c19d0ee7ca1fd82490fdc3729b7ac93f49870406ddde8ef8d8b"},

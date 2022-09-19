@@ -6,11 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2022-09-19
+
 ### Added
 
 - Possibility to extend waveform evaluation to arbitrarily low frequencies, using the 
     post-Newtonian expressions. 
-    (Right now, this is still [not smooth](https://github.com/jacopok/mlgw_bns/issues/36).)
 - Mention of this changelog in the README
 - Reference documentation about the mathematical details of higher order modes
 - Removed dependence on `pycbc` for PSD computations (see [this PR](https://github.com/jacopok/mlgw_bns/pull/38)): 
@@ -60,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `ValidateModel` frequency arrays
 - Various fixes to tests
 
-[Unreleased]: https://github.com/jacopok/mlgw_bns/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/jacopok/mlgw_bns/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/jacopok/mlgw_bns/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/jacopok/mlgw_bns/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/jacopok/mlgw_bns/compare/v0.10.0...v0.10.1
