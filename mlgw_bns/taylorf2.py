@@ -18,6 +18,14 @@ SUN_MASS_SECONDS: float = 4.92549094830932e-6  # M_sun * G / c**3
 EULER_GAMMA = 0.57721566490153286060
 
 
+def smoothing_func(x: np.ndarray) -> np.ndarray:
+    """A function [0, 1] -> [0, 1]
+    with zero derivative at the edges.
+    """
+
+    return (1 - np.cos(x * np.pi)) / 2
+
+
 @njit(cache=True)
 def compute_quadrupole_yy(lam: float) -> float:
     """Compute quadrupole coefficient from Lambda
@@ -784,10 +792,7 @@ def smoothly_connect_with_zero(
     pivot_1: float,
     pivot_2: float,
     merger_freq: float,
-    smoothing_func: Callable[[np.ndarray], np.ndarray] = lambda x: (
-        1 - np.cos(x * np.pi)
-    )
-    / 2,
+    smoothing_func: Callable[[np.ndarray], np.ndarray] = smoothing_func,
 ):
 
     mask_mid = np.logical_and(pivot_1 <= frequencies, frequencies < pivot_2)
