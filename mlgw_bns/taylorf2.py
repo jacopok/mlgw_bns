@@ -805,9 +805,6 @@ def smoothly_connect_with_zero(
 
     pn_amp[mask_end] = decreasing_function(frequencies[mask_end], merger_freq)
 
-    # we still impose the condition of the amplitude
-    # being larger than a small number to be sure
-    assert np.all(pn_amp > 1e-3)
     return pn_amp
 
 
