@@ -38,7 +38,7 @@ from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
     PrincipalComponentTraining,
 )
-from .taylorf2 import SUN_MASS_SECONDS
+from .taylorf2 import SUN_MASS_SECONDS, smoothing_func
 
 PRETRAINED_MODEL_FOLDER = "data/"
 MODELS_AVAILABLE = ["default", "fast"]
@@ -741,10 +741,16 @@ class Model:
                 """))
             extend_with_pn = True
             limit_index = np.searchsorted(rescaled_frequencies, self.dataset.effective_initial_frequency_hz)
-            low_freqs_hz = np.append(rescaled_frequencies[:limit_index], self.dataset.effective_initial_frequency_hz) # type: ignore
-            rescaled_frequencies = rescaled_frequencies[limit_index:] # type: ignore
             
-            low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz) 
+            # if we're extending downwards, then we need to also compute the PN phase 
+            # at the very end of the low-frequency bit (which might not be in the given array)
+            # in order to connect with the high-frequency bit without any discontinuity in phase.
+            
+            low_freqs_hz = np.append(rescaled_frequencies[:limit_index], self.dataset.effective_initial_frequency_hz) # type: ignore
+            rescaled_frequencies = np.append(self.dataset.effective_initial_frequency_hz, rescaled_frequencies[limit_index:]) # type: ignore
+            
+            low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz)
+            connection_f = self.dataset.hz_to_natural_units(self.dataset.effective_initial_frequency_hz)
             
         else:
             extend_with_pn = False
@@ -796,13 +802,35 @@ class Model:
         )
 
         if extend_with_pn:
-            resampled_amp = np.concatenate((
+            
+            eob_amplitude_at_connection = resampled_amp[0]
+            f_min_connection = connection_f / 2.0
+            connecting_mask = np.where(
+                low_freqs > f_min_connection,
+            )
+            
+            zero_to_one = (
+                (low_freqs[connecting_mask] - f_min_connection) / 
+                (connection_f - f_min_connection)
+            )
+            
+            low_freq_amp = (
                 self.dataset.waveform_generator.post_newtonian_amplitude(
                 intrinsic_params,
-                low_freqs[:-1],
-                ),
-                resampled_amp
-            ))
+                low_freqs,
+                )
+            )
+            pn_amplitude_at_connection = low_freq_amp[-1]
+            
+            low_freq_amp[connecting_mask] += (
+                smoothing_func(zero_to_one) 
+                * (eob_amplitude_at_connection - pn_amplitude_at_connection)
+            )
+            print(connecting_mask)
+            print(zero_to_one)
+            print(smoothing_func(zero_to_one))
+            
+            resampled_amp = np.concatenate((low_freq_amp[:-1], resampled_amp[1:]))
             
             low_f_phi = self.dataset.waveform_generator.post_newtonian_phase(
                 intrinsic_params,
@@ -811,10 +839,11 @@ class Model:
             
             resampled_phi = np.concatenate((
                 low_f_phi[:-1],
-                resampled_phi + low_f_phi[-1]
+                resampled_phi[1:] + low_f_phi[-1]
             ))
 
-        amp = ( resampled_amp
+        amp = (
+            resampled_amp
             * pre
             / params.distance_mpc
         )
@@ -1029,3 +1058,4 @@ def compute_polarizations(
     hc = pre_cross * waveform_imag - 1j * pre_cross * waveform_real
 
     return hp, hc
+
