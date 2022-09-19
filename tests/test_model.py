@@ -51,9 +51,11 @@ def test_quick_model_with_validation_mismatches(trained_model):
 
 
 @pytest.mark.requires_default
-def test_default_model_with_validation_mismatches(default_model):
+@pytest.mark.parametrize("model_name", ["default", "fast"])
+def test_default_models_with_validation_mismatches(model_name):
 
-    vm = ValidateModel(default_model)
+    model = Model.default(model_name)
+    vm = ValidateModel(model)
 
     mismatches = vm.validation_mismatches(16)
 
