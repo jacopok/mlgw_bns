@@ -13,8 +13,9 @@ LOG_AMP_TOL = 6e-3
 
 @pytest.mark.requires_default
 @pytest.mark.parametrize("mass", [2.0, 2.8, 4.0])
-def test_default_model_pn_connection(default_model, mass):
-    par = random_parameters(default_model, 1)
+@pytest.mark.parametrize("seed", list(range(2)))
+def test_default_model_pn_connection(default_model, mass, seed):
+    par = random_parameters(default_model, seed)
     par.total_mass = mass
 
     f_low = default_model.dataset.effective_initial_frequency_hz * (2.8 / mass)
