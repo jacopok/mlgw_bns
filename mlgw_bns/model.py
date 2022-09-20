@@ -230,6 +230,8 @@ class Model:
         pca_components_number: int = 30,
         multibanding: bool = True,
         parameter_ranges: ParameterRanges = ParameterRanges(),
+        extend_with_post_newtonian = True,
+        extend_with_zeros_at_high_frequency = False,
         waveform_generator: Optional[WaveformGenerator] = None,
         downsampling_training: Optional[DownsamplingTraining] = None,
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
@@ -255,6 +257,9 @@ class Model:
         self.srate_hz = srate_hz
         self.multibanding = multibanding
         self.parameter_generator = parameter_generator
+        self.extend_with_post_newtonian = extend_with_post_newtonian
+        self.extend_with_zeros_at_high_frequency = extend_with_zeros_at_high_frequency
+        
 
         self.dataset = self._make_dataset()
 
@@ -743,6 +748,13 @@ class Model:
 
         if rescaled_frequencies[0] < self.dataset.effective_initial_frequency_hz:
 
+            if not self.extend_with_post_newtonian:
+                raise FrequencyTooLowError(
+                    "This model is not configured to be extended with a post-newtonian"
+                    "waveform. Set the 'extend_with_post_newtonian' attribute of the model to True"
+                    "if that is what you want."
+                )
+            
             extend_with_pn = True
             limit_index = np.searchsorted(rescaled_frequencies, self.dataset.effective_initial_frequency_hz)
             
@@ -763,10 +775,22 @@ class Model:
             # this should never happen! 
             raise ValueError('At least one point should be in the model band')
 
-        try:
-            assert rescaled_frequencies[-1] <= self.dataset.effective_srate_hz / 2.0
-        except AssertionError as e:
-            raise FrequencyTooHighError() from e
+        if rescaled_frequencies[-1] > self.dataset.effective_srate_hz / 2.0:
+            if not self.extend_with_zeros_at_high_frequency:
+                raise FrequencyTooHighError(
+                    "This model is not configured to be extended with a post-newtonian"
+                    "waveform. Set the 'extend_with_post_newtonian' attribute of the model to True"
+                    "if that is what you want."
+                )
+            else:
+                extend_hf = True
+                high_frequency_index = int(np.searchsorted(rescaled_frequencies, self.dataset.effective_srate_hz / 2.0))
+                hf_segment_length = len(rescaled_frequencies) - high_frequency_index
+                rescaled_frequencies = rescaled_frequencies[:high_frequency_index]
+
+
+        else:
+            extend_hf = False
 
         self.parameter_ranges.check_parameters_in_ranges(params)
 
@@ -846,6 +870,10 @@ class Model:
                 low_f_phi[:-1],
                 resampled_phi[1:] + low_f_phi[-1]
             ))
+
+        if extend_hf:
+            resampled_amp = np.concatenate((resampled_amp, np.zeros(hf_segment_length)))
+            resampled_phi = np.concatenate((resampled_phi, np.zeros(hf_segment_length)))
 
         amp = (
             resampled_amp
