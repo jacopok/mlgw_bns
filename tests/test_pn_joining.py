@@ -2,7 +2,12 @@ import numpy as np
 import pytest
 
 from mlgw_bns.dataset_generation import ParameterSet, TEOBResumSGenerator
-from mlgw_bns.model import Model, ParametersWithExtrinsic
+from mlgw_bns.model import (
+    FrequencyTooHighError,
+    FrequencyTooLowError,
+    Model,
+    ParametersWithExtrinsic,
+)
 from mlgw_bns.model_validation import ValidateModel
 
 from .test_model import random_parameters
@@ -37,3 +42,28 @@ def test_default_model_pn_connection(default_model, mass, seed):
     avg_delta_phi = np.average(delta_phi_between_points[:18])
 
     assert np.allclose(delta_phi_between_points, avg_delta_phi, rtol=0, atol=PHI_TOL)
+
+
+@pytest.mark.requires_default
+def test_default_model_extendibility():
+    model = Model.default()
+    params = ParametersWithExtrinsic.gw170817()
+
+    assert model.extend_with_post_newtonian
+    assert model.extend_with_zeros_at_high_frequency
+
+    freqs = np.geomspace(1e-3, 1e4)
+    hp, hc = model.predict(freqs, params)
+    assert hp[-1] == 0.0j
+    assert hc[-1] == 0.0j
+    assert len(hp) == len(freqs)
+
+    model.extend_with_post_newtonian = False
+
+    with pytest.raises(FrequencyTooLowError):
+        hp, hc = model.predict(freqs, params)
+
+    model.extend_with_zeros_at_high_frequency = False
+
+    with pytest.raises(FrequencyTooHighError):
+        hp, hc = model.predict(np.linspace(20, 10000), params)
