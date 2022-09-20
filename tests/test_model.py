@@ -56,7 +56,6 @@ def test_quick_model_with_validation_mismatches(trained_model):
     [
         ("default", DEFAULT_MODEL_MAX_MISMATCH),
         ("fast", DEFAULT_MODEL_MAX_MISMATCH * 5),
-        ("fast_lesspca", DEFAULT_MODEL_MAX_MISMATCH * 10),
     ],
 )
 def test_default_models_with_validation_mismatches(model_name, tolerance):
