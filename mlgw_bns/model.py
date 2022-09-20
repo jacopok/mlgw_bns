@@ -860,9 +860,6 @@ class Model:
                 smoothing_func(zero_to_one) 
                 * (eob_amplitude_at_connection - pn_amplitude_at_connection)
             )
-            print(connecting_mask)
-            print(zero_to_one)
-            print(smoothing_func(zero_to_one))
             
             resampled_amp = np.concatenate((low_freq_amp[:-1], resampled_amp[1:]))
             
