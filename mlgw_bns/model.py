@@ -919,10 +919,26 @@ class Model:
 
         Raises
         ------
-        AssertionError
-                When the frequencies given are either too high or too low.
+        FrequencyTooLowError
+                When the frequencies given are too low, below the training range.
                 For speed, this is only checked against the first and last elements
                 of the array, assuming that it is sorted.
+
+                This is raised only if the PN extension of the waveform is
+                disabled by setting :attr:`self.extend_with_post_newtonian`
+                to False.
+
+        Raises
+        ------
+        FrequencyTooHighError
+                When the frequencies given are too high.
+                For speed, this is only checked against the first and last elements
+                of the array, assuming that it is sorted.
+
+                This is raised only if the extension of the waveform with zeroes is
+                disabled by setting :attr:`self.extend_with_zeros_at_high_frequency`
+                to False.
+
 
         Returns
         -------
