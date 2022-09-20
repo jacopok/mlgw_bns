@@ -178,12 +178,11 @@ class Model:
     filename : str
             Name for the model. Saved data will be saved under this name.
     initial_frequency_hz : float, optional
-            Initial frequency for the waveforms, by default 5.0
+            Initial frequency for the waveforms.
     srate_hz : float, optional
             Time-domain signal rate for the waveforms,
             which is twice the maximum frequency of
             their frequency-domain version.
-            By default 4096.0
     pca_components_number : int, optional
             Number of PCA components to use when reducing
             the dimensionality of the dataset.
@@ -192,7 +191,18 @@ class Model:
     multibanding : bool
             Whether to use a multibanded frequency array. 
             See the multibanding module for more details.
-            Defaults to True.
+    parameter_ranges : ParameterRanges
+            Ranges for the parameters to pass to the parameter generator.
+    extend_with_post_newtonian: bool
+            Whether to accept frequencies lower than the minimum training frequency,
+            providing a hybrid post-newtonian / EOB surrogate waveform.
+            If this is False, an error will be raised if the frequencies
+            given include ones that are too low.
+    extend_with_zeros_at_high_frequency: bool
+            Whether to accept frequencies higher than the maximum training frequency,
+            padding the returned waveform with zeros.
+            If this is False, an error will be raised if the frequencies
+            given include ones that are too high.
     waveform_generator : WaveformGenerator, optional
             Generator for the waveforms to be used in the training;
             by default None, in which case the system attempts to import
@@ -205,14 +215,12 @@ class Model:
     nn_kind : Type[NeuralNetwork]
             Neural network implementation to use,
             defaults to :class:`SklearnNetwork`.
-    parameter_ranges : ParameterRanges
-            Ranges for the parameters to pass to the parameter generator.
-            Defaults to `ParameterRanges()`; see the defaults in that class.
     parameter_generator : Optional[ParameterGenerator]
             Certain parameter generators should not be regenerated each time;
             if this is the case, then pass the parameter generator here.
             Defaults to None.
     """
+    
 
     def __init__(
         self,
