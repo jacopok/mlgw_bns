@@ -308,17 +308,22 @@ class Model:
             'pca_components_number': self.pca_components_number,
             'multibanding': self.multibanding,
             'parameter_ranges': asdict(self.parameter_ranges),
+            'extend_with_post_newtonian': self.extend_with_post_newtonian,
+            'extend_with_zeros_at_high_frequency': self.extend_with_zeros_at_high_frequency,
         }
 
     @classmethod
-    def default(cls, model_name: Optional[str]=None, filename: Optional[str] = None):
+    def default(cls, model_name: Optional[str]=None, **kwargs):
         
         if model_name is None:
             model_name = MODELS_AVAILABLE[0]
 
         if model_name not in MODELS_AVAILABLE:
             raise(ValueError(f'Model {model_name} not available!'))
-        model = cls(PRETRAINED_MODEL_FOLDER + model_name)
+        
+        given_filename = kwargs.pop('filename', None)
+        
+        model = cls(filename=PRETRAINED_MODEL_FOLDER + model_name, **kwargs)
 
         stream_meta = pkg_resources.resource_stream(__name__, model.filename_metadata)
         stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
@@ -326,7 +331,7 @@ class Model:
 
         model.load(streams=(stream_meta, stream_arrays, stream_nn))
 
-        model.filename = filename
+        model.filename = given_filename
 
         return model
 
