@@ -22,8 +22,7 @@ def test_default_model_pn_connection(default_model, mass, seed):
 
     freqs = np.linspace(f_low - 1e-4, f_low + 1e-4, num=2000)
 
-    with pytest.warns(UserWarning):
-        hp, hc = default_model.predict(freqs, par)
+    hp, hc = default_model.predict(freqs, par)
 
     hp_gradient_aroud_f_low = np.ediff1d(np.log(abs(hp))[980:1005])
     avg_hp_gradient = np.average(hp_gradient_aroud_f_low[:18])
