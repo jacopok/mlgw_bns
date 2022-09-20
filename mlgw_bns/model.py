@@ -735,10 +735,6 @@ class Model:
 
         if rescaled_frequencies[0] < self.dataset.effective_initial_frequency_hz:
 
-            warnings.warn(UserWarning(
-                f"""Extending to low frequencies with a Post-Newtonian waveform,
-                the limit for this model is {self.dataset.effective_initial_frequency_hz}Hz
-                """))
             extend_with_pn = True
             limit_index = np.searchsorted(rescaled_frequencies, self.dataset.effective_initial_frequency_hz)
             
@@ -756,6 +752,7 @@ class Model:
             extend_with_pn = False
 
         if len(rescaled_frequencies) < 1:
+            # this should never happen! 
             raise ValueError('At least one point should be in the model band')
 
         try:
