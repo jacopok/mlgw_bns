@@ -453,7 +453,7 @@ testing = ["covdefaults (>=2.2)", "coverage (>=6.4.2)", "pytest (>=7.1.2)", "pyt
 
 [[package]]
 name = "fonttools"
-version = "4.37.2"
+version = "4.37.3"
 description = "Tools to manipulate font files"
 category = "dev"
 optional = false
@@ -1363,14 +1363,14 @@ tests = ["coverage[toml] (==5.0.4)", "pytest (>=6.0.0,<7.0.0)"]
 
 [[package]]
 name = "pylint"
-version = "2.15.2"
+version = "2.15.3"
 description = "python code static checker"
 category = "dev"
 optional = false
 python-versions = ">=3.7.2"
 
 [package.dependencies]
-astroid = ">=2.12.9,<=2.14.0-dev0"
+astroid = ">=2.12.10,<=2.14.0-dev0"
 colorama = {version = ">=0.4.5", markers = "sys_platform == \"win32\""}
 dill = ">=0.2"
 isort = ">=4.2.5,<6"
@@ -1780,6 +1780,21 @@ lint = ["docutils-stubs", "flake8 (>=3.5.0)", "isort", "mypy (>=0.931)", "types-
 test = ["cython", "html5lib", "pytest", "pytest-cov", "typed-ast"]
 
 [[package]]
+name = "sphinx-autodoc-defaultargs"
+version = "0.1.2"
+description = "Automatic generation of default arguments for the Sphinx autodoc extension."
+category = "main"
+optional = true
+python-versions = ">=3.5"
+
+[package.dependencies]
+Sphinx = ">=3.0"
+
+[package.extras]
+test = ["Sphinx (>=3.2.0)", "dataclasses", "pytest (>=3.1.0)", "sphobjinv (>=2.0)", "typing-extensions (>=3.5)"]
+type_comments = ["typed-ast (>=1.4.0)"]
+
+[[package]]
 name = "sphinx-rtd-theme"
 version = "1.0.0"
 description = "Read the Docs theme for Sphinx"
@@ -2155,12 +2170,12 @@ docs = ["jaraco.packaging (>=9)", "jaraco.tidelift (>=1.4)", "rst.linker (>=1.9)
 testing = ["func-timeout", "jaraco.itertools", "pytest (>=6)", "pytest-black (>=0.3.7)", "pytest-checkdocs (>=2.4)", "pytest-cov", "pytest-enabler (>=1.3)", "pytest-flake8", "pytest-mypy (>=0.9.1)"]
 
 [extras]
-docs = ["Sphinx", "sphinx-rtd-theme", "readthedocs-sphinx-search", "myst-parser", "MarkupSafe", "sphinxcontrib-bibtex"]
+docs = ["Sphinx", "sphinx-rtd-theme", "readthedocs-sphinx-search", "myst-parser", "MarkupSafe", "sphinxcontrib-bibtex", "sphinx-autodoc-defaultargs"]
 
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.8,<3.11"
-content-hash = "2cebc2bf889bb7647b18882c1fbbfdf9bfa7aa1b4e4f1e1e00184a420a23c1dc"
+content-hash = "9c77877cb948c9d2e0d27b4ca608903015e1d0e8c4c7daf49817af9f73a3c45d"
 
 [metadata.files]
 alabaster = [
@@ -2569,8 +2584,8 @@ filelock = [
     {file = "filelock-3.8.0.tar.gz", hash = "sha256:55447caa666f2198c5b6b13a26d2084d26fa5b115c00d065664b2124680c4edc"},
 ]
 fonttools = [
-    {file = "fonttools-4.37.2-py3-none-any.whl", hash = "sha256:88d48ef24486137c864dc56707b4b54ef8a97ab9162c2721ec61434baf1c4d13"},
-    {file = "fonttools-4.37.2.zip", hash = "sha256:b6d86ffd0a5f83d3da6a34d5f99a90398638e423cd6a8d93c5808af703432c7f"},
+    {file = "fonttools-4.37.3-py3-none-any.whl", hash = "sha256:a5bc5f5d48faa4085310b8ebd4c5d33bf27c6636c5f10a7de792510af2745a81"},
+    {file = "fonttools-4.37.3.zip", hash = "sha256:f32ef6ec966cf0e7d2aa88601fed2e3a8f2851c26b5db2c80ccc8f82bee4eedc"},
 ]
 glob2 = [
     {file = "glob2-0.7.tar.gz", hash = "sha256:85c3dbd07c8aa26d63d7aacee34fa86e9a91a3873bc30bf62ec46e531f92ab8c"},
@@ -3321,8 +3336,8 @@ PyJWT = [
     {file = "PyJWT-2.5.0.tar.gz", hash = "sha256:e77ab89480905d86998442ac5788f35333fa85f65047a534adc38edf3c88fc3b"},
 ]
 pylint = [
-    {file = "pylint-2.15.2-py3-none-any.whl", hash = "sha256:cc3da458ba810c49d330e09013dec7ced5217772dec8f043ccdd34dae648fde8"},
-    {file = "pylint-2.15.2.tar.gz", hash = "sha256:f63404a2547edb5247da263748771ac9a806ed1de4174cda01293c08ddbc2999"},
+    {file = "pylint-2.15.3-py3-none-any.whl", hash = "sha256:7f6aad1d8d50807f7bc64f89ac75256a9baf8e6ed491cc9bc65592bc3f462cf1"},
+    {file = "pylint-2.15.3.tar.gz", hash = "sha256:5fdfd44af182866999e6123139d265334267339f29961f00c89783155eacc60b"},
 ]
 pynvml = [
     {file = "pynvml-11.4.1-py3-none-any.whl", hash = "sha256:d27be542cd9d06558de18e2deffc8022ccd7355bc7382255d477038e7e424c6c"},
@@ -3567,6 +3582,10 @@ soupsieve = [
 Sphinx = [
     {file = "Sphinx-4.5.0-py3-none-any.whl", hash = "sha256:ebf612653238bcc8f4359627a9b7ce44ede6fdd75d9d30f68255c7383d3a6226"},
     {file = "Sphinx-4.5.0.tar.gz", hash = "sha256:7bf8ca9637a4ee15af412d1a1d9689fec70523a68ca9bb9127c2f3eeb344e2e6"},
+]
+sphinx-autodoc-defaultargs = [
+    {file = "sphinx-autodoc-defaultargs-0.1.2.tar.gz", hash = "sha256:b11cd9ac43510c1f1e9a3f9469a370e6bbe2bc2cb9e67cb79987f4dcd3be5be3"},
+    {file = "sphinx_autodoc_defaultargs-0.1.2-py3-none-any.whl", hash = "sha256:1513b1aea8c20348f1763dbfd7ff11f86cd77f2ce3246c73e1405a2a67fea3ff"},
 ]
 sphinx-rtd-theme = [
     {file = "sphinx_rtd_theme-1.0.0-py2.py3-none-any.whl", hash = "sha256:4d35a56f4508cfee4c4fb604373ede6feae2a306731d533f409ef5c3496fdbd8"},
