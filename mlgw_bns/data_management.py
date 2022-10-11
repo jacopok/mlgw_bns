@@ -335,7 +335,7 @@ class Residuals(SavableData):
 
     def flatten_phase(
         self, frequencies: np.ndarray, first_section_flat: float = 0.2
-    ) -> None:
+    ) -> np.ndarray:
         """Subtract a linear term from the phase,
         such that it is often close to 0.
 
@@ -349,20 +349,29 @@ class Residuals(SavableData):
                 phase residual is zero, and so is the one corresponding
                 to this fraction of the frequencies.
                 Defaults to 0.2.
+                
+        Returns
+        -------
+        timeshifts: np.ndarray
+                Timeshifts, in seconds if the frequencies given are in Hz,
+                
         """
 
         number_of_points = self.phase_residuals.shape[1]
 
         index = int(first_section_flat * number_of_points)
+        slopes = np.empty(len(self.phase_residuals))
 
         for i, phase_arr in enumerate(self.phase_residuals):
-            slope = (phase_arr[index] - phase_arr[0]) / (
+            slopes[i] = (phase_arr[index] - phase_arr[0]) / (
                 frequencies[index] - frequencies[0]
             )
+            
             self.phase_residuals[i] = (
-                phase_arr - slope * (frequencies - frequencies[0]) - phase_arr[0]
+                phase_arr - slopes[i] * (frequencies - frequencies[0]) - phase_arr[0]
             )
-
+        
+        return slopes / (2 * np.pi)
 
 @dataclass
 class PrincipalComponentData(SavableData):
