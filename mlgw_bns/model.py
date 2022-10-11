@@ -888,12 +888,18 @@ class Model:
             + params.reference_phase
             + (2 * np.pi * params.time_shift) * frequencies
         )
-
+        
         return amp, phi
 
     def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
         r"""Calculate the waveforms in the plus and cross polarizations,
-        accounting for extrinsic parameters
+        accounting for extrinsic parameters.
+        
+        This function is able to yield a sensible waveform at arbitrarily 
+        low frequencies, by hybridizing the EOB-trained high-frequency part
+        with a Post-Newtonian approximant. 
+        This feature can be turned off with the :attr:`extend_with_post_newtonian`
+        parameter of the :class:`Model` object.
 
         Parameters
         ----------
@@ -925,7 +931,7 @@ class Model:
                 of the array, assuming that it is sorted.
 
                 This is raised only if the PN extension of the waveform is
-                disabled by setting :attr:`self.extend_with_post_newtonian`
+                disabled by setting :attr:`extend_with_post_newtonian`
                 to False.
 
         Raises
@@ -936,7 +942,7 @@ class Model:
                 of the array, assuming that it is sorted.
 
                 This is raised only if the extension of the waveform with zeroes is
-                disabled by setting :attr:`self.extend_with_zeros_at_high_frequency`
+                disabled by setting :attr:`extend_with_zeros_at_high_frequency`
                 to False.
 
 
