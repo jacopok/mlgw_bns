@@ -67,3 +67,22 @@ def test_default_model_extendibility():
 
     with pytest.raises(FrequencyTooHighError):
         hp, hc = model.predict(np.linspace(20, 10000), params)
+
+
+@pytest.mark.requires_default
+def test_default_model_evaluation_does_not_depend_on_frequency_grid():
+    model = Model.default()
+    params = ParametersWithExtrinsic.gw170817()
+
+    freqs = np.geomspace(1e-3, 1e3)
+
+    hp, hc = model.predict(freqs, params)
+
+    hps_single = []
+    for freq in freqs:
+
+        hp_one, hc_one = model.predict(np.array([freq]), params)
+        hps_single.append(hp_one[0])
+
+    for hp_c, hp_s in zip(hp, hps_single):
+        assert np.isclose(abs(hp_c), abs(hp_s), atol=0.0, rtol=LOG_AMP_TOL)
