@@ -783,8 +783,8 @@ class Model:
         if rescaled_frequencies[-1] > self.dataset.effective_srate_hz / 2.0:
             if not self.extend_with_zeros_at_high_frequency:
                 raise FrequencyTooHighError(
-                    "This model is not configured to be extended with a post-newtonian"
-                    "waveform. Set the 'extend_with_post_newtonian' attribute of the model to True"
+                    "This model is not configured to be extended with zeros at high frequency."
+                    "Set the 'extend_with_zeros_at_high_frequency' attribute of the model to True"
                     "if that is what you want."
                 )
             else:
