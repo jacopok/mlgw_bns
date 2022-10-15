@@ -40,7 +40,8 @@ extensions = [
     "sphinx.ext.autosectionlabel",
     "sphinx.ext.viewcode",
     "sphinx_search.extension",
-    "sphinxcontrib.bibtex"
+    "sphinxcontrib.bibtex",
+    "sphinx_autodoc_defaultargs"
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -48,6 +49,13 @@ templates_path = ["_templates"]
 
 # Add the bibliography
 bibtex_bibfiles = ['refs.bib']
+
+rst_prolog = """
+.. |default| raw:: html
+
+    <div class="default-value-section">""" + \
+    ' <span class="default-value-label">Default:</span>'
+
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
