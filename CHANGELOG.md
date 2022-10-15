@@ -6,6 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- New functionality for [multiple default models](https://github.com/jacopok/mlgw_bns/pull/45)
+    - two models available: the `default` one and a `fast` one, trained from 5 and 15Hz respectively.
+- `extend_with_post_newtonian` and `extend_with_zeros_at_high_frequency` flags for the `Model` class,
+    which determine whether to raise an exception or not when extending the model beyond its
+    training frequency range.
+
+### Changed
+
+- The `flatten_phase` method of the `Residuals` dataclass now returns the timeshifts 
+    which the waveforms were shifted by, instead of `None`
+- Call signature for the `Model.default` classmethod: now, the first available argument 
+    is `model_name`, which determines which of the default provided models to use;
+    the keyword argument to use to choose the name to give to the current model is `filename`.
+
+### Fixed
+
+- Amplitude connection at low frequency: there is typically a (<1%) discrepancy in the EOB vs. 
+    Post-Newtonian amplitude at the low frequency bound. Now, at frequencies lower than the minimum one,
+    the amplitude varies continuously, and reaches its PN value at half of the minimum frequency.
+
 ## [0.11.0] - 2022-09-19
 
 ### Added
