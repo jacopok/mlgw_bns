@@ -3,7 +3,7 @@ import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 
 from mlgw_bns.dataset_generation import ParameterSet, TEOBResumSGenerator
-from mlgw_bns.model import Model, ParametersWithExtrinsic
+from mlgw_bns.model import MODELS_AVAILABLE, Model, ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 
 DEFAULT_MODEL_MAX_MISMATCH = 1e-5
@@ -51,18 +51,60 @@ def test_quick_model_with_validation_mismatches(trained_model):
 
 
 @pytest.mark.requires_default
-def test_default_model_with_validation_mismatches(default_model):
+@pytest.mark.parametrize(
+    "model_name,tolerance",
+    [
+        ("default", DEFAULT_MODEL_MAX_MISMATCH),
+        ("fast", DEFAULT_MODEL_MAX_MISMATCH * 5),
+    ],
+)
+def test_default_models_with_validation_mismatches(model_name, tolerance):
 
-    vm = ValidateModel(default_model)
+    model = Model.default(model_name)
+    vm = ValidateModel(model)
 
     mismatches = vm.validation_mismatches(16)
 
     for m in mismatches:
-        assert m < DEFAULT_MODEL_MAX_MISMATCH
+        assert m < tolerance
 
     assert np.average(np.log(mismatches)) < np.log(
-        DEFAULT_MODEL_MAX_MISMATCH / AVERAGE_MISMATCH_REDUCTION_FACTOR
+        tolerance / AVERAGE_MISMATCH_REDUCTION_FACTOR
     )
+
+
+@pytest.mark.requires_default
+@pytest.mark.benchmark(group="default-model-prediction")
+@pytest.mark.parametrize("model_name", MODELS_AVAILABLE)
+def test_default_models_speed(model_name, benchmark):
+
+    model = Model.default(model_name)
+
+    frequencies = np.geomspace(20, 2000, num=1000)
+    benchmark(model.predict, frequencies, ParametersWithExtrinsic.gw170817())
+
+
+@pytest.mark.benchmark(group="default-model-prediction")
+@pytest.mark.requires_default
+@pytest.mark.parametrize("model_name", MODELS_AVAILABLE)
+def test_default_models_speed_extended(model_name, benchmark):
+
+    model = Model.default(model_name)
+
+    frequencies = np.geomspace(0.1, 2000, num=1000)
+    benchmark(model.predict, frequencies, ParametersWithExtrinsic.gw170817())
+
+
+@pytest.mark.requires_default
+@pytest.mark.benchmark(group="default-model-prediction")
+@pytest.mark.parametrize("model_name", MODELS_AVAILABLE)
+def test_default_models_low_frequency(model_name, benchmark):
+
+    model = Model.default(model_name)
+
+    frequencies = np.geomspace(1e-3, 1e-2, num=1000)
+
+    benchmark(model.predict, frequencies, ParametersWithExtrinsic.gw170817())
 
 
 @pytest.mark.requires_default

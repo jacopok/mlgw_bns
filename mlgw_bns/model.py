@@ -38,9 +38,10 @@ from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
     PrincipalComponentTraining,
 )
-from .taylorf2 import SUN_MASS_SECONDS
+from .taylorf2 import SUN_MASS_SECONDS, smoothing_func
 
-DEFAULT_DATASET_BASENAME = "data/default_dataset"
+PRETRAINED_MODEL_FOLDER = "data/"
+MODELS_AVAILABLE = ["default", "fast"]
 
 
 class FrequencyTooLowError(ValueError):
@@ -177,12 +178,11 @@ class Model:
     filename : str
             Name for the model. Saved data will be saved under this name.
     initial_frequency_hz : float, optional
-            Initial frequency for the waveforms, by default 5.0
+            Initial frequency for the waveforms.
     srate_hz : float, optional
             Time-domain signal rate for the waveforms,
             which is twice the maximum frequency of
             their frequency-domain version.
-            By default 4096.0
     pca_components_number : int, optional
             Number of PCA components to use when reducing
             the dimensionality of the dataset.
@@ -191,7 +191,18 @@ class Model:
     multibanding : bool
             Whether to use a multibanded frequency array. 
             See the multibanding module for more details.
-            Defaults to True.
+    parameter_ranges : ParameterRanges
+            Ranges for the parameters to pass to the parameter generator.
+    extend_with_post_newtonian: bool
+            Whether to accept frequencies lower than the minimum training frequency,
+            providing a hybrid post-newtonian / EOB surrogate waveform.
+            If this is False, an error will be raised if the frequencies
+            given include ones that are too low.
+    extend_with_zeros_at_high_frequency: bool
+            Whether to accept frequencies higher than the maximum training frequency,
+            padding the returned waveform with zeros.
+            If this is False, an error will be raised if the frequencies
+            given include ones that are too high.
     waveform_generator : WaveformGenerator, optional
             Generator for the waveforms to be used in the training;
             by default None, in which case the system attempts to import
@@ -204,14 +215,12 @@ class Model:
     nn_kind : Type[NeuralNetwork]
             Neural network implementation to use,
             defaults to :class:`SklearnNetwork`.
-    parameter_ranges : ParameterRanges
-            Ranges for the parameters to pass to the parameter generator.
-            Defaults to `ParameterRanges()`; see the defaults in that class.
     parameter_generator : Optional[ParameterGenerator]
             Certain parameter generators should not be regenerated each time;
             if this is the case, then pass the parameter generator here.
             Defaults to None.
     """
+    
 
     def __init__(
         self,
@@ -221,6 +230,8 @@ class Model:
         pca_components_number: int = 30,
         multibanding: bool = True,
         parameter_ranges: ParameterRanges = ParameterRanges(),
+        extend_with_post_newtonian = True,
+        extend_with_zeros_at_high_frequency = False,
         waveform_generator: Optional[WaveformGenerator] = None,
         downsampling_training: Optional[DownsamplingTraining] = None,
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
@@ -246,6 +257,9 @@ class Model:
         self.srate_hz = srate_hz
         self.multibanding = multibanding
         self.parameter_generator = parameter_generator
+        self.extend_with_post_newtonian = extend_with_post_newtonian
+        self.extend_with_zeros_at_high_frequency = extend_with_zeros_at_high_frequency
+        
 
         self.dataset = self._make_dataset()
 
@@ -294,11 +308,22 @@ class Model:
             'pca_components_number': self.pca_components_number,
             'multibanding': self.multibanding,
             'parameter_ranges': asdict(self.parameter_ranges),
+            'extend_with_post_newtonian': self.extend_with_post_newtonian,
+            'extend_with_zeros_at_high_frequency': self.extend_with_zeros_at_high_frequency,
         }
 
     @classmethod
-    def default(cls, filename: Optional[str] = None):
-        model = cls(DEFAULT_DATASET_BASENAME)
+    def default(cls, model_name: Optional[str]=None, **kwargs):
+        
+        if model_name is None:
+            model_name = MODELS_AVAILABLE[0]
+
+        if model_name not in MODELS_AVAILABLE:
+            raise(ValueError(f'Model {model_name} not available!'))
+        
+        given_filename = kwargs.pop('filename', None)
+        
+        model = cls(filename=PRETRAINED_MODEL_FOLDER + model_name, **kwargs)
 
         stream_meta = pkg_resources.resource_stream(__name__, model.filename_metadata)
         stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
@@ -306,7 +331,7 @@ class Model:
 
         model.load(streams=(stream_meta, stream_arrays, stream_nn))
 
-        model.filename = filename
+        model.filename = given_filename
 
         return model
 
@@ -728,27 +753,49 @@ class Model:
 
         if rescaled_frequencies[0] < self.dataset.effective_initial_frequency_hz:
 
-            warnings.warn(UserWarning(
-                f"""Extending to low frequencies with a Post-Newtonian waveform,
-                the limit for this model is {self.dataset.effective_initial_frequency_hz}Hz
-                """))
+            if not self.extend_with_post_newtonian:
+                raise FrequencyTooLowError(
+                    "This model is not configured to be extended with a post-newtonian"
+                    "waveform. Set the 'extend_with_post_newtonian' attribute of the model to True"
+                    "if that is what you want."
+                )
+            
             extend_with_pn = True
             limit_index = np.searchsorted(rescaled_frequencies, self.dataset.effective_initial_frequency_hz)
-            low_freqs_hz = np.append(rescaled_frequencies[:limit_index], self.dataset.effective_initial_frequency_hz) # type: ignore
-            rescaled_frequencies = rescaled_frequencies[limit_index:] # type: ignore
             
-            low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz) 
+            # if we're extending downwards, then we need to also compute the PN phase 
+            # at the very end of the low-frequency bit (which might not be in the given array)
+            # in order to connect with the high-frequency bit without any discontinuity in phase.
+            
+            low_freqs_hz = np.append(rescaled_frequencies[:limit_index], self.dataset.effective_initial_frequency_hz) # type: ignore
+            rescaled_frequencies = np.append(self.dataset.effective_initial_frequency_hz, rescaled_frequencies[limit_index:]) # type: ignore
+            
+            low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz)
+            connection_f = self.dataset.hz_to_natural_units(self.dataset.effective_initial_frequency_hz)
             
         else:
             extend_with_pn = False
 
         if len(rescaled_frequencies) < 1:
+            # this should never happen! 
             raise ValueError('At least one point should be in the model band')
 
-        try:
-            assert rescaled_frequencies[-1] <= self.dataset.effective_srate_hz / 2.0
-        except AssertionError as e:
-            raise FrequencyTooHighError() from e
+        if rescaled_frequencies[-1] > self.dataset.effective_srate_hz / 2.0:
+            if not self.extend_with_zeros_at_high_frequency:
+                raise FrequencyTooHighError(
+                    "This model is not configured to be extended with zeros at high frequency."
+                    "Set the 'extend_with_zeros_at_high_frequency' attribute of the model to True"
+                    "if that is what you want."
+                )
+            else:
+                extend_hf = True
+                high_frequency_index = int(np.searchsorted(rescaled_frequencies, self.dataset.effective_srate_hz / 2.0))
+                hf_segment_length = len(rescaled_frequencies) - high_frequency_index
+                rescaled_frequencies = rescaled_frequencies[:high_frequency_index]
+
+
+        else:
+            extend_hf = False
 
         self.parameter_ranges.check_parameters_in_ranges(params)
 
@@ -789,13 +836,32 @@ class Model:
         )
 
         if extend_with_pn:
-            resampled_amp = np.concatenate((
+            
+            eob_amplitude_at_connection = resampled_amp[0]
+            f_min_connection = connection_f / 2.0
+            connecting_mask = np.where(
+                low_freqs > f_min_connection,
+            )
+            
+            zero_to_one = (
+                (low_freqs[connecting_mask] - f_min_connection) / 
+                (connection_f - f_min_connection)
+            )
+            
+            low_freq_amp = (
                 self.dataset.waveform_generator.post_newtonian_amplitude(
                 intrinsic_params,
-                low_freqs[:-1],
-                ),
-                resampled_amp
-            ))
+                low_freqs,
+                )
+            )
+            pn_amplitude_at_connection = low_freq_amp[-1]
+            
+            low_freq_amp[connecting_mask] += (
+                smoothing_func(zero_to_one) 
+                * (eob_amplitude_at_connection - pn_amplitude_at_connection)
+            )
+            
+            resampled_amp = np.concatenate((low_freq_amp[:-1], resampled_amp[1:]))
             
             low_f_phi = self.dataset.waveform_generator.post_newtonian_phase(
                 intrinsic_params,
@@ -804,10 +870,15 @@ class Model:
             
             resampled_phi = np.concatenate((
                 low_f_phi[:-1],
-                resampled_phi + low_f_phi[-1]
+                resampled_phi[1:] + low_f_phi[-1]
             ))
 
-        amp = ( resampled_amp
+        if extend_hf:
+            resampled_amp = np.concatenate((resampled_amp, np.zeros(hf_segment_length)))
+            resampled_phi = np.concatenate((resampled_phi, np.zeros(hf_segment_length)))
+
+        amp = (
+            resampled_amp
             * pre
             / params.distance_mpc
         )
@@ -817,12 +888,18 @@ class Model:
             + params.reference_phase
             + (2 * np.pi * params.time_shift) * frequencies
         )
-
+        
         return amp, phi
 
     def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
         r"""Calculate the waveforms in the plus and cross polarizations,
-        accounting for extrinsic parameters
+        accounting for extrinsic parameters.
+        
+        This function is able to yield a sensible waveform at arbitrarily 
+        low frequencies, by hybridizing the EOB-trained high-frequency part
+        with a Post-Newtonian approximant. 
+        This feature can be turned off with the :attr:`extend_with_post_newtonian`
+        parameter of the :class:`Model` object.
 
         Parameters
         ----------
@@ -848,10 +925,26 @@ class Model:
 
         Raises
         ------
-        AssertionError
-                When the frequencies given are either too high or too low.
+        FrequencyTooLowError
+                When the frequencies given are too low, below the training range.
                 For speed, this is only checked against the first and last elements
                 of the array, assuming that it is sorted.
+
+                This is raised only if the PN extension of the waveform is
+                disabled by setting :attr:`extend_with_post_newtonian`
+                to False.
+
+        Raises
+        ------
+        FrequencyTooHighError
+                When the frequencies given are too high.
+                For speed, this is only checked against the first and last elements
+                of the array, assuming that it is sorted.
+
+                This is raised only if the extension of the waveform with zeroes is
+                disabled by setting :attr:`extend_with_zeros_at_high_frequency`
+                to False.
+
 
         Returns
         -------
@@ -1022,3 +1115,4 @@ def compute_polarizations(
     hc = pre_cross * waveform_imag - 1j * pre_cross * waveform_real
 
     return hp, hc
+
