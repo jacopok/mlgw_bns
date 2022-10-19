@@ -842,7 +842,7 @@ def amplitude_3h_post_newtonian(
 
     # merger_freq = frequency_of_merger(params)
 
-    return smoothly_connect_with_zero(frequencies, pn_amp, 0.01, 0.02, 0.02)
+    return smoothly_connect_with_zero(frequencies, pn_amp, 0.008, 0.02, 0.02)
 
 
 def phase_5h_post_newtonian_tidal(
