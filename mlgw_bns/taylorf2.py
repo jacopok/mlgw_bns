@@ -4,6 +4,7 @@ Code adapted from `bajes <https://arxiv.org/abs/2102.00017>`_,
 which can be found in `this repo <https://github.com/matteobreschi/bajes>`_.
 """
 
+import warnings
 from typing import TYPE_CHECKING, Callable
 
 import numpy as np
@@ -809,6 +810,9 @@ def smoothly_connect_with_zero(
     )
 
     pn_amp[mask_end] = decreasing_function(frequencies[mask_end], merger_freq)
+
+    if np.any(pn_amp < 1e-4):
+        warnings.warn("PN amplitude is negative!")
 
     return pn_amp
 
