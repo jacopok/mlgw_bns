@@ -34,17 +34,19 @@ class DownsamplingTraining(ABC):
     degree : int
             degree for the interpolation.
             Defaults to 3.
-    tol : float
-            Tolerance for the interpolation error.
-            Defaults to ``1e-5``.
+    tol_amp : float
+            Tolerance for the interpolation error in amplitude.
+    tol_phi : float
+            Tolerance for the interpolation error in amplitude.
     """
 
     degree: int = 3
 
-    def __init__(self, dataset: Dataset, tol: float = 1e-5):
+    def __init__(self, dataset: Dataset, tol_amp: float = 1e-3, tol_phi: float = 1e-5):
 
         self.dataset = dataset
-        self.tol = tol
+        self.tol_amp = tol_amp
+        self.tol_phi = tol_phi
 
     @abstractmethod
     def train(self, training_dataset_size: int) -> DownsamplingIndices:
@@ -135,7 +137,11 @@ class DownsamplingTraining(ABC):
 
 class GreedyDownsamplingTraining(DownsamplingTraining):
     def indices_error(
-        self, ytrue: np.ndarray, ypred: np.ndarray, current_indices: SortedList
+        self,
+        ytrue: np.ndarray,
+        ypred: np.ndarray,
+        current_indices: SortedList,
+        tol: float,
     ) -> tuple[list[int], list[float]]:
         """Find new indices to add to the sampling.
 
@@ -175,7 +181,7 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
 
             err = arr[i]
 
-            if err > self.tol:
+            if err > tol:
                 new_indices.append(i)
                 errors.append(err)
         return new_indices, errors
@@ -184,6 +190,7 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
         self,
         x_train: np.ndarray,
         ys_train: list[np.ndarray],
+        tol: float,
         seeds_number: int = 4,
     ) -> list[int]:
         """Greedily downsample y(x) by making sure that the reconstruction error of each of
@@ -212,7 +219,7 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
             list(np.linspace(0, len(x_train) - 1, num=seeds_number, dtype=int))
         )
 
-        err = self.tol + 1
+        err = tol + 1
 
         done_with_wf = np.zeros(len(ys_train), dtype=bool)
 
@@ -224,7 +231,7 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
                     continue
                 ypred = self.resample(x_train[indices], x_train, y[indices])
 
-                indices_batch, errs = self.indices_error(y, ypred, indices)
+                indices_batch, errs = self.indices_error(y, ypred, indices, tol)
 
                 if len(errs) < 1:
                     done_with_wf[i] = True
@@ -238,7 +245,7 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
                 "%i indices, error = %f = %f times the tol",
                 len(indices),
                 err,
-                err / self.tol,
+                err / tol,
             )
 
         return list(indices)
@@ -266,8 +273,12 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
         waveforms = self.dataset.generate_waveforms_from_params(param_set)
         frequencies = self.dataset.frequencies
 
-        amp_indices = self.find_indices(frequencies, list(waveforms.amplitudes))
-        phi_indices = self.find_indices(frequencies, list(waveforms.phases))
+        amp_indices = self.find_indices(
+            frequencies, list(waveforms.amplitudes), self.tol_amp
+        )
+        phi_indices = self.find_indices(
+            frequencies, list(waveforms.phases), self.tol_phi
+        )
 
         return DownsamplingIndices(amp_indices, phi_indices)
 
@@ -294,10 +305,10 @@ class GreedyDownsamplingTrainingWithResiduals(GreedyDownsamplingTraining):
         amp_residuals, phi_residuals = residuals
 
         amp_indices = self.find_indices(
-            frequencies, amp_residuals[:training_dataset_size]
+            frequencies, amp_residuals[:training_dataset_size], self.tol_amp
         )
         phi_indices = self.find_indices(
-            frequencies, phi_residuals[:training_dataset_size]
+            frequencies, phi_residuals[:training_dataset_size], self.tol_phi
         )
 
         return DownsamplingIndices(amp_indices, phi_indices)
