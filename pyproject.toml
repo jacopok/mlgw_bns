@@ -17,7 +17,7 @@ optuna = "^2.10.0" # for optimization of hyperparameters
 scikit-learn = "1.1.2" # provides the neural networks
 h5py = "^3.6.0" # for management of h5 files
 numba = ">=0.56.2" # acceleration of numerical computations
-joblib = "^1.1.0" # to save pickled objects such as neural networks
+joblib = "1.2.0" # to save pickled objects such as neural networks
 tqdm = "^4.62.3" # makes progressbars
 sortedcontainers = "^2.4.0" # for the management of index lists while downsampling
 plotly = "^5.5.0" # to make plots for optuna studies
