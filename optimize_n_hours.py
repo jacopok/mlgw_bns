@@ -6,7 +6,7 @@ if __name__ == "__main__":
         m = Model("optimization_dataset")
         m.load()
     except FileNotFoundError:
-        m.generate(512, 1 << 15, None)
+        m.generate(2**10, 2**19, None)
         m.save()
     ho = HyperparameterOptimization(m)
 
