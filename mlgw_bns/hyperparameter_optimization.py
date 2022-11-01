@@ -175,13 +175,15 @@ class HyperparameterOptimization:
         training_indices = shuffled_indices[: hyper.n_train]
         validation_indices = shuffled_indices[-validation_data_number:]
 
-        start_time = perf_counter()
         nn = self.model.train_nn(hyper, list(training_indices))
+
+        start_time = perf_counter()
+        nn.predict()
         end_time = perf_counter()
 
-        effective_time = (
-            end_time - start_time
-        ) + self.waveform_gen_time * hyper.n_train
+        # effective_time = (
+        #     end_time - start_time
+        # ) + self.waveform_gen_time * hyper.n_train
 
         # validate on another subset of the data
         predicted_residuals = self.model.predict_residuals_bulk(
