@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fixed #46, an issue with the wrong version of joblib leading to models not being able to be loaded.
+- Fixed [#46](https://github.com/jacopok/mlgw_bns/issues/46), an issue with the wrong version of joblib leading to models not being able to be loaded.
 
 ## [0.12.0] - 2022-10-15
 
