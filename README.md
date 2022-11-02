@@ -31,28 +31,9 @@ For more details see [the documentation](https://mlgw-bns.readthedocs.io/en/late
 
 ## Changelog
 
-Changes across versions are documented since version 0.10.1 in the [CHANGELOG](https://github.com/jacopok/mlgw_bns/blob/master/CHANGELOG.md).
+Changes across versions are documented in the [CHANGELOG](https://github.com/jacopok/mlgw_bns/blob/master/CHANGELOG.md).
 
-## Inner workings
+## Reference
 
-The main steps taken by `mlgw_bns` to train on a dataset are as follows:
-
-- generate the dataset, consisting of EOB waveforms
-- decompose the Fourier transforms of the waveforms into phase and amplitude
-- downsample the dataset to a few thousand points
-- compute the residuals of the EOB waveforms from PN ones
-- apply a PCA to reduce the dimensionality to a few tens of real numbers
-- train a neural network on the relation
-    between the waveform parameters and the PCA components
-    
-After this, the model can reconstruct a waveform within its parameter space,
-resampled at arbitrary points in frequency space.
-
-In several of the training steps data-driven optimizations are performed:
-
-- the points at which the waveforms are downsampled are not uniformly chosen:
-    instead, a greedy downsampling algorithm determines them
-- the hyperparameters for the neural network are optimized, according to both
-    the time taken for the training and the estimated reconstruction error, 
-    also varying the number of training waveforms available. 
-    
+The reference paper is [this one](https://arxiv.org/abs/2210.15684), currently 
+only on arxiv.
