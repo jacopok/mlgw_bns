@@ -8,13 +8,14 @@ version: 2
 build:
   os: ubuntu-20.04  # <- add this line
   tools:
-    python: 
-      version: "3.10"
-      install:
-        - method: pip
-          path: .
-          extra_requirements:
-            - docs
+    python: "3.10"
+
+python:
+  install:
+    - method: pip
+      path: .
+      extra_requirements:
+        - docs
 
 sphinx:
   configuration: docs/conf.py
