@@ -11,7 +11,7 @@ repository = "https://github.com/jacopok/mlgw_bns"
 
 
 [tool.poetry.dependencies]
-python = ">=3.8,<3.11"
+python = ">=3.9,<3.11"
 numpy = ">=1.18,<1.24" # for all kinds of array manipulation
 optuna = "^2.10.0" # for optimization of hyperparameters
 scikit-learn = "1.1.2" # provides the neural networks
@@ -23,10 +23,10 @@ sortedcontainers = "^2.4.0" # for the management of index lists while downsampli
 plotly = "^5.5.0" # to make plots for optuna studies
 types-setuptools = "^57.4.7" # technical
 toml = "^0.10.2" # technical
-Sphinx = {version="^4.3.1", optional=true}
+Sphinx = {version="^7.2.6", optional=true}
 sphinx-rtd-theme = {version="^1.0.0", optional=true}
 readthedocs-sphinx-search = {version="^0.3.2", optional=true}
-myst-parser = {version="^0.15.2", optional=true}
+myst-parser = {version="^2.0.0", optional=true}
 MarkupSafe = {version="2.0.1", optional=true}
 sphinxcontrib-bibtex = {version="^2.4.2", optional=true}
 sphinx-autodoc-defaultargs = {version="^0.1.2", optional=true}
