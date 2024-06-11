@@ -63,7 +63,7 @@ def test_default_models_with_validation_mismatches(model_name, tolerance):
     model = Model.default(model_name)
     vm = ValidateModel(model)
 
-    mismatches = vm.validation_mismatches(16)
+    mismatches = vm.validation_mismatches(16, seed=1)
 
     for m in mismatches:
         assert m < tolerance
