@@ -9,7 +9,8 @@ import joblib  # type: ignore
 import numpy as np
 import pkg_resources
 from sklearn.neural_network import MLPRegressor  # type: ignore
-from sklearn.preprocessing import StandardScaler  # type: ignore
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.preprocessing import StandardScaler, MinMaxScaler  # type: ignore
 
 if TYPE_CHECKING:
     import optuna
@@ -371,6 +372,27 @@ class TorchNetwork(NeuralNetwork):
     def from_file(cls, filename: Union[IO[bytes], str]):
         return cls(*joblib.load(filename))
 
+class TimeshiftsGPR:
+    def __init__(self, training_params = None, training_timeshifts = None):
+        self.training_params = training_params
+        self.training_timeshifts = training_timeshifts
+        self.regressor = GaussianProcessRegressor()
+    
+    def fit(self):
+        scaled_params = MinMaxScaler().fit_transform(self.training_params)
+        self.regressor.fit(scaled_params, self.training_timeshifts)
+        return self
+    
+    def predict(self, params):
+        scaled_params = MinMaxScaler().fit_transform(params)
+        return self.regressor.predict(scaled_params)
+    
+    def save_model(self, filename):
+        joblib.dump(self, filename)
+    
+    @classmethod
+    def load_model(cls, filename):
+        return joblib.load(filename)
 
 def retrieve_best_trials_list() -> "list[optuna.trial.FrozenTrial]":
     """Read the list of best trials which is provided
