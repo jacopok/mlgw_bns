@@ -33,7 +33,7 @@ from .dataset_generation import (
     WaveformParameters,
 )
 from .downsampling_interpolation import DownsamplingTraining, GreedyDownsamplingTraining
-from .neural_network import Hyperparameters, NeuralNetwork, SklearnNetwork
+from .neural_network import Hyperparameters, NeuralNetwork, SklearnNetwork, TimeshiftsGPR
 from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
     PrincipalComponentTraining,
@@ -499,12 +499,30 @@ class Model:
             assert self.pca_data is not None
 
         if training_nn_dataset_size is not None:
-            _, parameters, residuals = self.dataset.generate_residuals(
-                training_nn_dataset_size, self.downsampling_indices
+            _, parameters, residuals_timeshifts = self.dataset.generate_residuals(
+                training_nn_dataset_size, flatten_phase=False
+            )
+
+            self.training_timeshifts_data = residuals_timeshifts.flatten_phase(frequencies=self.dataset.frequencies_hz)
+            self.timeshifts_model = TimeshiftsGPR(
+                training_params=parameters.parameter_array,
+                training_timeshifts=self.training_timeshifts_data
+            ).fit()
+            self.training_parameters = parameters
+
+        if training_nn_dataset_size is not None:
+            freq_downsampled, _, residuals = self.dataset.generate_residuals(
+                training_nn_dataset_size, self.downsampling_indices, flatten_phase=False
+            )
+
+            residuals.phase_residuals = remove_linear_trend(
+                parameters=self.training_parameters.parameter_array,
+                ts_model=self.timeshifts_model,
+                phi_diff=residuals.phase_residuals,
+                frq=self.dataset.natural_units_to_hz(freq_downsampled)
             )
 
             self.training_dataset = residuals
-            self.training_parameters = parameters
         else:
             assert self.training_dataset is not None
             assert self.training_parameters is not None
@@ -540,6 +558,9 @@ class Model:
         self.save_arrays(include_training_data)
         if self.nn is not None:
             self.nn.save(self.filename_nn)
+
+    def save_timeshifts_model(self) -> None:
+        self.timeshifts_model.save_model(f'{self.filename}_timeshifts.pkl')
 
     def load(self, streams: Optional[tuple[IO[bytes], IO[bytes], IO[bytes]]] = None) -> None:
         """Load model from the files present in the current folder.
@@ -1116,3 +1137,10 @@ def compute_polarizations(
 
     return hp, hc
 
+def remove_linear_trend(parameters, ts_model, phi_diff, frq):
+
+    time_shifts_pred = ts_model.predict(parameters)
+    for i in range(parameters.shape[1]):
+        phi_diff[i] = phi_diff[i] - 2 * np.pi * frq * time_shifts_pred[i]
+
+    return phi_diff
