@@ -16,6 +16,7 @@ from .dataset_generation import Dataset, ParameterSet, WaveformGenerator
 from .downsampling_interpolation import DownsamplingIndices, DownsamplingTraining
 from .model import Model
 from .resample_residuals import cartesian_waveforms_at_frequencies
+from .neural_network import TimeshiftsGPR
 
 PSD_PATH = Path(__file__).parent / "data"
 
@@ -72,6 +73,10 @@ class ValidateModel:
             self.frequencies,
             self.psd_values,
         )
+    
+    def time_shifts_predictor(self):
+        """Predict the time shifts for a given set of parameters"""
+        return TimeshiftsGPR().load_model(filename="/home/ge73qip/Thesis/mlgw_bns/mlgw_bns/data/trials_timeshifts.pkl")
 
     def param_set(
         self, number_of_parameter_tuples: int, seed: Optional[int] = None
@@ -164,6 +169,7 @@ class ValidateModel:
         self,
         number_of_validation_waveforms: int,
         seed: Optional[int] = None,
+        include_time_shifts: bool = False,
         true_waveforms: Optional[FDWaveforms] = None,
         zero_residuals: bool = False,
     ) -> list[float]:
@@ -205,6 +211,9 @@ class ValidateModel:
             predicted_waveforms = self.post_newtonian_waveforms(param_set)
         else:
             predicted_waveforms = self.predicted_waveforms(param_set)
+
+        if include_time_shifts:
+            predicted_waveforms.phases += 2 * np.pi * self.model.dataset.frequencies_hz[self.model.downsampling_indices.phase_indices] * self.time_shifts_predictor().predict(param_set.parameter_array).reshape(-1, 1)
 
         return self.mismatch_array(true_waveforms, predicted_waveforms)
 
@@ -249,6 +258,43 @@ class ValidateModel:
                 zip(cartesian_1, cartesian_2), unit="mismatches"
             )
         ]
+    
+    def waveforms(
+        self, waveform_array_1: FDWaveforms, waveform_array_2: FDWaveforms
+    ):
+        """Compute the mismatches between each of the waveforms in these two lists.
+
+        Parameters
+        ----------
+        waveform_array_1 : FDWaveforms
+            First set of waveforms to compare.
+        waveform_array_2 : FDWaveforms
+            Second set of waveforms to compare.
+
+        Returns
+        -------
+        list[float]
+            Mismatches between the waveforms, in order.
+        """
+        assert self.model.downsampling_indices is not None
+
+        cartesian_1 = cartesian_waveforms_at_frequencies(
+            waveform_array_1,
+            self.model.dataset.hz_to_natural_units(self.frequencies),
+            self.model.dataset,
+            self.model.downsampling_training,
+            self.model.downsampling_indices,
+        )
+
+        cartesian_2 = cartesian_waveforms_at_frequencies(
+            waveform_array_2,
+            self.model.dataset.hz_to_natural_units(self.frequencies),
+            self.model.dataset,
+            self.model.downsampling_training,
+            self.model.downsampling_indices,
+        )
+
+        return cartesian_1, cartesian_2
 
     def mismatch(
         self,
