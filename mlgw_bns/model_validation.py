@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable, Optional, Type
 
 import numpy as np
+import joblib
 from scipy import integrate  # type: ignore
 from scipy.interpolate import interp1d  # type: ignore
 from scipy.optimize import minimize_scalar  # type: ignore
@@ -76,7 +77,7 @@ class ValidateModel:
     
     def time_shifts_predictor(self):
         """Predict the time shifts for a given set of parameters"""
-        return TimeshiftsGPR().load_model(filename="/home/ge73qip/Thesis/mlgw_bns/mlgw_bns/data/trials_timeshifts.pkl")
+        return TimeshiftsGPR().load_model("/home/ge73qip/Thesis/mlgw_bns/time_shifts_experiments/trials_timeshifts.pkl")
 
     def param_set(
         self, number_of_parameter_tuples: int, seed: Optional[int] = None
@@ -202,23 +203,29 @@ class ValidateModel:
             List of mismatches.
         """
 
-        param_set = self.param_set(number_of_validation_waveforms, seed)
+        self.parameter_set = self.param_set(number_of_validation_waveforms, seed)
 
         if true_waveforms is None:
-            true_waveforms = self.true_waveforms(param_set)
+            true_waveforms = self.true_waveforms(self.parameter_set)
 
         if zero_residuals:
-            predicted_waveforms = self.post_newtonian_waveforms(param_set)
+            predicted_waveforms = self.post_newtonian_waveforms(self.parameter_set)
         else:
-            predicted_waveforms = self.predicted_waveforms(param_set)
+            predicted_waveforms = self.predicted_waveforms(self.parameter_set)
 
+        # print(param_set.parameter_array)
         if include_time_shifts:
-            predicted_waveforms.phases += 2 * np.pi * self.model.dataset.frequencies_hz[self.model.downsampling_indices.phase_indices] * self.time_shifts_predictor().predict(param_set.parameter_array).reshape(-1, 1)
+            predicted_waveforms.phases += (
+                2 * np.pi 
+                * self.model.dataset.frequencies_hz[self.model.downsampling_indices.phase_indices] 
+                * self.time_shifts_predictor().predict(self.parameter_set.parameter_array).reshape(-1, 1)
+            )
+            # predicted_waveforms.phases -= predicted_waveforms.phases[:, 0].reshape(-1, 1)
 
         return self.mismatch_array(true_waveforms, predicted_waveforms)
 
     def mismatch_array(
-        self, waveform_array_1: FDWaveforms, waveform_array_2: FDWaveforms
+        self, waveform_array_1: FDWaveforms, waveform_array_2: FDWaveforms, parameters_set: Optional[ParameterSet] = None
     ) -> list[float]:
         """Compute the mismatches between each of the waveforms in these two lists.
 
@@ -251,6 +258,12 @@ class ValidateModel:
             self.model.downsampling_training,
             self.model.downsampling_indices,
         )
+
+        # cartesian_2 *= np.exp(
+        #     2j * np.pi 
+        #     * self.time_shifts_predictor().predict(self.parameter_set.parameter_array).reshape(-1, 1) 
+        #     * self.frequencies
+        # )
 
         return [
             self.mismatch(waveform_1, waveform_2)
@@ -301,7 +314,7 @@ class ValidateModel:
         waveform_1: np.ndarray,
         waveform_2: np.ndarray,
         frequencies: Optional[np.ndarray] = None,
-        max_delta_t: float = 0.07,
+        max_delta_t: float = 7e-5,
     ) -> float:
         r"""Compute the mismatch between two Cartesian waveforms.
 
@@ -353,8 +366,11 @@ class ValidateModel:
             return -product(waveform_1, waveform_2 * offset)
 
         res = minimize_scalar(
-            to_minimize, method="brent", bracket=(-max_delta_t, max_delta_t)
+            to_minimize, method="bounded", bounds=(-max_delta_t, max_delta_t), options={'maxiter': 1000, 'xatol': 1e-12}
+
         )
+        
+        print(f"Optimization result: {res}")
 
         if not res.success:
             raise ValueError("Mismatch optimization did not succeed!")

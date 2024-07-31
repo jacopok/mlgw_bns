@@ -30,6 +30,7 @@ from typing import (
 
 import h5py
 import numpy as np
+from numpy.polynomial.polynomial import Polynomial
 
 if TYPE_CHECKING:
     from .model import ParametersWithExtrinsic
@@ -171,7 +172,7 @@ class ParameterRanges:
     """
 
     mass_range: Tuple[float, float] = (2.0, 4.0)
-    q_range: Tuple[float, float] = (1.0, 3.0)
+    q_range: Tuple[float, float] = (1.0, 2.85) # changed this!
     lambda1_range: Tuple[float, float] = (5.0, 5000.0)
     lambda2_range: Tuple[float, float] = (5.0, 5000.0)
     chi1_range: Tuple[float, float] = (-0.5, 0.5)
@@ -370,6 +371,49 @@ class Residuals(SavableData):
             self.phase_residuals[i] = (
                 phase_arr - slopes[i] * (frequencies - frequencies[0]) - phase_arr[0]
             )
+        
+        return slopes / (2 * np.pi)
+
+    def flatten_phase_new(
+        self, frequencies: np.ndarray, first_section_flat: float = 0.2
+    ) -> np.ndarray:
+        """Subtract a linear term from the phase,
+        such that it is often close to 0.
+
+        Parameters
+        ----------
+        frequencies: np.ndarray
+                Frequencies to which the phase points correspond.
+                Required for the linear term subtraction.
+        first_section_flat: float
+                The linear term is chosen so that the first
+                phase residual is zero, and so is the one corresponding
+                to this fraction of the frequencies.
+                Defaults to 0.2.
+                
+        Returns
+        -------
+        timeshifts: np.ndarray
+                Timeshifts, in seconds if the frequencies given are in Hz,
+                
+        """
+
+        number_of_points = self.phase_residuals.shape[1]
+
+        index = int(first_section_flat * number_of_points)
+        slopes = np.empty(len(self.phase_residuals))
+
+        for i, phase_arr in enumerate(self.phase_residuals):
+            # Fit a quadratic polynomial to the initial section
+            p = Polynomial.fit(frequencies[:index], phase_arr[:index], 2)
+            
+            # Calculate the linear component at the endpoints
+            slope = p.convert().coef[1]
+            intercept = p.convert().coef[0]
+            
+            # Adjust phase residuals
+            self.phase_residuals[i] = phase_arr - (slope * (frequencies - frequencies[0]) + intercept)
+            slopes[i] = slope
         
         return slopes / (2 * np.pi)
 
