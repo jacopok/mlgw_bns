@@ -1061,12 +1061,12 @@ class Dataset:
             amp_length = downsampling_indices.amp_length
             phi_length = downsampling_indices.phi_length
 
-        amp_residuals = np.empty((size, amp_length))
-        phi_residuals = np.empty((size, phi_length))
-        parameter_array = np.empty((size, WaveformParameters.number_of_parameters))
+        amp_residuals = np.empty((size, amp_length), dtype=np.float32)
+        phi_residuals = np.empty((size, phi_length), dtype=np.float32)
+        parameter_array = np.empty((size, WaveformParameters.number_of_parameters), dtype=np.float32)
 
         if self.parameter_generator is None:
-            parameter_generator = self.make_parameter_generator()
+            parameter_generator = self.make_parameter_generator(seed=1)
         else:
             parameter_generator = self.parameter_generator
 
@@ -1084,16 +1084,16 @@ class Dataset:
 
         residuals = Residuals(amp_residuals, phi_residuals)
 
+        if downsampling_indices is None:
+            indices: Union[slice, list[int]] = slice(None)
+        else:
+            indices = downsampling_indices.phase_indices
+                
         if flatten_phase:
-            if downsampling_indices is None:
-                indices: Union[slice, list[int]] = slice(None)
-            else:
-                indices = downsampling_indices.phase_indices
-
             residuals.flatten_phase(self.frequencies[indices])
 
         return (
-            self.frequencies,
+            self.frequencies[indices],
             self.parameter_set_cls(parameter_array),
             residuals,
         )

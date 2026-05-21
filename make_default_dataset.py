@@ -1,4 +1,4 @@
-from mlgw_bns import Model
+from mlgw_bns.model import Model
 
 def main_model():
     m = Model("default", initial_frequency_hz=5.)

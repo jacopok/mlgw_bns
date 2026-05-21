@@ -9,7 +9,8 @@ import joblib  # type: ignore
 import numpy as np
 import pkg_resources
 from sklearn.neural_network import MLPRegressor  # type: ignore
-from sklearn.preprocessing import StandardScaler  # type: ignore
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.preprocessing import StandardScaler, MinMaxScaler  # type: ignore
 
 if TYPE_CHECKING:
     import optuna
@@ -371,6 +372,85 @@ class TorchNetwork(NeuralNetwork):
     def from_file(cls, filename: Union[IO[bytes], str]):
         return cls(*joblib.load(filename))
 
+class TimeshiftsGPR:
+    """
+    A Gaussian Process Regressor model for predicting timeshifts based on training parameters.
+
+    Attributes:
+        training_params (ndarray): Training parameters (features), shape (n_samples, n_features).
+        training_timeshifts (ndarray): Training timeshifts (target values), shape (n_samples,).
+        regressor (GaussianProcessRegressor): The Gaussian Process Regressor model.
+        scaler (MinMaxScaler): Scaler for normalizing the training parameters.
+
+    Methods:
+        fit(): Fit the GaussianProcessRegressor model using the training data.
+        predict(params): Predict timeshifts using the fitted model.
+        save_model(filename): Save the fitted model to a file.
+    """
+
+    def __init__(self, training_params=None, training_timeshifts=None):
+        """
+        Initialize the TimeshiftsGPR model with training data.
+        
+        :param training_params: Training parameters (features), shape (n_samples, n_features)
+        :param training_timeshifts: Training timeshifts (target values), shape (n_samples,)
+        """
+        self.training_params = training_params
+        self.training_timeshifts = training_timeshifts
+        self.regressor = GaussianProcessRegressor()
+        self.scaler = MinMaxScaler()
+    
+    def fit(self):
+        """
+        Fit the GaussianProcessRegressor model using the training data.
+        
+        :raises ValueError: If training data is not provided.
+        :return: The fitted TimeshiftsGPR model.
+        """
+        if self.training_params is None or self.training_timeshifts is None:
+            raise ValueError("Training data not provided.")
+        
+        # Fit and transform the scaler with training data
+        self.scaler.fit(self.training_params)
+        scaled_params = self.scaler.transform(self.training_params)
+        self.regressor.fit(scaled_params, self.training_timeshifts)
+        return self
+    
+    def predict(self, params):
+        """
+        Predict timeshifts using the fitted model.
+        
+        :param params: Parameters (features) for which to predict timeshifts, shape (n_samples, n_features)
+        :raises ValueError: If the model is not fitted yet.
+        :return: Predicted timeshifts, shape (n_samples,)
+        """
+        if not hasattr(self, 'scaler'):
+            raise ValueError("Model is not fitted yet. Call 'fit' with appropriate data before prediction.")
+        
+        scaled_params = self.scaler.transform(params)
+        return self.regressor.predict(scaled_params)
+    
+    def save_model(self, filename):
+        """
+        Save the fitted model to a file.
+        
+        :param filename: Path to the file where the model should be saved
+        """
+        joblib.dump(self, filename)
+
+    
+    @classmethod
+    def load_model(cls, filename):
+        """
+        Load a model from a file.
+        
+        :param filename: Path to the file from which the model should be loaded
+        :return: Loaded TimeshiftsGPR instance
+        """
+        model = joblib.load(filename)
+        if not isinstance(model, cls):
+            raise ValueError("Loaded model is not of the correct type.")
+        return model
 
 def retrieve_best_trials_list() -> "list[optuna.trial.FrozenTrial]":
     """Read the list of best trials which is provided
