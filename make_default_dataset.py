@@ -13,5 +13,5 @@ def model_2():
     m.save(include_training_data=False)
 
 if __name__ == "__main__":
-    # main_model()
-    model_2()
+    main_model()
+    # model_2()
