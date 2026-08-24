@@ -759,6 +759,39 @@ def load_timeshifts_predictor(
             ) from gpr_err
 
 
+def load_timeshifts_predictor_from_file(
+    filename: Union[IO[bytes], str]
+) -> Union[TimeshiftsNN, TimeshiftsGPR]:
+    """Load a single time-shifts predictor checkpoint of either kind.
+
+    Unlike :func:`load_timeshifts_predictor`, this does not try two
+    separate paths: it loads whichever of :class:`TimeshiftsNN` or
+    :class:`TimeshiftsGPR` was pickled at ``filename``.
+
+    Parameters
+    ----------
+    filename : IO[bytes] or str
+            Path (or open stream) to a checkpoint written by either
+            :meth:`TimeshiftsNN.save_model` or
+            :meth:`TimeshiftsGPR.save_model`.
+
+    Returns
+    -------
+    TimeshiftsNN or TimeshiftsGPR
+            Loaded predictor.
+
+    Raises
+    ------
+    ValueError
+            If the loaded object is not a :class:`TimeshiftsNN` or
+            :class:`TimeshiftsGPR`.
+    """
+    model = joblib.load(filename)
+    if not isinstance(model, (TimeshiftsNN, TimeshiftsGPR)):
+        raise ValueError("Loaded object is not a TimeshiftsNN or TimeshiftsGPR.")
+    return model
+
+
 def retrieve_best_trials_list() -> "list[optuna.trial.FrozenTrial]":
     """Return the pretrained Pareto front of best hyperparameter trials.
 

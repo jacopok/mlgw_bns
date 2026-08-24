@@ -33,7 +33,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import IO, Optional, Union
 
 import numpy as np
-import pkg_resources
+from importlib.resources import files
 from numba import njit, prange  # type: ignore
 
 from .dataset_generation import Dataset
@@ -49,7 +49,7 @@ from .neural_network import (
     Hyperparameters,
     TimeshiftsGPR,
     TimeshiftsNN,
-    load_timeshifts_predictor,
+    load_timeshifts_predictor_from_file,
 )
 from .special_func import spinsphericalharm
 
@@ -58,16 +58,6 @@ PRETRAINED_MODES_MODEL_FOLDER = "data/HOM/"
 
 #: Names of the pretrained higher-order-mode models shipped with the package.
 MODES_MODELS_AVAILABLE = ["pp_small_default_l2_m2", "pp_large_default_l2_m2"]
-
-#: Default fallback locations for the time-shift predictor checkpoints.
-_DEFAULT_TIMESHIFTS_NN_PATH = (
-    "/scratch/shire/data/nj/personal/Prasoon/mlgw_bns_HOM/"
-    "timeshifts_rff_surrogate.pkl"
-)
-_DEFAULT_TIMESHIFTS_GPR_PATH = (
-    "/scratch/shire/data/nj/personal/Prasoon/mlgw_bns_HOM/"
-    "timeshifts_model_HOM.pkl"
-)
 
 
 @njit(parallel=True, fastmath=True)
@@ -364,26 +354,32 @@ class ModesModel:
 
         self.models: dict[Mode, Model] = _LazyModelsDict(self)
 
-    @staticmethod
-    def _load_default_time_shifts_predictor() -> Optional[Union[TimeshiftsNN, TimeshiftsGPR]]:
-        """Try to load the default time-shift predictor.
+    def _load_default_time_shifts_predictor(
+        self,
+    ) -> Optional[Union[TimeshiftsNN, TimeshiftsGPR]]:
+        """Try to load the time-shift predictor saved alongside this model.
 
-        Attempts the lightweight :class:`TimeshiftsNN` (RFF+Ridge) first,
-        falling back to :class:`TimeshiftsGPR`. Returns ``None`` if neither
-        can be loaded.
+        Looks for the checkpoint at :attr:`filename_timeshifts`, i.e.
+        ``"{base_filename}_timeshifts.pkl"``. Returns ``None`` if it is
+        not available (e.g. no ``base_filename`` was set yet, or the
+        model has not been trained/saved).
         """
+        if not self.base_filename:
+            return None
         try:
-            return load_timeshifts_predictor(
-                _DEFAULT_TIMESHIFTS_NN_PATH,
-                _DEFAULT_TIMESHIFTS_GPR_PATH,
-            )
-        except ValueError as e:
+            return load_timeshifts_predictor_from_file(self.filename_timeshifts)
+        except (FileNotFoundError, ValueError) as e:
             logging.warning(
                 "Could not load default time-shift predictor (%s). "
                 "`time_shifts` must be provided explicitly to `predict`.",
                 e,
             )
             return None
+
+    @property
+    def filename_timeshifts(self) -> str:
+        """File name in which to save the shared mode time-shifts predictor."""
+        return f"{self.base_filename}_timeshifts.pkl"
 
     def mode_filename(self, mode: Mode) -> str:
         """Return the on-disk filename for a single mode.
@@ -520,18 +516,28 @@ class ModesModel:
         for mode in model.modes:
             mode_model = model.models[mode]
             try:
-                stream_meta = pkg_resources.resource_stream(
-                    __name__, mode_model.filename_metadata
+                stream_meta = files(__name__).joinpath(mode_model.filename_metadata).open("rb")
+                stream_arrays = files(__name__).joinpath(mode_model.filename_arrays).open("rb")
+                stream_nn = files(__name__).joinpath(mode_model.filename_nn).open("rb")
+                try:
+                    stream_timeshifts = (
+                        files(__name__).joinpath(mode_model.filename_timeshifts).open("rb")
+                    )
+                except FileNotFoundError:
+                    stream_timeshifts = None
+                mode_model.load(
+                    streams=(stream_meta, stream_arrays, stream_nn, stream_timeshifts)
                 )
-                stream_arrays = pkg_resources.resource_stream(
-                    __name__, mode_model.filename_arrays
-                )
-                stream_nn = pkg_resources.resource_stream(
-                    __name__, mode_model.filename_nn
-                )
-                mode_model.load(streams=(stream_meta, stream_arrays, stream_nn))
             except Exception as e:  # noqa: BLE001
                 logging.warning("Could not load model for mode %s: %s", mode, e)
+
+        try:
+            stream_timeshifts = files(__name__).joinpath(model.filename_timeshifts).open("rb")
+            model.time_shifts_predictor = load_timeshifts_predictor_from_file(
+                stream_timeshifts
+            )
+        except Exception as e:  # noqa: BLE001
+            logging.warning("Could not load time-shifts predictor: %s", e)
 
         if given_filename is not None:
             model.base_filename = given_filename
@@ -616,6 +622,9 @@ class ModesModel:
         else:
             for mode in self.modes:
                 self.models[mode].save(include_training_data=include_training_data)
+
+        if self.time_shifts_predictor is not None:
+            self.time_shifts_predictor.save_model(self.filename_timeshifts)
 
     def load(
         self,
