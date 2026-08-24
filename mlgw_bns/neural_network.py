@@ -40,7 +40,7 @@ from typing import IO, TYPE_CHECKING, Optional, Union
 
 import joblib  # type: ignore
 import numpy as np
-import pkg_resources
+from importlib.resources import files
 from sklearn.gaussian_process import GaussianProcessRegressor  # type: ignore
 from sklearn.kernel_approximation import RBFSampler  # type: ignore
 from sklearn.linear_model import Ridge  # type: ignore
@@ -774,7 +774,8 @@ def retrieve_best_trials_list() -> "list[optuna.trial.FrozenTrial]":
             Trials lying on the Pareto front of the bi-objective
             (accuracy vs. ``n_train``) optimization.
     """
-    stream = pkg_resources.resource_stream(__name__, TRIALS_FILE)
+
+    stream = files(__name__).joinpath(TRIALS_FILE).open("rb")
     return joblib.load(stream)
 
 
