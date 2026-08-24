@@ -10,5 +10,6 @@ from importlib import metadata  # type: ignore
 import toml  # type: ignore
 
 from .model import Model, ParametersWithExtrinsic
+from .modes_model import ModesModel
 
-__version__ = metadata.version(__package__)  # type: ignore
+# __version__ = metadata.version(__package__)  # type: ignore

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 SUN_MASS_SECONDS: float = 4.92549094830932e-6  # M_sun * G / c**3
 EULER_GAMMA = 0.57721566490153286060
 
-
+@njit
 def smoothing_func(x: np.ndarray) -> np.ndarray:
     """A function [0, 1] -> [0, 1]
     with zero derivative at the edges.

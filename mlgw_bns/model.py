@@ -7,13 +7,16 @@ from dataclasses import asdict, dataclass
 from functools import lru_cache
 from typing import IO, ClassVar, Optional, Type, Union
 
+import time
 import h5py
 import joblib  # type: ignore
 import numpy as np
-from importlib.resources import files
+from numpy.ma import indices
+import pkg_resources
 import yaml
 from dacite import from_dict
 from numba import njit  # type: ignore
+from scipy.interpolate import interp1d
 
 from .data_management import (
     DownsamplingIndices,
@@ -31,18 +34,43 @@ from .dataset_generation import (
     TEOBResumSGenerator,
     WaveformGenerator,
     WaveformParameters,
+    AMP_SI_BASE,
 )
-from .downsampling_interpolation import DownsamplingTraining, GreedyDownsamplingTraining
-from .neural_network import Hyperparameters, NeuralNetwork, SklearnNetwork, TimeshiftsGPR
+from .higher_order_modes import (
+    BarePostNewtonianModeGenerator,
+    Mode,
+    ModeGenerator,
+)
+from .downsampling_interpolation import (
+    DownsamplingTraining,
+    GreedyDownsamplingTraining,
+    RDPDownsamplingTraining,
+)
+from .neural_network import Hyperparameters, NeuralNetwork, SklearnNetwork, TimeshiftsGPR, TimeshiftsNN
 from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
     PrincipalComponentTraining,
 )
 from .taylorf2 import SUN_MASS_SECONDS, smoothing_func
+from .higher_order_modes import mode_to_k
 
 PRETRAINED_MODEL_FOLDER = "data/"
 MODELS_AVAILABLE = ["default", "fast"]
 
+PRETRAINED_MODES_MODEL_FOLDER = "data/HOM/"
+MODES_MODELS_AVAILABLE = ["pp_small_default_l2_m2", "pp_large_default_l2_m2"] 
+
+DEFAULT_DATASET_BASENAME = "data/default"
+
+try:
+    time_shifts_predictor = TimeshiftsNN.load_model(
+        filename="/scratch/shire/data/nj/personal/Prasoon/mlgw_bns_HOM/timeshifts_rff_surrogate.pkl"
+    )
+except (FileNotFoundError, Exception) as e:
+    warnings.warn(f"Could not load lightweight TimeshiftsNN ({e}), falling back to GPR...")
+    time_shifts_predictor = TimeshiftsGPR().load_model(
+        filename="/scratch/shire/data/nj/personal/Prasoon/mlgw_bns_HOM/timeshifts_model_HOM.pkl"
+    )
 
 class FrequencyTooLowError(ValueError):
     """Raised when the frequency given to the predictor is too low."""
@@ -208,9 +236,10 @@ class Model:
             by default None, in which case the system attempts to import
             the Python wrapper for TEOBResumS, failing which a :class:`BareBarePostNewtonianGenerator`
             is used, which is unable to generate effective-one-body waveforms.
-    downsampling_training : DownsamplingTraining, optional
-            Training algorithm for the downsampling;
-            by default None, which means the greedy algorithm
+    downsampling_training : DownsamplingTraining or type, optional
+            Training algorithm for the downsampling. Can be an instance or a class
+            (e.g. :class:`RDPDownsamplingTrainingWithResiduals` for faster RDP-based
+            downsampling). By default None, which means the greedy algorithm
             implemented in :class:`GreedyDownsamplingTraining` is used.
     nn_kind : Type[NeuralNetwork]
             Neural network implementation to use,
@@ -225,17 +254,18 @@ class Model:
     def __init__(
         self,
         filename: Optional[str] = None,
-        initial_frequency_hz: float = 10.0,
+        initial_frequency_hz: float = 20.0,
         srate_hz: float = 4096.0,
         pca_components_number: int = 30,
         multibanding: bool = True,
-        parameter_ranges: ParameterRanges = ParameterRanges(),
         extend_with_post_newtonian = True,
-        extend_with_zeros_at_high_frequency = False,
+        extend_with_zeros_at_high_frequency = True,
         waveform_generator: Optional[WaveformGenerator] = None,
         downsampling_training: Optional[DownsamplingTraining] = None,
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
+        parameter_ranges: ParameterRanges = ParameterRanges(),
         parameter_generator : Optional[ParameterGenerator] = None,
+        mode: Optional[Mode] = None
     ):
 
         self.filename = filename
@@ -244,10 +274,12 @@ class Model:
             try:
                 from EOBRun_module import EOBRunPy  # type: ignore
 
+                print("Using EOBRunPy")
                 self.waveform_generator: WaveformGenerator = TEOBResumSGenerator(
                     EOBRunPy
                 )
             except ModuleNotFoundError:
+                print("Using BarePostNewtonianGenerator")
                 self.waveform_generator = BarePostNewtonianGenerator()
         else:
             self.waveform_generator = waveform_generator
@@ -258,8 +290,7 @@ class Model:
         self.multibanding = multibanding
         self.parameter_generator = parameter_generator
         self.extend_with_post_newtonian = extend_with_post_newtonian
-        self.extend_with_zeros_at_high_frequency = extend_with_zeros_at_high_frequency
-        
+        self.extend_with_zeros_at_high_frequency = extend_with_zeros_at_high_frequency 
 
         self.dataset = self._make_dataset()
 
@@ -267,6 +298,10 @@ class Model:
             self.downsampling_training: DownsamplingTraining = (
                 GreedyDownsamplingTraining(self.dataset)
             )
+        elif isinstance(downsampling_training, type) and issubclass(
+            downsampling_training, DownsamplingTraining
+        ):
+            self.downsampling_training = downsampling_training(self.dataset)
         else:
             self.downsampling_training = downsampling_training
 
@@ -281,6 +316,7 @@ class Model:
         self.downsampling_indices: Optional[DownsamplingIndices] = None
 
         self.nn_kind = nn_kind
+        self.mode = mode
 
     def __str__(self):
 
@@ -313,7 +349,7 @@ class Model:
         }
 
     @classmethod
-    def default(cls, model_name: Optional[str]=None, **kwargs):
+    def default_for_testing(cls, model_name: Optional[str]=None, **kwargs):
         
         if model_name is None:
             model_name = MODELS_AVAILABLE[0]
@@ -325,15 +361,39 @@ class Model:
         
         model = cls(filename=PRETRAINED_MODEL_FOLDER + model_name, **kwargs)
 
-        stream_meta = files(__name__).joinpath(model.filename_metadata).open("rb")
-        stream_arrays = files(__name__).joinpath(model.filename_arrays).open("rb")
-        stream_nn = files(__name__).joinpath(model.filename_nn).open("rb")
+        stream_meta = pkg_resources.resource_stream(__name__, model.filename_metadata)
+        stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
+        stream_nn = pkg_resources.resource_stream(__name__, model.filename_nn)
 
         model.load(streams=(stream_meta, stream_arrays, stream_nn))
 
         model.filename = given_filename
 
         return model
+
+    @classmethod
+    def modes_default(cls, model_name: Optional[str]=None, **kwargs):
+        
+        if model_name is None:
+            model_name = MODES_MODELS_AVAILABLE[0]
+
+        if model_name not in MODES_MODELS_AVAILABLE:
+            raise(ValueError(f'Model {model_name} not available!'))
+        
+        given_filename = kwargs.pop('filename', None)
+        
+        model = cls(filename = PRETRAINED_MODES_MODEL_FOLDER + model_name, **kwargs)
+
+        stream_meta = pkg_resources.resource_stream(__name__, model.filename_metadata)
+        stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
+        stream_nn = pkg_resources.resource_stream(__name__, model.filename_nn)
+
+        model.load(streams=(stream_meta, stream_arrays, stream_nn))
+
+        model.filename = given_filename
+
+        return model
+  
 
     def _make_dataset(self) -> Dataset:
 
@@ -343,7 +403,7 @@ class Model:
             waveform_generator=self.waveform_generator,
             multibanding=self.multibanding,
             parameter_ranges=self.parameter_ranges,
-            parameter_generator=self.parameter_generator
+            parameter_generator=self.parameter_generator,
         )
     
     @property
@@ -369,7 +429,6 @@ class Model:
             self.dataset.waveform_generator = val
         except AttributeError:
             pass
-
 
     def _handle_missing_filename(self) -> None:
         raise ValueError('Please set the "filename" attribute of this object')
@@ -493,39 +552,24 @@ class Model:
             self.pca_training = PrincipalComponentTraining(
                 self.dataset, self.downsampling_indices, self.pca_components_number
             )
-            # ALSO SAVE THE TIMESHIFTS
 
             self.pca_data = self.pca_training.train(training_pca_dataset_size)
         else:
             assert self.pca_data is not None
 
-        # TRAIN GPR TO LEARN Δt(θ)
-
         if training_nn_dataset_size is not None:
-            _, parameters, residuals_timeshifts = self.dataset.generate_residuals(
-                training_nn_dataset_size, flatten_phase=False
-            )
-
-            self.training_timeshifts_data = residuals_timeshifts.flatten_phase(frequencies=self.dataset.frequencies_hz)
-            self.timeshifts_model = TimeshiftsGPR(
-                training_params=parameters.parameter_array,
-                training_timeshifts=self.training_timeshifts_data
-            ).fit()
-            self.training_parameters = parameters
-
-        if training_nn_dataset_size is not None:
-            freq_downsampled, _, residuals = self.dataset.generate_residuals(
+            freq_downsampled, parameters, residuals = self.dataset.generate_residuals(
                 training_nn_dataset_size, self.downsampling_indices, flatten_phase=False
             )
 
             residuals.phase_residuals = remove_linear_trend(
-                parameters=self.training_parameters.parameter_array,
-                ts_model=self.timeshifts_model,
+                parameters=parameters,
                 phi_diff=residuals.phase_residuals,
                 frq=self.dataset.natural_units_to_hz(freq_downsampled)
             )
 
             self.training_dataset = residuals
+            self.training_parameters = parameters
         else:
             assert self.training_dataset is not None
             assert self.training_parameters is not None
@@ -542,6 +586,7 @@ class Model:
         arr_list: list[SavableData] = [
             self.downsampling_indices,
             self.pca_data,
+            self.parameter_ranges
         ]
 
         if include_training_data:
@@ -553,8 +598,10 @@ class Model:
                 self.training_dataset,
             ]
 
-        for arr in arr_list:
-            arr.save_to_file(self.file_arrays)
+        # Open file once for all arrays (avoids repeated open/close overhead)
+        with h5py.File(self.filename_arrays, mode="a") as f:
+            for arr in arr_list:
+                arr.save_to_file(f)
 
     def save(self, include_training_data: bool = True) -> None:
         self.save_metadata()
@@ -562,8 +609,11 @@ class Model:
         if self.nn is not None:
             self.nn.save(self.filename_nn)
 
-    def save_timeshifts_model(self) -> None:
-        self.timeshifts_model.save_model(f'{self.filename}_timeshifts.pkl')
+    def save_new(self, include_training_data: bool = True) -> None:
+        self.save_metadata()
+        self.save_arrays(include_training_data)
+        if self.nn is not None:
+            self.nn.save(self.filename_nn)
 
     def load(self, streams: Optional[tuple[IO[bytes], IO[bytes], IO[bytes]]] = None) -> None:
         """Load model from the files present in the current folder.
@@ -577,33 +627,34 @@ class Model:
 
         if streams is not None:
             stream_meta: Union[IO[bytes], None]
-            filename_arrays: Union[IO[bytes], str]
+            h5_source: Union[IO[bytes], str]
             filename_nn: Union[IO[bytes], str]
 
-            stream_meta, filename_arrays, filename_nn = streams
-            file_arrays = h5py.File(filename_arrays, mode="r")
+            stream_meta, h5_source, filename_nn = streams
             ignore_warnings = True
         else:
             stream_meta = None
-            file_arrays = self.file_arrays
+            h5_source = self.filename_arrays
             filename_nn = self.filename_nn
             ignore_warnings = False
 
+        # Read-only open: supports many parallel workers (ProcessPool) on the same
+        # file. Append mode ("a") takes a write lock and fails on NFS / multi-proc.
+        with h5py.File(h5_source, mode="r") as file_arrays:
+            self.set_metadata(self.load_metadata(stream_meta))
+            self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
+            self.pca_data = PrincipalComponentData.from_file(file_arrays)
+            self.training_parameters = ParameterSet.from_file(
+                file_arrays, ignore_warnings=ignore_warnings
+            )
+            if self.downsampling_indices is None or self.pca_data is None:
+                raise FileNotFoundError
 
-        self.set_metadata(self.load_metadata(stream_meta))
-        self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
-        self.pca_data = PrincipalComponentData.from_file(file_arrays)
-        self.training_parameters = ParameterSet.from_file(
-            file_arrays, ignore_warnings=ignore_warnings
-        )
-        if self.downsampling_indices is None or self.pca_data is None:
-            raise FileNotFoundError
+            self.dataset = self._make_dataset()
 
-        self.dataset = self._make_dataset()
-
-        self.training_dataset = Residuals.from_file(
-            file_arrays, ignore_warnings=ignore_warnings
-        )
+            self.training_dataset = Residuals.from_file(
+                file_arrays, ignore_warnings=ignore_warnings
+            )
 
         try:
             self.nn = self.nn_kind.from_file(filename_nn)
@@ -640,6 +691,7 @@ class Model:
         """
         return PrincipalComponentAnalysisModel(self.pca_components_number)
 
+
     def train_nn(
         self, hyper: Hyperparameters, indices: Union[list[int], slice] = slice(None)
     ) -> NeuralNetwork:
@@ -663,19 +715,34 @@ class Model:
         assert self.training_parameters is not None
         assert self.pca_data is not None
 
+        # print(len(self.training_parameters.parameter_array))
+
         training_residuals = (
             self.reduced_residuals
             * (self.pca_data.eigenvalues ** hyper.pc_exponent)[np.newaxis, :]
         )
 
         nn = self.nn_kind(hyper)
+
+        start_time = time.time()  # Record the start time
+
         nn.fit(
             self.training_parameters.parameter_array[indices],
             training_residuals[indices],
         )
+
+        end_time = time.time()  # Record the end time
+
+        training_duration = end_time - start_time  # Compute the duration
+        print(f"Training took {training_duration:.2f} seconds")
+
+        # loss_over_epochs = nn.get_loss_over_epochs()
+
+        # print(f"Loss over epochs: {loss_over_epochs}")
+        
         return nn
 
-    def set_hyper_and_train_nn(self, hyper: Optional[Hyperparameters] = None) -> None:
+    def set_hyper_and_train_nn(self, hyper: Optional[Hyperparameters] = None, idxs: Union[list[int], slice] = slice(None)) -> None:
         """Train the network according to the hyperparameters given,
         and set it as a class attribute
 
@@ -690,12 +757,17 @@ class Model:
         if hyper is None:
             assert self.training_dataset is not None
             hyper = Hyperparameters.default(len(self.training_dataset))
+            # hyper = Hyperparameters.from_trial(n_train_max = 50)
+
+        print(hyper)
+        print("hyperparameter set!")
 
         # increase the number of maximum iterations by a lot:
         # here we do not want to stop the training early.
-        hyper.max_iter *= 100
+        hyper.max_iter *= 10
 
-        self.nn = self.train_nn(hyper)
+        self.nn = self.train_nn(hyper, indices=idxs)
+
 
     def predict_residuals_bulk(
         self, params: ParameterSet, nn: NeuralNetwork
@@ -730,6 +802,26 @@ class Model:
             combined_residuals, self.downsampling_indices.numbers_of_points
         )
 
+    def plot_pca_cumulative_variance(self) -> tuple[np.ndarray, np.ndarray]:
+        """Plot cumulative explained variance of the PCA basis.
+
+        Parameters
+        ----------
+        save_path : str, optional
+            If provided, the plot will be saved to this file.
+        """
+
+        assert self.pca_data is not None
+
+        eigenvalues = self.pca_data.eigenvalues
+
+        explained_variance = eigenvalues / np.sum(eigenvalues)
+        cumulative_variance = np.cumsum(explained_variance)
+
+        pcs = np.arange(1, len(cumulative_variance) + 1)
+
+        return pcs, cumulative_variance
+
     def predict_waveforms_bulk(
         self,
         params: ParameterSet,
@@ -746,7 +838,7 @@ class Model:
             residuals, params, self.downsampling_indices
         )
 
-    def _predict_amplitude_phase(
+    def predict_amplitude_phase(
         self, frequencies: np.ndarray, params: ParametersWithExtrinsic
     ) -> tuple[np.ndarray, np.ndarray]:
         """Predict the amplitude and phase of a waveform.
@@ -767,7 +859,7 @@ class Model:
         tuple[np.ndarray, np.ndarray]
             Amplitude and phase.
         """
-
+        
         assert self.downsampling_indices is not None
         assert self.nn is not None
 
@@ -902,18 +994,155 @@ class Model:
             resampled_phi = np.concatenate((resampled_phi, np.zeros(hf_segment_length)))
 
         amp = (
-            resampled_amp
-            * pre
+            resampled_amp 
+            # * pre
             / params.distance_mpc
         )
 
         phi = (
             resampled_phi
             + params.reference_phase
-            + (2 * np.pi * params.time_shift) * frequencies
+            + (2 * np.pi * params.time_shift) * frequencies # TODO: changed `+` to `-` 
         )
         
         return amp, phi
+
+    def predict_amplitude_phase_optimized(self, frequencies: np.ndarray, params: ParametersWithExtrinsic) -> tuple[np.ndarray, np.ndarray]:
+        # from time import perf_counter
+        # t0 = perf_counter()
+
+        assert self.downsampling_indices is not None
+        assert self.nn is not None
+
+        # t1 = perf_counter()
+
+        # Rescale frequencies early
+        rescaled_frequencies = frequencies * (params.total_mass / self.dataset.total_mass)
+        eff_fmin_hz = self.dataset.effective_initial_frequency_hz
+        eff_srate_hz = self.dataset.effective_srate_hz
+        rescaled_f_min = rescaled_frequencies[0]
+        rescaled_f_max = rescaled_frequencies[-1]
+
+        # t2 = perf_counter()
+
+        # ----------------------------
+        # Low-frequency extension
+        # ----------------------------
+        extend_with_pn = rescaled_f_min < eff_fmin_hz
+        if extend_with_pn:
+            if not self.extend_with_post_newtonian:
+                raise FrequencyTooLowError("Model not configured to extend with post-Newtonian waveform.")
+
+            limit_index = np.searchsorted(rescaled_frequencies, eff_fmin_hz)
+            low_freqs_hz = np.append(rescaled_frequencies[:limit_index], eff_fmin_hz)
+            rescaled_frequencies = np.append(eff_fmin_hz, rescaled_frequencies[limit_index:])
+
+            low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz)
+            connection_f = self.dataset.hz_to_natural_units(eff_fmin_hz)
+
+        # t3 = perf_counter()
+
+        # ----------------------------
+        # High-frequency extension
+        # ----------------------------
+        extend_hf = rescaled_f_max > eff_srate_hz / 2.0
+        if extend_hf:
+            if not self.extend_with_zeros_at_high_frequency:
+                raise FrequencyTooHighError("Model not configured to extend with zeros at high frequency.")
+            high_frequency_index = np.searchsorted(rescaled_frequencies, eff_srate_hz / 2.0)
+            hf_segment_length = len(rescaled_frequencies) - high_frequency_index
+            rescaled_frequencies = rescaled_frequencies[:high_frequency_index]
+
+        # t4 = perf_counter()
+
+        # ----------------------------
+        # NN Prediction & Residual Combination
+        # ----------------------------
+        self.parameter_ranges.check_parameters_in_ranges(params)
+        intrinsic_params = params.intrinsic(self.dataset)
+
+        residuals = self.predict_residuals_bulk(
+            ParameterSet.from_list_of_waveform_parameters([intrinsic_params]), self.nn
+        )
+        
+        # t5 = perf_counter()
+
+        ds = self.downsampling_indices
+        freqs_hz = self.dataset.frequencies_hz
+
+        pn_amp = self.dataset.waveform_generator.post_newtonian_amplitude(
+            intrinsic_params, self.dataset.frequencies[ds.amplitude_indices]
+        )
+        pn_phi = self.dataset.waveform_generator.post_newtonian_phase(
+            intrinsic_params, self.dataset.frequencies[ds.phase_indices]
+        )
+
+        amp_ds = combine_residuals_amp(residuals.amplitude_residuals[0], pn_amp)
+        phi_ds = combine_residuals_phi(residuals.phase_residuals[0], pn_phi)
+
+        # t6 = perf_counter()
+
+        # ----------------------------
+        # Resample to full frequency resolution
+        # ----------------------------
+        resample = self.downsampling_training.resample
+        resampled_amp = resample(freqs_hz[ds.amplitude_indices], rescaled_frequencies, amp_ds)
+        resampled_phi = resample(freqs_hz[ds.phase_indices], rescaled_frequencies, phi_ds)
+
+        # t7 = perf_counter()
+
+        # ----------------------------
+        # Low-frequency smoothing
+        # ----------------------------
+        if extend_with_pn:
+            f_min_connection = connection_f / 2.0
+            mask = low_freqs > f_min_connection
+            zero_to_one = (low_freqs[mask] - f_min_connection) / (connection_f - f_min_connection)
+
+            low_amp = self.dataset.waveform_generator.post_newtonian_amplitude(intrinsic_params, low_freqs)
+            low_phi = self.dataset.waveform_generator.post_newtonian_phase(intrinsic_params, low_freqs)
+
+            amp_diff = resampled_amp[0] - low_amp[-1]
+            low_amp[mask] += smoothing_func(zero_to_one) * amp_diff
+
+            resampled_amp = np.concatenate((low_amp[:-1], resampled_amp[1:]))
+            resampled_phi = np.concatenate((low_phi[:-1], resampled_phi[1:] + low_phi[-1]))
+
+        # t8 = perf_counter()
+
+        # ----------------------------
+        # High-frequency zero-padding
+        # ----------------------------
+        if extend_hf:
+            zeros = np.zeros(hf_segment_length)
+            resampled_amp = np.concatenate((resampled_amp, zeros))
+            resampled_phi = np.concatenate((resampled_phi, zeros))
+
+        # t9 = perf_counter()
+
+        # ----------------------------
+        # Final amplitude and phase
+        # ----------------------------
+        amp = resampled_amp / params.distance_mpc
+        phi = (
+            resampled_phi
+            + params.reference_phase
+            + (2 * np.pi * params.time_shift) * frequencies
+        )
+
+        # t10 = perf_counter()
+
+        # print(f"🔍 Profiling `predict_amplitude_phase_optimized`")
+        # print(f"  Frequency rescaling        : {t2 - t1:.6f}s")
+        # print(f"  NN + PCA                   : {t5 - t4:.6f}s")
+        # print(f"  Residual + PN              : {t6 - t5:.6f}s")
+        # print(f"  Resampling                 : {t7 - t6:.6f}s")
+        # print(f"  Final amplitude + phase    : {t10 - t9:.6f}s")
+        # print(f"  TOTAL                      : {t10 - t0:.6f}s")
+
+        return amp, phi
+
+
 
     def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
         r"""Calculate the waveforms in the plus and cross polarizations,
@@ -978,7 +1207,7 @@ class Model:
 
         """
 
-        amp, phi = self._predict_amplitude_phase(frequencies, params)
+        amp, phi = self.predict_amplitude_phase(frequencies, params)
 
         cartesian_waveform_real, cartesian_waveform_imag = combine_amp_phase(amp, phi)
 
@@ -986,11 +1215,52 @@ class Model:
         pre_plus = (1 + cosi ** 2) / 2
         pre_cross = cosi
 
-        # take Δt (θ) and re-add it to the phase
-
         return compute_polarizations(
             cartesian_waveform_real, cartesian_waveform_imag, pre_plus, pre_cross
         )
+        
+    def generate_teob_amp_phase(
+        self,
+        params: "WaveformParameters", 
+        frequencies: Optional[np.ndarray] = None,
+        downsampling_indices: Optional[DownsamplingIndices] = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Returns Amplitude and Phase using TEOBResumS.
+
+        Parameters
+        ----------
+        parameters : ParameterSet
+            Parameters of the waveforms to generate
+        downsampling_indices : DownsamplingIndices, optional
+            Indices to downsample the waveforms at, by default None
+
+        Returns
+        -------
+         tuple[np.ndarray, np.ndarray]
+            Amplitude and phase.       
+        """
+
+        if downsampling_indices is None:
+            amp_indices: Union[slice, list[int]] = slice(None)
+            phi_indices: Union[slice, list[int]] = slice(None)
+        else:
+            amp_indices = self.downsampling_indices.amplitude_indices
+            phi_indices = self.downsampling_indices.phase_indices
+
+        amps = []
+        phis = []
+
+        _, amp, phi = self.dataset.waveform_generator.effective_one_body_waveform(
+            params, frequencies
+        )
+
+        amps.append(amp[amp_indices])
+        phis.append(phi[phi_indices])
+
+        amps_reshape = amps.flatten()
+        phi_reshape = phis.flatten()
+        
+        return amps_reshape, phi_reshape
 
     def time_until_merger(
         self,
@@ -1041,7 +1311,8 @@ class Model:
 
         return derivative / (2 * np.pi)
 
-
+# Re-export ModesModel for backward compatibility
+from .modes_model import ModesModel
 @njit
 def combine_amp_phase(
     amp: np.ndarray, phase: np.ndarray
@@ -1088,7 +1359,7 @@ def combine_residuals_amp(amp: np.ndarray, amp_pn: np.ndarray) -> np.ndarray:
 @njit
 def combine_residuals_phi(phi: np.ndarray, phi_pn: np.ndarray) -> np.ndarray:
     r"""Combine amplitude residuals with their Post-Newtonian counterparts,
-    according to
+    according tos
     :math:`\phi = \phi_{PN} + \Delta \phi`.
 
     This function is separated out just so that it can be decorated with ``@njit``.
@@ -1142,10 +1413,12 @@ def compute_polarizations(
 
     return hp, hc
 
-def remove_linear_trend(parameters, ts_model, phi_diff, frq):
-
-    time_shifts_pred = ts_model.predict(parameters)
-    for i in range(parameters.shape[1]):
-        phi_diff[i] = phi_diff[i] - 2 * np.pi * frq * time_shifts_pred[i]
+def remove_linear_trend(parameters, phi_diff, frq):
+    for i in range(parameters.parameter_array.shape[0]):
+        phi_diff[i] = (
+            phi_diff[i] 
+            - 2 * np.pi * (frq - frq[0]) * time_shifts_predictor.predict([parameters.parameter_array[i]])
+            - phi_diff[i,0]
+        )
 
     return phi_diff

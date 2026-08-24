@@ -9,6 +9,7 @@ as a separate group.
 Each subclass of :class:`SavableData` has a default group name
 which will become the name of the h5 file group in which 
 that data is saved. 
+Reference: https://github.com/jacopok/mlgw_bns/blob/master/mlgw_bns/data_management.py
 """
 from __future__ import annotations
 
@@ -30,7 +31,6 @@ from typing import (
 
 import h5py
 import numpy as np
-from numpy.polynomial.polynomial import Polynomial
 
 if TYPE_CHECKING:
     from .model import ParametersWithExtrinsic
@@ -95,21 +95,25 @@ class SavableData:
         for array_name, array in zip(self._arrays_list(), self):
             array_path = f"{self.group_name}/{array_name}"
 
-            # convert to numpy array here in order to be able to get
-            # the shape of lists as well
-            shape = np.array(array).shape
+            # Use asarray to avoid copying when array is already ndarray
+            arr = np.asarray(array)
+            shape = arr.shape
 
             if array_path not in file:
+                # Chunk large arrays for faster I/O (e.g. residuals, PCA eigenvectors)
+                n_elements = arr.size
+                chunks = True if n_elements > 10_000 else None
                 # the purpose of "maxshape=None" is to make the size variable
                 file.create_dataset(
                     array_path,
-                    data=array,
+                    data=arr,
                     maxshape=tuple(None for _ in shape),
+                    chunks=chunks,
                 )
 
             else:
                 file[array_path].resize(shape)
-                file[array_path][:] = array
+                file[array_path][:] = arr
 
     @classmethod
     def from_file(
@@ -141,7 +145,7 @@ class SavableData:
 
 
 @dataclass
-class ParameterRanges:
+class ParameterRanges(SavableData):
     """Parameter ranges for waveform generation.
 
     The parameters should all be numpy arrays,
@@ -172,11 +176,19 @@ class ParameterRanges:
     """
 
     mass_range: Tuple[float, float] = (2.0, 4.0)
-    q_range: Tuple[float, float] = (1.0, 2.85) # changed this!
+    q_range: Tuple[float, float] = (1.0, 3.0)
     lambda1_range: Tuple[float, float] = (5.0, 5000.0)
     lambda2_range: Tuple[float, float] = (5.0, 5000.0)
     chi1_range: Tuple[float, float] = (-0.5, 0.5)
     chi2_range: Tuple[float, float] = (-0.5, 0.5)
+
+    group_name: ClassVar[str] = "parameter_ranges"
+
+    def __iter__(self) -> Iterator[Any]:
+        """Override this method for the purpose of saving
+        as an h5 file, which only works with arrays."""
+        for array_name in self._arrays_list():
+            yield np.array(getattr(self, array_name))
 
     def check_parameters_in_ranges(self, params: ParametersWithExtrinsic) -> None:
         def within(x: float, x_range: tuple[float, float], name: str):
@@ -369,51 +381,8 @@ class Residuals(SavableData):
             )
             
             self.phase_residuals[i] = (
-                phase_arr - slopes[i] * (frequencies - frequencies[0]) - phase_arr[0]
+                phase_arr - slopes[i] * (frequencies - frequencies[0])
             )
-        
-        return slopes / (2 * np.pi)
-
-    def flatten_phase_new(
-        self, frequencies: np.ndarray, first_section_flat: float = 0.2
-    ) -> np.ndarray:
-        """Subtract a linear term from the phase,
-        such that it is often close to 0.
-
-        Parameters
-        ----------
-        frequencies: np.ndarray
-                Frequencies to which the phase points correspond.
-                Required for the linear term subtraction.
-        first_section_flat: float
-                The linear term is chosen so that the first
-                phase residual is zero, and so is the one corresponding
-                to this fraction of the frequencies.
-                Defaults to 0.2.
-                
-        Returns
-        -------
-        timeshifts: np.ndarray
-                Timeshifts, in seconds if the frequencies given are in Hz,
-                
-        """
-
-        number_of_points = self.phase_residuals.shape[1]
-
-        index = int(first_section_flat * number_of_points)
-        slopes = np.empty(len(self.phase_residuals))
-
-        for i, phase_arr in enumerate(self.phase_residuals):
-            # Fit a quadratic polynomial to the initial section
-            p = Polynomial.fit(frequencies[:index], phase_arr[:index], 2)
-            
-            # Calculate the linear component at the endpoints
-            slope = p.convert().coef[1]
-            intercept = p.convert().coef[0]
-            
-            # Adjust phase residuals
-            self.phase_residuals[i] = phase_arr - (slope * (frequencies - frequencies[0]) + intercept)
-            slopes[i] = slope
         
         return slopes / (2 * np.pi)
 
@@ -489,7 +458,7 @@ class FDWaveforms(SavableData):
 
 
 def phase_unwrapping(
-    waveform_cartesian: np.ndarray, eps: float = 1e-3, set_zero_at_start: bool = True
+    waveform_cartesian: np.ndarray, eps: float = 1e-1, set_zero_at_start: bool = True
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Starting from an array of cartesian-form complex numbers,

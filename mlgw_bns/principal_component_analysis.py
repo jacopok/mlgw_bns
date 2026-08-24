@@ -12,6 +12,16 @@ import numpy as np
 
 from .data_management import DownsamplingIndices, PrincipalComponentData
 from .dataset_generation import Dataset
+from .neural_network import TimeshiftsGPR, TimeshiftsNN
+
+try:
+    time_shifts_predictor = TimeshiftsNN.load_model(
+        filename="/scratch/shire/data/nj/personal/Prasoon/mlgw_bns_HOM/timeshifts_rff_surrogate.pkl"
+    )
+except (FileNotFoundError, Exception):
+    time_shifts_predictor = TimeshiftsGPR().load_model(
+        filename="/scratch/shire/data/nj/personal/Prasoon/mlgw_bns_HOM/timeshifts_model_HOM.pkl"
+    )
 
 
 class PrincipalComponentTraining:
@@ -52,10 +62,23 @@ class PrincipalComponentTraining:
             "Generating %s waveforms for PCA training", number_of_training_waveforms
         )
 
-        _, _, residuals = self.dataset.generate_residuals(
+        print(f"downsampling_indices_amp: {self.downsampling_indices.amp_length}")
+        print(f"downsampling_indices_phi: {self.downsampling_indices.phi_length}")
+
+
+        freq_downsampled, parameters, residuals = self.dataset.generate_residuals(
             number_of_training_waveforms,
             self.downsampling_indices,
+            flatten_phase=False
         )
+
+        residuals.phase_residuals = remove_linear_trend(
+            parameters=parameters,
+            phi_diff=residuals.phase_residuals,
+            frq=self.dataset.natural_units_to_hz(freq_downsampled)
+        )
+
+        # print(residuals.phase_residuals)
 
         logging.info("Fitting PCA model")
 
@@ -166,3 +189,68 @@ class PrincipalComponentAnalysisModel:
         zero_mean_data = scaled_data @ pca_data.eigenvectors.T
 
         return zero_mean_data + pca_data.mean
+    
+    @staticmethod
+    def calculate_total_variance(pca_data: PrincipalComponentData) -> float:
+        """Calculate the total variance explained by all principal components.
+
+        Parameters
+        ----------
+        pca_data : PrincipalComponentData
+            The PCA data containing eigenvalues.
+
+        Returns
+        -------
+        float
+            The total variance (sum of all eigenvalues).
+        """
+        return np.sum(pca_data.eigenvalues)
+    
+    @staticmethod
+    def calculate_individual_variance_ratio(pca_data: PrincipalComponentData) -> np.ndarray:
+        """Calculate the individual variance ratio explained by each principal component.
+
+        Parameters
+        ----------
+        pca_data : PrincipalComponentData
+            The PCA data containing eigenvalues.
+
+        Returns
+        -------
+        np.ndarray
+            Array of individual variance ratios, where each element represents the
+            proportion of variance explained by that principal component.
+            Shape is (number_of_components,)
+        """
+        total_variance = PrincipalComponentAnalysisModel.calculate_total_variance(pca_data)
+        return pca_data.eigenvalues / total_variance
+
+    @staticmethod
+    def calculate_cumulative_variance_ratio(pca_data: PrincipalComponentData) -> np.ndarray:
+        """Calculate the cumulative variance ratio explained by principal components.
+
+        Parameters
+        ----------
+        pca_data : PrincipalComponentData
+            The PCA data containing eigenvalues.
+
+        Returns
+        -------
+        np.ndarray
+            Array of cumulative variance ratios, where each element represents the
+            proportion of variance explained up to that principal component.
+            Shape is (number_of_components,)
+        """
+        total_variance = PrincipalComponentAnalysisModel.calculate_total_variance(pca_data)
+        return np.cumsum(pca_data.eigenvalues) / total_variance
+    
+def remove_linear_trend(parameters, phi_diff, frq):
+    
+    for i in range(parameters.parameter_array.shape[0]):
+        phi_diff[i] = (
+            phi_diff[i] 
+            - 2 * np.pi * (frq - frq[0]) * time_shifts_predictor.predict([parameters.parameter_array[i]])
+            - phi_diff[i,0]
+        )
+
+    return phi_diff

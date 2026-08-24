@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-from dataclasses import dataclass
 from time import perf_counter
 from typing import Callable, ClassVar, Optional
 
@@ -14,9 +13,11 @@ from optuna.visualization import (
     plot_param_importances,
     plot_pareto_front,
 )
+import plotly.graph_objects as go
 
 from .data_management import Residuals
 from .model import Hyperparameters, Model
+from .model_validation import ValidateModel
 from .neural_network import best_trial_under_n
 
 
@@ -27,32 +28,18 @@ class HyperparameterOptimization:
     The optimization performed is over two variables:
     the reconstruction accuracy and the training time.
 
-    **Reconstruction accuracy** is quantified by looking at the average
-    square error in the reconstruction of the residuals;
-    spefifically, the average is taken over both amplitude and phase residuals,
-    and the value returned by the :meth:`objective` function is the base-10
-    logarithm of this.
+    **Reconstruction accuracy** is quantified by the average validation mismatch
+    between EOB waveforms and model-predicted waveforms (with time-shift
+    correction). The value returned by the :meth:`objective` function is the
+    base-10 logarithm of this average mismatch.
 
     **Training time** accounts for both the time required to train the
     neural network and the estimated time required to generate the waveforms
     needed for the training.
-    This can vary, since one of the hyperparameters varied in the training
-    is the number of waveforms in the training dataset.
 
-    Including it is convenient since having more waveforms ---
-    a finer sampling of the waveform space ---
-    means the optimal network might be different.
-
-    However, only ever training networks with as large a number of waveforms
-    as we might wish to use in the end gets expensive;
-    therefore, we vary the number of training waveforms in the optimization,
-    so that the optuna study is able to learn the basic region of parameter space
-    which it is best to explore, and then extend that knowledge to the
-    new region of the parameter space with more training waveforms.
-
-    The inclusion of this cost term is needed since, typically,
-    using more waveforms will yield a better fit.
-    So, we do multi-parameter optimization: see, for example,
+    The number of training waveforms is fixed (default :math:`2^{14}`) to enable
+    fair comparison of architectures without bias from varying training set size.
+    So, we do multi-objective optimization: see, for example,
     `Multiobjective tree-structured parzen estimator
     for computationally expensive optimization problems <https://doi.org/10.1145/3377930.3389817>`_
     by Ozaki et al.
@@ -76,6 +63,10 @@ class HyperparameterOptimization:
             the initializer looks for a file with the correct name
             in the local directory and uses it,
             and it creates a new study if it cannot find it.
+    n_train_fixed: int, optional
+            Fixed number of training waveforms for fair architecture comparison.
+            Defaults to None; if not provided, uses the class default
+            (:attr:`n_train_fixed` = 2**14).
 
     Class Attributes
     waveform_gen_time: float
@@ -93,18 +84,24 @@ class HyperparameterOptimization:
 
     save_every_n_minutes: float = 30.0
 
+    # Fixed n_train for fair architecture comparison (no bias from varying training set size)
+    n_train_fixed: int = 2**14
+
     def __init__(
         self,
         model: Model,
         optimization_seed: int = 42,
-        hyper_validation_fraction: float = 0.1,
+        hyper_validation_fraction: float = 0.01,
         study: Optional[optuna.Study] = None,
+        n_train_fixed: Optional[int] = None,
     ):
 
         assert model.auxiliary_data_available
         assert model.training_dataset_available
 
         self.model = model
+        if n_train_fixed is not None:
+            self.n_train_fixed = n_train_fixed
         self.rng = np.random.default_rng(seed=optimization_seed)
         self.hyper_validation_fraction = hyper_validation_fraction
 
@@ -147,10 +144,12 @@ class HyperparameterOptimization:
         Returns
         -------
         tuple[float, float]
-                Base-10 logarithm of the accuracy and training time, respectively.
+                Base-10 logarithm of the average validation mismatch and training
+                time, respectively.
 
-                The accuracy is defined as the average of the square differences between
-                the true and estimated residuals.
+                The mismatch is the average over the validation set of the
+                waveform mismatch (EOB vs model prediction, with time-shift
+                correction).
 
                 The training time includes both the training of the network and,
                 roughly, the generation of the waveforms used for training.
@@ -162,9 +161,15 @@ class HyperparameterOptimization:
         validation_data_number = int(
             self.hyper_validation_fraction * self.training_data_number
         )
+        max_n_train = self.training_data_number - validation_data_number
+
+        # Use fixed n_train for fair architecture comparison
+        n_train = min(self.n_train_fixed, max_n_train)
 
         hyper = Hyperparameters.from_trial(
-            trial, n_train_max=self.training_data_number - validation_data_number
+            trial,
+            n_train_max=max_n_train,
+            n_train_fixed=n_train,
         )
 
         assert hyper.n_train + validation_data_number <= self.training_data_number
@@ -183,16 +188,19 @@ class HyperparameterOptimization:
             end_time - start_time
         ) + self.waveform_gen_time * hyper.n_train
 
-        # validate on another subset of the data
-        predicted_residuals = self.model.predict_residuals_bulk(
-            self.model.training_parameters[validation_indices], nn
-        )
+        # validate using average mismatch (GW-relevant metric)
+        validation_param_set = self.model.training_parameters[validation_indices]
+        validator = ValidateModel(self.model)
+        try:
+            mismatches = validator.mismatches_for_params(
+                validation_param_set, nn, include_time_shifts=True, disable_tqdm=True
+            )
+            avg_mismatch = np.mean(mismatches)
+        except ValueError as e:
+            # Mismatch optimization failed (e.g. overflow from poorly trained model)
+            raise optuna.TrialPruned from e
 
-        accuracy = self.residuals_difference(
-            self.model.training_dataset[list(validation_indices)], predicted_residuals
-        )
-
-        return np.log10(accuracy), np.log10(effective_time)
+        return np.log10(avg_mismatch), np.log10(effective_time)
 
     @staticmethod
     def residuals_difference(residuals_1: Residuals, residuals_2: Residuals) -> float:
@@ -288,22 +296,147 @@ class HyperparameterOptimization:
         fig = plot_pareto_front(
             self.study,
             target_names=[
-                "Error [log10(average square error)] ",
-                "time [log10(time in seconds)]",
+                "Mismatch [log10(average validation mismatch)]",
+                "Time [log10(time in seconds)]",
             ],
         )
+        
+        # Adjust figure size and font size
+        fig.update_layout(
+            width=800, height=600,  # Adjust figure size
+            font=dict(size=14),  # Adjust font size
+            title=dict(font=dict(size=20)),  # Adjust title font size
+            xaxis=dict(title_font=dict(size=16)),  # X-axis label font size
+            yaxis=dict(title_font=dict(size=16))   # Y-axis label font size
+        )
+
+        # Show plot
         fig.show()
+
+    def plot_pareto_with_selection(self, filename: str = "pareto_front.pdf") -> None:
+        """
+        Publication-quality Pareto plot with highlighted selected hyperparameters.
+        """
+
+        study = self.study
+        trials = [t for t in study.trials if t.values is not None]
+
+        # Extract all objectives
+        errors = np.array([t.values[0] for t in trials])
+        times = np.array([t.values[1] for t in trials])
+
+        # Pareto optimal trials
+        pareto_trials = study.best_trials
+        pareto_errors = np.array([t.values[0] for t in pareto_trials])
+        pareto_times = np.array([t.values[1] for t in pareto_trials])
+
+        # Selected best hyperparameters
+        best_hp = self.best_hyperparameters()
+
+        # --- Robust matching ---
+        selected_trial = None
+        for t in pareto_trials:
+            match = True
+            for key, value in t.params.items():
+
+                hp_value = getattr(best_hp, key)
+
+                # Handle tuples vs lists
+                if isinstance(hp_value, tuple):
+                    if list(hp_value) != value:
+                        match = False
+                        break
+
+                # Handle floats with tolerance
+                elif isinstance(hp_value, float):
+                    if not np.isclose(hp_value, value, rtol=1e-6):
+                        match = False
+                        break
+
+                else:
+                    if hp_value != value:
+                        match = False
+                        break
+
+            if match:
+                selected_trial = t
+                break
+
+        if selected_trial is None:
+            raise RuntimeError("Could not match best hyperparameters to Pareto trial.")
+
+        sel_error, sel_time = selected_trial.values
+
+        # Sort Pareto front for nice connection
+        sorted_idx = np.argsort(pareto_errors)
+        pareto_errors = pareto_errors[sorted_idx]
+        pareto_times = pareto_times[sorted_idx]
+
+        # ---- Create Figure ----
+        fig = go.Figure()
+
+        # All trials
+        fig.add_trace(go.Scatter(
+            x=errors,
+            y=times,
+            mode="markers",
+            marker=dict(size=6),
+            opacity=0.3,
+            name="All trials"
+        ))
+
+        # Pareto front
+        fig.add_trace(go.Scatter(
+            x=pareto_errors,
+            y=pareto_times,
+            mode="lines+markers",
+            line=dict(width=2),
+            marker=dict(size=8),
+            name="Pareto front"
+        ))
+
+        # Selected best model
+        fig.add_trace(go.Scatter(
+            x=[sel_error],
+            y=[sel_time],
+            mode="markers",
+            marker=dict(size=16, symbol="star"),
+            name="Selected model"
+        ))
+
+        fig.update_layout(
+            width=800,
+            height=600,
+            template="simple_white",
+            font=dict(family="Times New Roman", size=16),
+            xaxis=dict(
+                title="log10 Average Validation Mismatch",
+                title_font=dict(size=18),
+                showgrid=True
+            ),
+            yaxis=dict(
+                title="log10 Runtime (s)",
+                title_font=dict(size=18),
+                showgrid=True
+            ),
+            legend=dict(font=dict(size=14))
+        )
+
+        fig.write_image(filename, format="pdf")
+
+        print(f"Saved Pareto plot to {filename}")
 
     def plot_parallel(self, **kwargs):
         to_plot = lambda trial: trial.values[0]
         fig = plot_parallel_coordinate(self.study, target_name=to_plot, **kwargs)
         fig.show()
 
-    def plot_param_importance(self):
+    def plot_param_importance(self, filename: str = "param_importance.png"):
         fig = plot_param_importances(
-            self.study, target=lambda t: t.values[0], target_name="Error"
+            self.study, target=lambda t: t.values[0], target_name="Mismatch"
         )
-        fig.show()
+        fig.write_image(filename, format="png")
+        # fig.show()
 
     def best_hyperparameters(
         self, training_number: Optional[int] = None
@@ -330,7 +463,7 @@ class HyperparameterOptimization:
 
         return best_trial_under_n(best_trials, training_number)
 
-    def save_best_trials_to_file(self, filename: str = "best_trials") -> None:
+    def save_best_trials_to_file(self, filename: str = "best_trials_modes") -> None:
         """Save the best trials obtained so far in the optimization to the file
         "filename".pkl.
 
