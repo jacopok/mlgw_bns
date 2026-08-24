@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import warnings
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from functools import lru_cache
@@ -46,7 +45,14 @@ from .downsampling_interpolation import (
     GreedyDownsamplingTraining,
     RDPDownsamplingTraining,
 )
-from .neural_network import Hyperparameters, NeuralNetwork, SklearnNetwork, TimeshiftsGPR, TimeshiftsNN
+from .neural_network import (
+    Hyperparameters,
+    NeuralNetwork,
+    SklearnNetwork,
+    TimeshiftsGPR,
+    TimeshiftsNN,
+    load_timeshifts_predictor_from_file,
+)
 from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
     PrincipalComponentTraining,
@@ -62,15 +68,6 @@ MODES_MODELS_AVAILABLE = ["pp_small_default_l2_m2", "pp_large_default_l2_m2"]
 
 DEFAULT_DATASET_BASENAME = "data/default"
 
-try:
-    time_shifts_predictor = TimeshiftsNN.load_model(
-        filename="/scratch/shire/data/nj/personal/Prasoon/mlgw_bns_HOM/timeshifts_rff_surrogate.pkl"
-    )
-except (FileNotFoundError, Exception) as e:
-    warnings.warn(f"Could not load lightweight TimeshiftsNN ({e}), falling back to GPR...")
-    time_shifts_predictor = TimeshiftsGPR().load_model(
-        filename="/scratch/shire/data/nj/personal/Prasoon/mlgw_bns_HOM/timeshifts_model_HOM.pkl"
-    )
 
 class FrequencyTooLowError(ValueError):
     """Raised when the frequency given to the predictor is too low."""
@@ -308,6 +305,7 @@ class Model:
         self.pca_components_number = pca_components_number
 
         self.nn: Optional[NeuralNetwork] = None
+        self.timeshifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None
 
         self.training_dataset: Optional[Residuals] = None
         self.training_parameters: Optional[ParameterSet] = None
@@ -364,8 +362,12 @@ class Model:
         stream_meta = files(__name__).joinpath(model.filename_metadata).open("rb")
         stream_arrays = files(__name__).joinpath(model.filename_arrays).open("rb")
         stream_nn = files(__name__).joinpath(model.filename_nn).open("rb")
+        try:
+            stream_timeshifts = files(__name__).joinpath(model.filename_timeshifts).open("rb")
+        except FileNotFoundError:
+            stream_timeshifts = None
 
-        model.load(streams=(stream_meta, stream_arrays, stream_nn))
+        model.load(streams=(stream_meta, stream_arrays, stream_nn, stream_timeshifts))
 
         model.filename = given_filename
 
@@ -384,11 +386,15 @@ class Model:
         
         model = cls(filename = PRETRAINED_MODES_MODEL_FOLDER + model_name, **kwargs)
 
-        stream_meta = pkg_resources.resource_stream(__name__, model.filename_metadata)
-        stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
-        stream_nn = pkg_resources.resource_stream(__name__, model.filename_nn)
+        stream_meta = files(__name__).joinpath(model.filename_metadata).open("rb")
+        stream_arrays = files(__name__).joinpath(model.filename_arrays).open("rb")
+        stream_nn = files(__name__).joinpath(model.filename_nn).open("rb")
+        try:
+            stream_timeshifts = files(__name__).joinpath(model.filename_timeshifts).open("rb")
+        except FileNotFoundError:
+            stream_timeshifts = None
 
-        model.load(streams=(stream_meta, stream_arrays, stream_nn))
+        model.load(streams=(stream_meta, stream_arrays, stream_nn, stream_timeshifts))
 
         model.filename = given_filename
 
@@ -512,6 +518,15 @@ class Model:
 
         return f"{self.filename}_hyper.pkl"
 
+    @property
+    def filename_timeshifts(self) -> str:
+        """File name in which to save the mode time-shifts predictor."""
+
+        if self.filename is None:
+            self._handle_missing_filename()
+
+        return f"{self.filename}_timeshifts.pkl"
+
     def generate(
         self,
         training_downsampling_dataset_size: Optional[int] = 64,
@@ -548,29 +563,33 @@ class Model:
         else:
             assert self.downsampling_indices is not None
 
-        if training_pca_dataset_size is not None:
-            self.pca_training = PrincipalComponentTraining(
-                self.dataset, self.downsampling_indices, self.pca_components_number
-            )
-            # ALSO SAVE THE TIMESHIFTS
-
-            self.pca_data = self.pca_training.train(training_pca_dataset_size)
-        else:
-            assert self.pca_data is not None
-
-        # TRAIN GPR TO LEARN Δt(θ)
-
+        # TRAIN GPR TO LEARN Δt(θ), needed below to remove the linear trend
+        # from the phase residuals before PCA and NN training.
         if training_nn_dataset_size is not None:
             _, parameters, residuals_timeshifts = self.dataset.generate_residuals(
                 training_nn_dataset_size, flatten_phase=False
             )
 
             self.training_timeshifts_data = residuals_timeshifts.flatten_phase(frequencies=self.dataset.frequencies_hz)
-            self.timeshifts_model = TimeshiftsGPR(
+            self.timeshifts_predictor = TimeshiftsGPR(
                 training_params=parameters.parameter_array,
                 training_timeshifts=self.training_timeshifts_data
             ).fit()
             self.training_parameters = parameters
+        else:
+            assert self.timeshifts_predictor is not None
+
+        if training_pca_dataset_size is not None:
+            self.pca_training = PrincipalComponentTraining(
+                self.dataset,
+                self.downsampling_indices,
+                self.pca_components_number,
+                self.timeshifts_predictor,
+            )
+
+            self.pca_data = self.pca_training.train(training_pca_dataset_size)
+        else:
+            assert self.pca_data is not None
 
         if training_nn_dataset_size is not None:
             freq_downsampled, parameters, residuals = self.dataset.generate_residuals(
@@ -580,7 +599,8 @@ class Model:
             residuals.phase_residuals = remove_linear_trend(
                 parameters=parameters,
                 phi_diff=residuals.phase_residuals,
-                frq=self.dataset.natural_units_to_hz(freq_downsampled)
+                frq=self.dataset.natural_units_to_hz(freq_downsampled),
+                timeshifts_predictor=self.timeshifts_predictor,
             )
 
             self.training_dataset = residuals
@@ -623,20 +643,31 @@ class Model:
         self.save_arrays(include_training_data)
         if self.nn is not None:
             self.nn.save(self.filename_nn)
+        if self.timeshifts_predictor is not None:
+            self.timeshifts_predictor.save_model(self.filename_timeshifts)
 
     def save_new(self, include_training_data: bool = True) -> None:
         self.save_metadata()
         self.save_arrays(include_training_data)
         if self.nn is not None:
             self.nn.save(self.filename_nn)
+        if self.timeshifts_predictor is not None:
+            self.timeshifts_predictor.save_model(self.filename_timeshifts)
 
-    def load(self, streams: Optional[tuple[IO[bytes], IO[bytes], IO[bytes]]] = None) -> None:
+    def load(
+        self,
+        streams: Optional[
+            tuple[IO[bytes], IO[bytes], IO[bytes], Optional[IO[bytes]]]
+        ] = None,
+    ) -> None:
         """Load model from the files present in the current folder.
 
         Parameters
         ----------
-        streams: tuple[IO[bytes], IO[bytes], IO[bytes]], optional
+        streams: tuple[IO[bytes], IO[bytes], IO[bytes], Optional[IO[bytes]]], optional
                 For internal use (specifically, loading the default model).
+                The fourth element (time-shifts predictor) may be ``None``
+                if the packaged model does not ship one.
                 Defaults to None (look in the current folder).
         """
 
@@ -644,13 +675,15 @@ class Model:
             stream_meta: Union[IO[bytes], None]
             h5_source: Union[IO[bytes], str]
             filename_nn: Union[IO[bytes], str]
+            filename_timeshifts: Union[IO[bytes], str, None]
 
-            stream_meta, h5_source, filename_nn = streams
+            stream_meta, h5_source, filename_nn, filename_timeshifts = streams
             ignore_warnings = True
         else:
             stream_meta = None
             h5_source = self.filename_arrays
             filename_nn = self.filename_nn
+            filename_timeshifts = self.filename_timeshifts
             ignore_warnings = False
 
         # Read-only open: supports many parallel workers (ProcessPool) on the same
@@ -675,6 +708,14 @@ class Model:
             self.nn = self.nn_kind.from_file(filename_nn)
         except FileNotFoundError:
             logging.warn("No trained network or hyperparameters found.")
+
+        if filename_timeshifts is not None:
+            try:
+                self.timeshifts_predictor = load_timeshifts_predictor_from_file(
+                    filename_timeshifts
+                )
+            except FileNotFoundError:
+                logging.info("No time-shifts predictor found.")
 
     @property
     def reduced_residuals(self) -> np.ndarray:
@@ -1430,11 +1471,11 @@ def compute_polarizations(
 
     return hp, hc
 
-def remove_linear_trend(parameters, phi_diff, frq):
+def remove_linear_trend(parameters, phi_diff, frq, timeshifts_predictor):
     for i in range(parameters.parameter_array.shape[0]):
         phi_diff[i] = (
-            phi_diff[i] 
-            - 2 * np.pi * (frq - frq[0]) * time_shifts_predictor.predict([parameters.parameter_array[i]])
+            phi_diff[i]
+            - 2 * np.pi * (frq - frq[0]) * timeshifts_predictor.predict([parameters.parameter_array[i]])
             - phi_diff[i,0]
         )
 
