@@ -10,7 +10,7 @@ from typing import IO, ClassVar, Optional, Type, Union
 import h5py
 import joblib  # type: ignore
 import numpy as np
-import pkg_resources
+from importlib.resources import files
 import yaml
 from dacite import from_dict
 from numba import njit  # type: ignore
@@ -325,9 +325,9 @@ class Model:
         
         model = cls(filename=PRETRAINED_MODEL_FOLDER + model_name, **kwargs)
 
-        stream_meta = pkg_resources.resource_stream(__name__, model.filename_metadata)
-        stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
-        stream_nn = pkg_resources.resource_stream(__name__, model.filename_nn)
+        stream_meta = files(__name__).joinpath(model.filename_metadata).open("rb")
+        stream_arrays = files(__name__).joinpath(model.filename_arrays).open("rb")
+        stream_nn = files(__name__).joinpath(model.filename_nn).open("rb")
 
         model.load(streams=(stream_meta, stream_arrays, stream_nn))
 
@@ -493,10 +493,13 @@ class Model:
             self.pca_training = PrincipalComponentTraining(
                 self.dataset, self.downsampling_indices, self.pca_components_number
             )
+            # ALSO SAVE THE TIMESHIFTS
 
             self.pca_data = self.pca_training.train(training_pca_dataset_size)
         else:
             assert self.pca_data is not None
+
+        # TRAIN GPR TO LEARN Δt(θ)
 
         if training_nn_dataset_size is not None:
             _, parameters, residuals_timeshifts = self.dataset.generate_residuals(
@@ -982,6 +985,8 @@ class Model:
         cosi = np.cos(params.inclination)
         pre_plus = (1 + cosi ** 2) / 2
         pre_cross = cosi
+
+        # take Δt (θ) and re-add it to the phase
 
         return compute_polarizations(
             cartesian_waveform_real, cartesian_waveform_imag, pre_plus, pre_cross
