@@ -41,12 +41,9 @@ from typing import IO, TYPE_CHECKING, Optional, Union
 import joblib  # type: ignore
 import numpy as np
 from importlib.resources import files
-<<<<<<< HEAD
 from sklearn.gaussian_process import GaussianProcessRegressor  # type: ignore
 from sklearn.kernel_approximation import RBFSampler  # type: ignore
 from sklearn.linear_model import Ridge  # type: ignore
-=======
->>>>>>> 3188afe (FIX: remove pkg_resources dependency)
 from sklearn.neural_network import MLPRegressor  # type: ignore
 from sklearn.pipeline import Pipeline  # type: ignore
 from sklearn.preprocessing import MinMaxScaler, StandardScaler  # type: ignore
