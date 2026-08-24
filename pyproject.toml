@@ -1,88 +1,85 @@
-[tool.poetry]
+[project]
 name = "mlgw_bns"
 version = "0.12.1"
 description = "Accelerating gravitational wave template generation with machine learning."
-license = "GNU GPL3"
-authors = ["Jacopo Tissino <jacopo@tissino.it>"]
+license = "GPL-3.0-only"
+authors = [
+    { name = "Jacopo Tissino", email = "jacopo@tissino.it" },
+]
 keywords = ["python", "gravitational-waves", "scientific"]
 readme = "README.md"
-homepage = "https://github.com/jacopok/mlgw_bns"
-repository = "https://github.com/jacopok/mlgw_bns"
-
-
-[tool.poetry.dependencies]
-python = ">=3.9,<3.11"
-numpy = ">=1.18,<1.24" # for all kinds of array manipulation
-optuna = "^2.10.0" # for optimization of hyperparameters
-scikit-learn = "1.1.2" # provides the neural networks
-h5py = "^3.6.0" # for management of h5 files
-numba = ">=0.56.2" # acceleration of numerical computations
-joblib = "1.2.0" # to save pickled objects such as neural networks
-tqdm = "^4.62.3" # makes progressbars
-sortedcontainers = "^2.4.0" # for the management of index lists while downsampling
-plotly = "^5.5.0" # to make plots for optuna studies
-types-setuptools = "^57.4.7" # technical
-toml = "^0.10.2" # technical
-Sphinx = {version="^7.2.6", optional=true}
-sphinx-rtd-theme = {version="^1.0.0", optional=true}
-readthedocs-sphinx-search = {version="^0.3.2", optional=true}
-myst-parser = {version="^2.0.0", optional=true}
-MarkupSafe = {version="2.0.1", optional=true}
-sphinxcontrib-bibtex = {version="^2.4.2", optional=true}
-sphinx-autodoc-defaultargs = {version="^0.1.2", optional=true}
-PyYAML = "^6.0"
-types-PyYAML = "^6.0.11"
-dacite = "^1.6.0"
-
-[tool.poetry.extras]
-docs = ['Sphinx', 'sphinx-rtd-theme', 'readthedocs-sphinx-search', 'myst-parser', 'MarkupSafe', 'sphinxcontrib-bibtex', 'sphinx-autodoc-defaultargs']
-
-[tool.poetry.group.torch]
-optional=true
-
-[tool.poetry.group.torch.dependencies]
-torch = "^1.10.2"
-
-
-[tool.poetry.group.pycbc]
-optional=true
-
-[tool.poetry.group.pycbc.dependencies]
-pycbc = ">=2.0.5"
-
-
-[tool.poetry.group.dev]
-optional=true
-
-[tool.poetry.group.dev.dependencies]
-teobresums = ">=0.0.2"
-pytest = "^6.1.2"
-tox = "^3.20.1"
-black = "^21.11b1"
-# tox-poetry-installer = {extras = ["poetry"], version = "^0.8.2"}
-tox-gh-actions = "^2.8.1"
-pre-commit = "^2.16.0"
-mypy = "^0.910"
-virtualenv = "^20.10.0"
-ipython = "^7.30.1"
-pytest-cov = "^3.0.0"
-pytest-benchmark = "^3.4.1"
-isort = "^5.10.1"
-pylint = "^2.12.2"
-pytest-cases = "^3.6.5"
-mutmut = "^2.2.0"
-scalene = "^1.3.16"
-pydeps = "^1.10.12"
-snakeviz = "^2.1.1"
-colorama = "^0.4.4"
-click = "8.0.2"
-coveralls = "^3.3.1"
-pytest-profiling = "^1.7.0"
-matplotlib = "^3.6.0"
-
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "numpy>=2.2.3,<3", # for all kinds of array manipulation
+    "optuna>=4.9.0,<5", # for optimization of hyperparameters
+    "scikit-learn>=1.9.0,<2", # provides the neural networks
+    "h5py>=3.16.0,<4", # for management of h5 files
+    "numba>=0.67.0", # acceleration of numerical computations
+    "joblib>=1.5.3,<2", # to save pickled objects such as neural networks
+    "tqdm>=4.67.1,<5", # makes progressbars
+    "sortedcontainers>=2.4.0,<3", # for the management of index lists while downsampling
+    "plotly>=6.8.0,<7", # to make plots for optuna studies
+    "types-setuptools>=75.8.0", # technical
+    "toml>=0.10.2,<0.11", # technical
+    "PyYAML>=6.0.2,<7",
+    "types-PyYAML>=6.0.12",
+    "dacite>=1.9.2,<2",
+]
+ 
+[project.urls]
+Homepage = "https://github.com/jacopok/mlgw_bns"
+Repository = "https://github.com/jacopok/mlgw_bns"
+ 
+[project.optional-dependencies]
+docs = [
+    "Sphinx>=8.1.3,<9", # myst-parser currently caps this at <9
+    "sphinx-rtd-theme>=3.0.2",
+    "readthedocs-sphinx-search>=0.3.2",
+    "myst-parser>=5.1.0,<6",
+    "MarkupSafe>=3.0.2",
+    "sphinxcontrib-bibtex>=2.6.3",
+    "sphinx-autodoc-defaultargs>=0.1.2",
+]
+torch = [
+    "torch>=2.12.0,<3",
+]
+pycbc = [
+    "pycbc>=2.11.0", # requires Python>=3.11
+]
+ 
+[dependency-groups]
+dev = [
+    "teobresums>=4.4.1",
+    "pytest>=9.0.3,<10",
+    "tox>=4.23.2",
+    "black>=26.5.1",
+    "tox-gh-actions>=3.2.0",
+    "pre-commit>=4.0.1",
+    "mypy>=1.14.1",
+    "virtualenv>=20.28.1",
+    "ipython>=8.31.0",
+    "pytest-cov>=6.0.0",
+    "pytest-benchmark>=5.1.0",
+    "isort>=5.13.2",
+    "pylint>=3.3.3",
+    "pytest-cases>=3.8.6",
+    "mutmut>=3.2.2",
+    "scalene>=1.5.51",
+    "pydeps>=3.0.1",
+    "snakeviz>=2.2.2",
+    "colorama>=0.4.6",
+    "click>=8.1.8",
+    "coveralls>=4.0.1",
+    "pytest-profiling>=1.8.1",
+    "matplotlib>=3.10.0",
+]
+ 
 [build-system]
-requires = ["poetry-core>=1.1.0"]
-build-backend = "poetry.core.masonry.api"
-
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+ 
+[tool.hatch.build.targets.wheel]
+packages = ["mlgw_bns"]
+ 
 [tool.isort]
 profile = "black"
