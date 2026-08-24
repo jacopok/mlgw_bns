@@ -7,7 +7,7 @@ from typing import IO, TYPE_CHECKING, Optional, Union
 
 import joblib  # type: ignore
 import numpy as np
-import pkg_resources
+from importlib.resources import files
 from sklearn.neural_network import MLPRegressor  # type: ignore
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.preprocessing import StandardScaler, MinMaxScaler  # type: ignore
@@ -472,7 +472,7 @@ def retrieve_best_trials_list() -> "list[optuna.trial.FrozenTrial]":
         List of the trials in the Pareto front of an optimization.
     """
 
-    stream = pkg_resources.resource_stream(__name__, TRIALS_FILE)
+    stream = files(__name__).joinpath(TRIALS_FILE).open("rb")
     return joblib.load(stream)
 
 
