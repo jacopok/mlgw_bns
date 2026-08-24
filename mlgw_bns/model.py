@@ -11,7 +11,10 @@ import time
 import h5py
 import joblib  # type: ignore
 import numpy as np
+<<<<<<< HEAD
 from numpy.ma import indices
+=======
+>>>>>>> 3188afe (FIX: remove pkg_resources dependency)
 from importlib.resources import files
 import yaml
 from dacite import from_dict
@@ -364,6 +367,7 @@ class Model:
         stream_meta = files(__name__).joinpath(model.filename_metadata).open("rb")
         stream_arrays = files(__name__).joinpath(model.filename_arrays).open("rb")
         stream_nn = files(__name__).joinpath(model.filename_nn).open("rb")
+<<<<<<< HEAD
 
         model.load(streams=(stream_meta, stream_arrays, stream_nn))
 
@@ -387,6 +391,8 @@ class Model:
         stream_meta = pkg_resources.resource_stream(__name__, model.filename_metadata)
         stream_arrays = pkg_resources.resource_stream(__name__, model.filename_arrays)
         stream_nn = pkg_resources.resource_stream(__name__, model.filename_nn)
+=======
+>>>>>>> 3188afe (FIX: remove pkg_resources dependency)
 
         model.load(streams=(stream_meta, stream_arrays, stream_nn))
 
@@ -559,6 +565,21 @@ class Model:
             assert self.pca_data is not None
 
         # TRAIN GPR TO LEARN Δt(θ)
+<<<<<<< HEAD
+=======
+
+        if training_nn_dataset_size is not None:
+            _, parameters, residuals_timeshifts = self.dataset.generate_residuals(
+                training_nn_dataset_size, flatten_phase=False
+            )
+
+            self.training_timeshifts_data = residuals_timeshifts.flatten_phase(frequencies=self.dataset.frequencies_hz)
+            self.timeshifts_model = TimeshiftsGPR(
+                training_params=parameters.parameter_array,
+                training_timeshifts=self.training_timeshifts_data
+            ).fit()
+            self.training_parameters = parameters
+>>>>>>> 3188afe (FIX: remove pkg_resources dependency)
 
         if training_nn_dataset_size is not None:
             freq_downsampled, parameters, residuals = self.dataset.generate_residuals(
