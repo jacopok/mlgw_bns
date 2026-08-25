@@ -20,7 +20,7 @@ from mlgw_bns.dataset_generation import Dataset
 from mlgw_bns.higher_order_modes import Mode, teob_mode_generator_factory
 
 MODES = [Mode(2, 1), Mode(2, 2), Mode(3, 3), Mode(4, 4)]
-N_WAVEFORMS = 100
+N_WAVEFORMS = 20
 
 dataset = Dataset(initial_frequency_hz=20.0, srate_hz=4096.0)
 
@@ -74,4 +74,4 @@ fig.suptitle(
 outfile = "teob_pn_residuals_21_22_33_44.png"
 fig.savefig(outfile, dpi=150)
 print(f"Saved plot to {outfile}")
-plt.show()
+# plt.show()
