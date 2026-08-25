@@ -670,7 +670,7 @@ class ModesModel:
         ValueError
             If ``mode`` is not among :attr:`modes`.
         """
-        if mode not in self.models:
+        if mode not in self.modes:
             raise ValueError(f"Mode {mode} is not included in this model")
 
         return self.models[mode].predict_amplitude_phase_optimized(frequencies, params)

@@ -19,7 +19,7 @@ over the polarisation angle :math:`\kappa`.
 
 The class also wraps the random generation of validation parameter
 sets, the application of the learned merger time-shift correction
-between modes (cached :meth:`ValidateModel.time_shifts_predictor`),
+between modes (:meth:`ValidateModel.time_shifts_predictor`),
 and the PSD-weighted inner product used by all of the above.
 """
 from __future__ import annotations
@@ -38,22 +38,11 @@ from tqdm import tqdm  # type: ignore
 from .data_management import FDWaveforms
 from .dataset_generation import ParameterSet
 from .model import Model
-from .neural_network import (
-    NeuralNetwork,
-    TimeshiftsGPR,
-    TimeshiftsNN,
-    load_timeshifts_predictor,
-)
+from .neural_network import NeuralNetwork, TimeshiftsGPR, TimeshiftsNN
 from .resample_residuals import cartesian_waveforms_at_frequencies
 
 
 PSD_PATH: Path = Path(__file__).parent / "data"
-TIMESHIFTS_NN_PATH: Path = (
-    Path(__file__).resolve().parent.parent / "timeshifts_rff_surrogate.pkl"
-)
-TIMESHIFTS_GPR_PATH: Path = (
-    Path(__file__).resolve().parent.parent / "timeshifts_model_HOM.pkl"
-)
 
 
 class ValidateModel:
@@ -106,10 +95,6 @@ class ValidateModel:
         self.frequencies = self.psd_data[:, 0][mask]
         self.psd_values = self.psd_data[:, 1][mask]
 
-        # Lazy cache for the merger-time-shift predictor, populated on
-        # first call to :meth:`time_shifts_predictor`.
-        self._time_shifts_predictor: Optional[Union[TimeshiftsNN, TimeshiftsGPR]] = None
-
     @cached_property
     def psd_at_frequencies(self) -> Callable[[np.ndarray], np.ndarray]:
         """Interpolator returning the PSD :math:`S_n(f)` at arbitrary frequencies.
@@ -127,30 +112,31 @@ class ValidateModel:
         )
 
     def time_shifts_predictor(self) -> Union[TimeshiftsNN, TimeshiftsGPR]:
-        """Return the merger-time-shift predictor, loading it on first use.
+        """Return the merger-time-shift predictor trained for :attr:`model`.
 
-        The lightweight RFF+Ridge :class:`TimeshiftsNN` checkpoint is
-        tried first, and the heavier :class:`TimeshiftsGPR` checkpoint
-        is used as a fallback. The result is cached on the instance so
-        that subsequent calls do not re-read the pickle from disk.
+        This is the same predictor trained (or loaded) by
+        :attr:`model`, i.e. :attr:`Model.timeshifts_predictor`, so
+        that the time-shift correction applied during validation
+        matches the one used to remove the linear trend from the
+        phase residuals during training.
 
         Returns
         -------
         Union[TimeshiftsNN, TimeshiftsGPR]
-                Loaded predictor instance.
+                The model's time-shift predictor.
 
         Raises
         ------
         ValueError
-                If neither checkpoint at :data:`TIMESHIFTS_NN_PATH` nor
-                :data:`TIMESHIFTS_GPR_PATH` could be loaded.
+                If :attr:`model` has no time-shift predictor available
+                (e.g. it was not trained or loaded with one).
         """
-        if self._time_shifts_predictor is None:
-            self._time_shifts_predictor = load_timeshifts_predictor(
-                str(TIMESHIFTS_NN_PATH),
-                str(TIMESHIFTS_GPR_PATH),
+        if self.model.timeshifts_predictor is None:
+            raise ValueError(
+                "The model has no time-shift predictor available; "
+                "train or load one before requesting time-shift-corrected mismatches."
             )
-        return self._time_shifts_predictor
+        return self.model.timeshifts_predictor
 
     def param_set(
         self,

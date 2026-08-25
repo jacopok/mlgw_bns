@@ -990,6 +990,17 @@ class Model:
         amp_ds = combine_residuals_amp(residuals.amplitude_residuals[0], pn_amplitude)
         phi_ds = combine_residuals_phi(residuals.phase_residuals[0], pn_phase)
 
+        if self.timeshifts_predictor is not None:
+            # add back the linear-in-frequency phase trend that
+            # `remove_linear_trend` subtracted from the training residuals
+            phase_freqs_hz = self.dataset.frequencies_hz[
+                self.downsampling_indices.phase_indices
+            ]
+            time_shift = self.timeshifts_predictor.predict(
+                [intrinsic_params.array]
+            )[0]
+            phi_ds = phi_ds + 2 * np.pi * (phase_freqs_hz - phase_freqs_hz[0]) * time_shift
+
         pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
 
         resampled_amp = self.downsampling_training.resample(
@@ -1050,8 +1061,8 @@ class Model:
             resampled_phi = np.concatenate((resampled_phi, np.zeros(hf_segment_length)))
 
         amp = (
-            resampled_amp 
-            # * pre
+            resampled_amp
+            * pre
             / params.distance_mpc
         )
 
@@ -1136,6 +1147,15 @@ class Model:
         amp_ds = combine_residuals_amp(residuals.amplitude_residuals[0], pn_amp)
         phi_ds = combine_residuals_phi(residuals.phase_residuals[0], pn_phi)
 
+        if self.timeshifts_predictor is not None:
+            # add back the linear-in-frequency phase trend that
+            # `remove_linear_trend` subtracted from the training residuals
+            phase_freqs_hz = freqs_hz[ds.phase_indices]
+            time_shift = self.timeshifts_predictor.predict(
+                [intrinsic_params.array]
+            )[0]
+            phi_ds = phi_ds + 2 * np.pi * (phase_freqs_hz - phase_freqs_hz[0]) * time_shift
+
         # t6 = perf_counter()
 
         # ----------------------------
@@ -1179,7 +1199,8 @@ class Model:
         # ----------------------------
         # Final amplitude and phase
         # ----------------------------
-        amp = resampled_amp / params.distance_mpc
+        pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
+        amp = resampled_amp * pre / params.distance_mpc
         phi = (
             resampled_phi
             + params.reference_phase
@@ -1357,7 +1378,7 @@ class Model:
         weights = np.array([3, -32, 168, -672, 0, 672, -168, 32, -3]) / 840.0
 
         try:
-            _, phis = self._predict_amplitude_phase(freqs, params)
+            _, phis = self.predict_amplitude_phase(freqs, params)
             logging.info("Derivative coming from mlgw_bns")
         except FrequencyTooLowError:
             logging.info("Derivative coming from the PN approximant")
