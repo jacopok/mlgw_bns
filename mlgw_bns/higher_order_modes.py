@@ -131,7 +131,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
 
     @staticmethod
     def _align_mode_phase_to_merger(
-        phase: np.ndarray, frequencies: np.ndarray, htlm: Dict[str, Any]
+        phase: np.ndarray, frequencies: np.ndarray, tc: float
     ) -> np.ndarray:
         """Correct the raw ``hflm`` phase for the merger-alignment shift.
 
@@ -161,7 +161,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         np.ndarray
             Phase aligned to the same merger-at-zero convention as ``hp, hc``.
         """
-        merger_time = np.asarray(htlm["t"])[-1]
+        merger_time = np.asarray(tc)
         return phase - 2 * np.pi * merger_time * frequencies
 
     def get_polarizations(
@@ -276,7 +276,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         par_dict["use_mode_lm"] = [mode_to_k(self.mode)]
         par_dict["inclination"] = inclination
 
-        f_spa, hp_re, hp_im, _, _, hflm, htlm, _ = self.eobrun_callable(par_dict)
+        f_spa, hp_re, hp_im, _, _, hflm, htlm, dyn = self.eobrun_callable(par_dict)
 
         hp = (hp_re - 1j * hp_im)[to_slice]
         f_spa = f_spa[to_slice]
@@ -284,7 +284,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         # _, phase = phase_unwrapping(hp)
         phase = hflm[str(mode_to_k(self.mode))][1][to_slice]
         amplitude = hflm[str(mode_to_k(self.mode))][0][to_slice] * params.eta
-        phase = self._align_mode_phase_to_merger(phase, f_spa, htlm)
+        phase = self._align_mode_phase_to_merger(phase, f_spa, dyn['tc'])
 
         return (f_spa, amplitude, phase)
 
@@ -330,7 +330,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
 
         # print(without_keys(par_dict, {"freqs"}))
 
-        f_spa, hp_re, hp_im, _, _, hflm, htlm, _ = self.eobrun_callable(par_dict)
+        f_spa, hp_re, hp_im, _, _, hflm, htlm, dyn = self.eobrun_callable(par_dict)
 
         hp = (hp_re - 1j * hp_im)[to_slice]
         # hc = (hc_re - 1j * hc_im)[to_slice]
@@ -340,7 +340,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         # _, phase = phase_unwrapping(hp)
         amplitude = hflm[str(mode_to_k(self.mode))][0][to_slice] * params.eta
         phase = hflm[str(mode_to_k(self.mode))][1][to_slice]
-        phase = self._align_mode_phase_to_merger(phase, f_spa, htlm)
+        phase = self._align_mode_phase_to_merger(phase, f_spa, dyn['tc'])
 
         return (f_spa, amplitude, phase)
 
