@@ -14,6 +14,8 @@ Reference: https://github.com/jacopok/mlgw_bns/blob/master/mlgw_bns/data_managem
 from __future__ import annotations
 
 import logging
+import resource
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
 from typing import (
@@ -37,6 +39,89 @@ if TYPE_CHECKING:
 
 # make type hinting available for
 TYPE_DATA = TypeVar("TYPE_DATA", bound="SavableData")
+
+
+def format_bytes(number_of_bytes: float) -> str:
+    """Human-readable representation of a number of bytes.
+
+    Parameters
+    ----------
+    number_of_bytes : float
+        Size to format.
+
+    Returns
+    -------
+    str
+        Size expressed in the largest unit for which it is at least one.
+
+    Examples
+    --------
+    >>> format_bytes(512)
+    '512.0 B'
+    >>> format_bytes(2 ** 20)
+    '1.0 MB'
+    >>> format_bytes(1.5 * 2 ** 30)
+    '1.5 GB'
+    """
+
+    units = ("B", "kB", "MB", "GB", "TB")
+
+    scaled = float(number_of_bytes)
+    for unit in units[:-1]:
+        if abs(scaled) < 1024.0:
+            return f"{scaled:.1f} {unit}"
+        scaled /= 1024.0
+
+    return f"{scaled:.1f} {units[-1]}"
+
+
+def array_memory(shape: Iterable[int], dtype: Any = np.float64) -> int:
+    """Number of bytes taken up by an array of the given shape and dtype.
+
+    This is meant to be used to estimate the footprint of arrays which have
+    not been allocated yet; for arrays which already exist, use their
+    ``nbytes`` attribute instead.
+
+    Parameters
+    ----------
+    shape : Iterable[int]
+        Shape of the array.
+    dtype : Any
+        Data type of the array, by default ``np.float64``.
+
+    Returns
+    -------
+    int
+        Size in bytes.
+
+    Examples
+    --------
+    >>> array_memory((100, 200))
+    160000
+    >>> array_memory((100, 200), np.float32)
+    80000
+    """
+
+    return int(np.prod(list(shape), dtype=np.int64)) * np.dtype(dtype).itemsize
+
+
+def peak_memory_usage() -> int:
+    """Peak resident set size of this process since it started, in bytes.
+
+    Only the memory of the current process is accounted for: waveform
+    generation happens in ``joblib`` worker subprocesses, so during that
+    stage this only tracks the results as they are collected back here.
+
+    Returns
+    -------
+    int
+        Peak RSS in bytes.
+    """
+
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+
+    # ru_maxrss is in kilobytes on Linux, but in bytes on macOS
+    return peak if sys.platform == "darwin" else peak * 1024
 
 # mypy does not like abstract dataclasses, see https://github.com/python/mypy/issues/5374
 @dataclass  # type: ignore

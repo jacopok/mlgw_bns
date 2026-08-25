@@ -2,6 +2,7 @@
 """
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -18,6 +19,9 @@ from tqdm import tqdm  # type: ignore
 
 from .data_management import (
     DownsamplingIndices,
+    array_memory,
+    format_bytes,
+    peak_memory_usage,
     FDWaveforms,
     ParameterRanges,
     Residuals,
@@ -57,6 +61,68 @@ TF2_BASE: float = 3.668693487138444e-19
 # ( Msun * G / c**3)**(5/6) * Hz**(-7/6) * c / Mpc / s
 AMP_SI_BASE: float = 4.2425873413901263e24
 # Mpc / Msun**2 / Hz
+
+def log_expected_memory(
+    kind: str,
+    number_generated: int,
+    number_kept: int,
+    amp_length: int,
+    phi_length: int,
+    full_length: int,
+    output_dtype: Any = np.float32,
+) -> None:
+    """Log the memory footprint expected for a dataset generation stage.
+
+    The number of sample points per waveform is only known once the
+    downsampling training has run --- the greedy algorithm decides how many
+    points it needs --- so the footprint of the training data cannot be
+    predicted before then, and it is worth stating explicitly at the start of
+    each stage which allocates a full dataset.
+
+    Two contributions are reported: the arrays which are returned, and the
+    per-waveform results collected from the ``joblib`` workers. The latter is
+    typically the larger of the two, since it holds ``number_generated``
+    (rather than ``number_kept``) waveforms in double precision, and it is
+    still alive while the returned arrays are being built --- so the peak is
+    roughly the sum of the two.
+
+    Parameters
+    ----------
+    kind : str
+        Name of the objects being generated, used in the log message.
+    number_generated : int
+        Number of waveforms which will be generated, including the ones
+        which will be discarded because of oversampling.
+    number_kept : int
+        Number of waveforms which will be kept in the returned arrays.
+    amp_length : int
+        Number of amplitude sample points per waveform.
+    phi_length : int
+        Number of phase sample points per waveform.
+    full_length : int
+        Number of sample points per waveform before downsampling.
+    output_dtype : Any
+        Data type of the returned arrays, by default ``np.float32``.
+    """
+
+    points_per_waveform = amp_length + phi_length
+
+    logging.info(
+        "Generating %i %ss with %i amplitude and %i phase sample points "
+        "(%.1f%% of the %i frequencies in the full grid): "
+        "expecting roughly %s for the returned arrays and up to %s "
+        "for the intermediate results, on top of the %s currently in use",
+        number_generated,
+        kind,
+        amp_length,
+        phi_length,
+        100 * points_per_waveform / (2 * full_length),
+        full_length,
+        format_bytes(array_memory((number_kept, points_per_waveform), output_dtype)),
+        format_bytes(array_memory((number_generated, points_per_waveform), np.float64)),
+        format_bytes(peak_memory_usage()),
+    )
+
 
 class WaveformGenerator(ABC):
     """Generator of theoretical waveforms
@@ -1130,6 +1196,10 @@ class Dataset:
         # Calculate how many to generate
         n_generate = int(size * oversample)
 
+        log_expected_memory(
+            "residual", n_generate, size, amp_length, phi_length, self.waveform_length
+        )
+
         if self.parameter_generator is None:
             parameter_generator = self.make_parameter_generator(seed=2)
         else:
@@ -1159,7 +1229,10 @@ class Dataset:
         # Filter valid results
         valid_results = [r for r in results if r is not None]
 
-        print(f"Only {len(valid_results)}/{size} valid waveforms generated.")
+        if len(valid_results) < size:
+            logging.warning(
+                "Only %i/%i valid waveforms generated", len(valid_results), size
+            )
         # if len(valid_results) < size:
         #     raise RuntimeError(
         #         f"Only {len(valid_results)}/{size} valid waveforms generated. "
@@ -1171,7 +1244,17 @@ class Dataset:
         phi_residuals = np.array([r[1] for r in valid_results[:size]], dtype=np.float32)
         parameter_array = np.array([r[2] for r in valid_results[:size]], dtype=np.float32)
 
-        print(f"Generated {len(valid_results)} valid, using first {size}")
+        logging.info(
+            "Generated %i valid residuals, using the first %i: "
+            "%s of amplitude and phase residual arrays "
+            "(peak memory usage so far: %s)",
+            len(valid_results),
+            size,
+            format_bytes(amp_residuals.nbytes + phi_residuals.nbytes),
+            format_bytes(peak_memory_usage()),
+        )
+
+        del results, valid_results
 
         residuals = Residuals(amp_residuals, phi_residuals)
 
@@ -1282,6 +1365,26 @@ class Dataset:
 
         waveform_param_list = parameters.waveform_parameters(self)
 
+        amp_length = (
+            self.waveform_length
+            if downsampling_indices is None
+            else downsampling_indices.amp_length
+        )
+        phi_length = (
+            self.waveform_length
+            if downsampling_indices is None
+            else downsampling_indices.phi_length
+        )
+        log_expected_memory(
+            "waveform",
+            len(waveform_param_list),
+            len(waveform_param_list),
+            amp_length,
+            phi_length,
+            self.waveform_length,
+            output_dtype=np.float64,
+        )
+
         def generate_single(par):
             _, amp, phi = self.waveform_generator.effective_one_body_waveform(
                 par, self.frequencies
@@ -1304,9 +1407,11 @@ class Dataset:
         valid_results = [r for r in results if r is not None]
         n_discarded = len(results) - len(valid_results)
         if n_discarded > 0:
-            print(
-                f"Discarded {n_discarded}/{len(results)} parameter sets "
-                "(mode 21 or 33: amp_teob <= 0 at some frequency)"
+            logging.warning(
+                "Discarded %i/%i parameter sets "
+                "(mode 21 or 33: amp_teob <= 0 at some frequency)",
+                n_discarded,
+                len(results),
             )
         if len(valid_results) == 0:
             raise RuntimeError(
@@ -1318,6 +1423,14 @@ class Dataset:
         phis = np.array([r[1] for r in valid_results])
         valid_param_array = np.array([r[2] for r in valid_results])
         valid_param_set = self.parameter_set_cls(valid_param_array)
+
+        logging.info(
+            "Generated %i waveforms: %s of amplitude and phase arrays "
+            "(peak memory usage so far: %s)",
+            len(valid_results),
+            format_bytes(amps.nbytes + phis.nbytes),
+            format_bytes(peak_memory_usage()),
+        )
 
         return FDWaveforms(amps, phis), valid_param_set
         
