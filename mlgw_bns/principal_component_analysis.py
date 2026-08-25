@@ -12,9 +12,60 @@ import numpy as np
 
 from typing import Union
 
-from .data_management import DownsamplingIndices, PrincipalComponentData
+from .data_management import (
+    DownsamplingIndices,
+    PrincipalComponentData,
+    array_memory,
+    format_bytes,
+    peak_memory_usage,
+)
 from .dataset_generation import Dataset
 from .neural_network import TimeshiftsGPR, TimeshiftsNN
+
+
+def log_expected_svd_memory(data: np.ndarray) -> None:
+    """Log the memory footprint expected for the PCA of this data matrix.
+
+    The dominant allocations of :meth:`PrincipalComponentAnalysisModel.fit`
+    are the zero-mean copy of the data, the copy LAPACK makes of it
+    internally, and the two factors :math:`U` and :math:`V` of the SVD, all
+    of which are alive at the same time. The number of sample points per
+    waveform is set by the downsampling training, so this is not predictable
+    before a model is generated.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Matrix to be decomposed, with shape
+        ``(number_of_waveforms, number_of_sample_points)``.
+    """
+
+    number_of_waveforms, number_of_points = data.shape
+    smaller_dimension = min(data.shape)
+
+    # np.linalg.svd(zero_mean_data.T, full_matrices=False) produces
+    # U with shape (number_of_points, k) and V with shape (k, number_of_waveforms),
+    # with k the smaller of the two dimensions, and works on its own copy
+    # of the (transposed, hence non-contiguous) input.
+    svd_memory = array_memory(
+        (
+            2 * number_of_waveforms * number_of_points
+            + smaller_dimension * (number_of_waveforms + number_of_points),
+        ),
+        data.dtype,
+    )
+
+    logging.info(
+        "Fitting PCA on a %i x %i matrix of %s residuals taking up %s; "
+        "the SVD is expected to need roughly %s more, "
+        "on top of the %s currently in use",
+        number_of_waveforms,
+        number_of_points,
+        data.dtype,
+        format_bytes(data.nbytes),
+        format_bytes(svd_memory),
+        format_bytes(peak_memory_usage()),
+    )
 
 
 class PrincipalComponentTraining:
@@ -57,9 +108,11 @@ class PrincipalComponentTraining:
             "Generating %s waveforms for PCA training", number_of_training_waveforms
         )
 
-        print(f"downsampling_indices_amp: {self.downsampling_indices.amp_length}")
-        print(f"downsampling_indices_phi: {self.downsampling_indices.phi_length}")
-
+        logging.info(
+            "PCA training on %i amplitude and %i phase sample points",
+            self.downsampling_indices.amp_length,
+            self.downsampling_indices.phi_length,
+        )
 
         freq_downsampled, parameters, residuals = self.dataset.generate_residuals(
             number_of_training_waveforms,
@@ -73,10 +126,6 @@ class PrincipalComponentTraining:
             frq=self.dataset.natural_units_to_hz(freq_downsampled),
             timeshifts_predictor=self.timeshifts_predictor,
         )
-
-        # print(residuals.phase_residuals)
-
-        logging.info("Fitting PCA model")
 
         return self.pca_model.fit(residuals.combined)
 
@@ -100,6 +149,8 @@ class PrincipalComponentAnalysisModel:
         PrincipalComponentData
                 Data describing the trained PCA model.
         """
+
+        log_expected_svd_memory(data)
 
         mean = np.mean(data, axis=0)
 
@@ -126,6 +177,14 @@ class PrincipalComponentAnalysisModel:
         reduced_training_data = zero_mean_data @ eigenvectors_to_keep
 
         principal_components_scaling = np.max(np.abs(reduced_training_data), axis=0)
+
+        logging.info(
+            "PCA fit done, keeping %i of %i components "
+            "(peak memory usage so far: %s)",
+            self.number_of_components,
+            len(eigenvalues),
+            format_bytes(peak_memory_usage()),
+        )
 
         return PrincipalComponentData(
             eigenvectors_to_keep,

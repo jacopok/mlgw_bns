@@ -24,7 +24,7 @@ from sortedcontainers import SortedList  # type: ignore
 
 import scipy.interpolate as interpolate
 from scipy.interpolate import PchipInterpolator
-from .data_management import DownsamplingIndices
+from .data_management import DownsamplingIndices, array_memory, format_bytes
 from .dataset_generation import Dataset
 
 try:
@@ -98,6 +98,45 @@ class DownsamplingTraining(ABC):
     def train(self, training_dataset_size: int) -> DownsamplingIndices:
         """Calcalate downsampling with a generic algoritm,
         training on a dataset with a given sizes."""
+
+    def log_downsampling(
+        self, indices: DownsamplingIndices, full_length: int
+    ) -> DownsamplingIndices:
+        """Log the outcome of the downsampling training, and return it.
+
+        How many points the downsampling keeps is only known once this
+        training has run, and it determines the size of every training
+        dataset generated afterwards, so it is worth reporting explicitly:
+        the last number is the memory cost of a single waveform's residuals
+        in the training arrays.
+
+        Parameters
+        ----------
+        indices : DownsamplingIndices
+            Result of the downsampling training.
+        full_length : int
+            Number of frequencies in the full, un-downsampled grid.
+
+        Returns
+        -------
+        DownsamplingIndices
+            The indices which were passed in, unchanged.
+        """
+
+        points_per_waveform = indices.amp_length + indices.phi_length
+
+        logging.info(
+            "%s kept %i amplitude and %i phase points out of %i frequencies "
+            "(compression factor %.1f): %s per waveform in the training arrays",
+            type(self).__name__,
+            indices.amp_length,
+            indices.phi_length,
+            full_length,
+            2 * full_length / points_per_waveform,
+            format_bytes(array_memory((points_per_waveform,), np.float32)),
+        )
+
+        return indices
 
     def validate_downsampling(
         self, training_dataset_size: int, validating_dataset_size: int
@@ -360,8 +399,14 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
                 waveforms.amplitudes[:n_use], waveforms.phases[:n_use]
             )
 
-        print(f"GreedyDown_tol_amp={self.tol_amp}")
-        print(f"GreedyDown_tol_phi={self.tol_phi}")
+        logging.info(
+            "Greedy downsampling of %i waveforms on %i frequencies "
+            "(tol_amp=%g, tol_phi=%g)",
+            n_use,
+            len(frequencies),
+            self.tol_amp,
+            self.tol_phi,
+        )
 
         amp_indices = self.find_indices(
             frequencies, list(waveforms.amplitudes), tol=self.tol_amp
@@ -370,7 +415,9 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
             frequencies, list(waveforms.phases), tol=self.tol_phi
         )
 
-        return DownsamplingIndices(amp_indices, phi_indices)
+        return self.log_downsampling(
+            DownsamplingIndices(amp_indices, phi_indices), len(frequencies)
+        )
 
 
 class GreedyDownsamplingTrainingWithResiduals(GreedyDownsamplingTraining):
@@ -394,6 +441,15 @@ class GreedyDownsamplingTrainingWithResiduals(GreedyDownsamplingTraining):
         )
         amp_residuals, phi_residuals = residuals
 
+        logging.info(
+            "Greedy downsampling of %i residuals on %i frequencies "
+            "(tol_amp=%g, tol_phi=%g)",
+            min(training_dataset_size, len(amp_residuals)),
+            len(frequencies),
+            self.tol_amp,
+            self.tol_phi,
+        )
+
         amp_indices = self.find_indices(
             frequencies,
             amp_residuals[:training_dataset_size],
@@ -405,7 +461,9 @@ class GreedyDownsamplingTrainingWithResiduals(GreedyDownsamplingTraining):
             tol=self.tol_phi,
         )
 
-        return DownsamplingIndices(amp_indices, phi_indices)
+        return self.log_downsampling(
+            DownsamplingIndices(amp_indices, phi_indices), len(frequencies)
+        )
 
 
 class RDPDownsamplingTraining(DownsamplingTraining):
@@ -500,8 +558,8 @@ class RDPDownsamplingTraining(DownsamplingTraining):
         result = sorted(all_indices)
         # Ensure first and last are always included
         result = sorted(set(result) | {0, len(x_train) - 1})
-        print(
-            f"RDP downsampling: {len(result)} indices from {len(ys_subset)} waveforms (tol={_tol})",
+        logging.info(
+            "RDP downsampling: %i indices from %i waveforms (tol=%g)",
             len(result),
             len(ys_subset),
             _tol,
@@ -536,9 +594,14 @@ class RDPDownsamplingTraining(DownsamplingTraining):
                 waveforms.amplitudes[:n_use], waveforms.phases[:n_use]
             )
 
-        print(f"RDP downsampling: frequencies_length={len(frequencies)}")
-        print(f"tol_amp={self.tol_amp}")
-        print(f"tol_phi={self.tol_phi}")
+        logging.info(
+            "RDP downsampling of %i waveforms on %i frequencies "
+            "(tol_amp=%g, tol_phi=%g)",
+            n_use,
+            len(frequencies),
+            self.tol_amp,
+            self.tol_phi,
+        )
 
         amp_indices = self.find_indices(
             frequencies, list(waveforms.amplitudes), tol=self.tol_amp
@@ -547,7 +610,9 @@ class RDPDownsamplingTraining(DownsamplingTraining):
             frequencies, list(waveforms.phases), tol=self.tol_phi
         )
 
-        return DownsamplingIndices(amp_indices, phi_indices)
+        return self.log_downsampling(
+            DownsamplingIndices(amp_indices, phi_indices), len(frequencies)
+        )
 
 
 class RDPDownsamplingTrainingWithResiduals(RDPDownsamplingTraining):
@@ -562,7 +627,14 @@ class RDPDownsamplingTrainingWithResiduals(RDPDownsamplingTraining):
         amp_residuals = list(amp_residuals[:training_dataset_size])
         phi_residuals = list(phi_residuals[:training_dataset_size])
 
-        logging.info("RDP downsampling: frequencies_length=%i", len(frequencies))
+        logging.info(
+            "RDP downsampling of %i residuals on %i frequencies "
+            "(tol_amp=%g, tol_phi=%g)",
+            len(amp_residuals),
+            len(frequencies),
+            self.tol_amp,
+            self.tol_phi,
+        )
 
         amp_indices = self.find_indices(
             frequencies, amp_residuals, tol=self.tol_amp
@@ -571,4 +643,6 @@ class RDPDownsamplingTrainingWithResiduals(RDPDownsamplingTraining):
             frequencies, phi_residuals, tol=self.tol_phi
         )
 
-        return DownsamplingIndices(amp_indices, phi_indices)
+        return self.log_downsampling(
+            DownsamplingIndices(amp_indices, phi_indices), len(frequencies)
+        )

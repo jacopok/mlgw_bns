@@ -18,6 +18,9 @@ from numba import njit  # type: ignore
 from scipy.interpolate import interp1d
 
 from .data_management import (
+    array_memory,
+    format_bytes,
+    peak_memory_usage,
     DownsamplingIndices,
     FDWaveforms,
     ParameterRanges,
@@ -271,12 +274,15 @@ class Model:
             try:
                 from EOBRun_module import EOBRunPy  # type: ignore
 
-                print("Using EOBRunPy")
+                logging.info("Using EOBRunPy as a waveform generator")
                 self.waveform_generator: WaveformGenerator = TEOBResumSGenerator(
                     EOBRunPy
                 )
             except ModuleNotFoundError:
-                print("Using BarePostNewtonianGenerator")
+                logging.info(
+                    "EOBRun_module not found, "
+                    "using BarePostNewtonianGenerator as a waveform generator"
+                )
                 self.waveform_generator = BarePostNewtonianGenerator()
         else:
             self.waveform_generator = waveform_generator
@@ -562,12 +568,26 @@ class Model:
 
         """
 
+        logging.info(
+            "Generating a new model for %s, with %s waveforms for the "
+            "downsampling, %s for the PCA and %s for the network",
+            "the (2,2) mode" if self.mode is None else f"mode {self.mode}",
+            training_downsampling_dataset_size,
+            training_pca_dataset_size,
+            training_nn_dataset_size,
+        )
+
         if training_downsampling_dataset_size is not None:
+            logging.info("Training the downsampling")
             self.downsampling_indices = self.downsampling_training.train(
                 training_downsampling_dataset_size
             )
         else:
             assert self.downsampling_indices is not None
+
+        self.log_expected_training_memory(
+            training_pca_dataset_size, training_nn_dataset_size
+        )
 
         # LEARN Δt(θ), needed below to remove the linear trend
         # from the phase residuals before PCA and NN training.
@@ -579,6 +599,7 @@ class Model:
         if timeshifts_predictor is not None:
             self.timeshifts_predictor = timeshifts_predictor
         elif training_nn_dataset_size is not None:
+            logging.info("Training the time-shifts predictor")
             _, parameters, residuals_timeshifts = self.dataset.generate_residuals(
                 training_nn_dataset_size, flatten_phase=False
             )
@@ -593,6 +614,7 @@ class Model:
             assert self.timeshifts_predictor is not None
 
         if training_pca_dataset_size is not None:
+            logging.info("Training the PCA")
             self.pca_training = PrincipalComponentTraining(
                 self.dataset,
                 self.downsampling_indices,
@@ -605,6 +627,7 @@ class Model:
             assert self.pca_data is not None
 
         if training_nn_dataset_size is not None:
+            logging.info("Generating the training dataset for the network")
             freq_downsampled, parameters, residuals = self.dataset.generate_residuals(
                 training_nn_dataset_size, self.downsampling_indices, flatten_phase=False
             )
@@ -621,6 +644,55 @@ class Model:
         else:
             assert self.training_dataset is not None
             assert self.training_parameters is not None
+
+        logging.info(
+            "Model generation done (peak memory usage: %s)",
+            format_bytes(peak_memory_usage()),
+        )
+
+    def log_expected_training_memory(
+        self,
+        training_pca_dataset_size: Optional[int],
+        training_nn_dataset_size: Optional[int],
+    ) -> None:
+        """Log the memory the training datasets are expected to take up.
+
+        This is only knowable after the downsampling training has run, since
+        the number of sample points it keeps per waveform is decided by the
+        greedy (or RDP) algorithm and depends on the tolerances, the mode and
+        the frequency grid.
+
+        Parameters
+        ----------
+        training_pca_dataset_size : int, optional
+            Number of waveforms which will be used to train the PCA.
+        training_nn_dataset_size : int, optional
+            Number of waveforms which will be used to train the network.
+        """
+
+        assert self.downsampling_indices is not None
+
+        points_per_waveform = (
+            self.downsampling_indices.amp_length + self.downsampling_indices.phi_length
+        )
+
+        for name, size in [
+            ("PCA", training_pca_dataset_size),
+            ("network", training_nn_dataset_size),
+        ]:
+            if size is None:
+                continue
+
+            logging.info(
+                "The %s training dataset (%i waveforms x %i sample points) "
+                "will take up about %s, "
+                "with a transient peak of about %s while it is generated",
+                name,
+                size,
+                points_per_waveform,
+                format_bytes(array_memory((size, points_per_waveform), np.float32)),
+                format_bytes(array_memory((size, points_per_waveform), np.float64) * 2),
+            )
 
     def save_arrays(self, include_training_data: bool = True) -> None:
         """Save all big arrays contained in this object to the file
@@ -803,7 +875,13 @@ class Model:
         end_time = time.time()  # Record the end time
 
         training_duration = end_time - start_time  # Compute the duration
-        print(f"Training took {training_duration:.2f} seconds")
+        logging.info(
+            "Training the network on %i waveforms took %.2f seconds "
+            "(peak memory usage so far: %s)",
+            len(training_residuals[indices]),
+            training_duration,
+            format_bytes(peak_memory_usage()),
+        )
 
         # loss_over_epochs = nn.get_loss_over_epochs()
 
@@ -828,8 +906,7 @@ class Model:
             hyper = Hyperparameters.default(len(self.training_dataset))
             # hyper = Hyperparameters.from_trial(n_train_max = 50)
 
-        print(hyper)
-        print("hyperparameter set!")
+        logging.info("Training the network with hyperparameters %s", hyper)
 
         # increase the number of maximum iterations by a lot:
         # here we do not want to stop the training early.

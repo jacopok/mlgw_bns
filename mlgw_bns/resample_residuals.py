@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 from numba import njit  # type: ignore
 from scipy.spatial import distance
@@ -196,7 +198,12 @@ def plot_signals_with_alignment(a, b, pad_function = None):
     correlate_result = np.correlate(a, b, 'full')
     shift_positions = np.arange(-len(a) + 1, len(b))
     
-    print("len(a)", len(a), "len(b)", len(b), "len(correlate_result)", len(correlate_result))
+    logging.debug(
+        "len(a)=%i, len(b)=%i, len(correlate_result)=%i",
+        len(a),
+        len(b),
+        len(correlate_result),
+    )
 
     fig, axes = plt.subplots(5, 1, figsize=(10, 18))
     
@@ -207,13 +214,18 @@ def plot_signals_with_alignment(a, b, pad_function = None):
     
     if len(shift_positions) < 20:
         # useful for debugging and showing correlation results
-        print(shift_positions)
-        print(correlate_result)
+        logging.debug("shift positions: %s", shift_positions)
+        logging.debug("correlation result: %s", correlate_result)
 
     best_correlation_index = np.argmax(correlate_result)
     shift_amount_debug = shift_positions[best_correlation_index]
     shift_amount = (-len(a) + 1) + best_correlation_index
-    print("best_correlation_index", best_correlation_index, "shift_amount_debug", shift_amount_debug, "shift_amount", shift_amount)
+    logging.debug(
+        "best_correlation_index=%i, shift_amount_debug=%i, shift_amount=%i",
+        best_correlation_index,
+        shift_amount_debug,
+        shift_amount,
+    )
     
     axes[1].stem(shift_positions, correlate_result, use_line_collection=True, label="Cross-correlation of a and b")
     axes[1].set_title(f"Cross-Correlation Result | Best Match Index: {best_correlation_index} Signal 'b' Shift Amount: {shift_amount}")
@@ -265,7 +277,12 @@ def compare_and_plot_signals_with_alignment(a, b, bshift_method = 'mean_fill', p
     
     correlate_result = np.correlate(a, b, 'full')
     shift_positions = np.arange(-len(a) + 1, len(b))
-    print("len(a)", len(a), "len(b)", len(b), "len(correlate_result)", len(correlate_result))
+    logging.debug(
+        "len(a)=%i, len(b)=%i, len(correlate_result)=%i",
+        len(a),
+        len(b),
+        len(correlate_result),
+    )
     
     euclid_distance_a_to_b = distance.euclidean(a, b)
     
@@ -290,13 +307,18 @@ def compare_and_plot_signals_with_alignment(a, b, bshift_method = 'mean_fill', p
     
     if len(shift_positions) < 20:
         # useful for debugging and showing correlation results
-        print(shift_positions)
-        print(correlate_result)
+        logging.debug("shift positions: %s", shift_positions)
+        logging.debug("correlation result: %s", correlate_result)
     
     best_correlation_index = np.argmax(correlate_result)
     shift_amount_debug = shift_positions[best_correlation_index]
     shift_amount = (-len(a) + 1) + best_correlation_index
-    print("best_correlation_index", best_correlation_index, "shift_amount_debug", shift_amount_debug, "shift_amount", shift_amount)
+    logging.debug(
+        "best_correlation_index=%i, shift_amount_debug=%i, shift_amount=%i",
+        best_correlation_index,
+        shift_amount_debug,
+        shift_amount,
+    )
     
     #axes[1].plot(shift_positions, correlate_result)
     axes[1].stem(shift_positions, correlate_result, use_line_collection=True, label="Cross-correlation of a and b")

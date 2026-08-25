@@ -424,7 +424,7 @@ class HyperparameterOptimization:
 
         fig.write_image(filename, format="pdf")
 
-        print(f"Saved Pareto plot to {filename}")
+        logging.info("Saved Pareto plot to %s", filename)
 
     def plot_parallel(self, **kwargs):
         to_plot = lambda trial: trial.values[0]
