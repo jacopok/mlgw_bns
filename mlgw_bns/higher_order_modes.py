@@ -138,7 +138,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
 
         par_dict: dict = params.teobresums()
 
-        n_additional = 400000
+        n_additional = 256
         f_0 = par_dict["initial_frequency"]
         delta_f = par_dict["df"]
         new_f0 = f_0 - delta_f * n_additional
@@ -215,7 +215,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
 
         par_dict: dict = params.teobresums()
 
-        n_additional = 400000
+        n_additional = 256
 
         f_0 = par_dict["initial_frequency"]
         delta_f = par_dict["df"]
@@ -259,7 +259,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
 
         par_dict: dict = params.teobresums()
 
-        n_additional = 400000
+        n_additional = 256
 
         f_0 = par_dict["initial_frequency"]  # TODO: change it to par_dict["initial_frequency"]
         delta_f = par_dict["df"]

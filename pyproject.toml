@@ -26,6 +26,7 @@ dependencies = [
     "dacite>=1.9.2,<2",
     "pytest-cases>=3.10.1",
     "setuptools>=84.0.0",
+    "tqdm-joblib>=0.0.5",
 ]
  
 [project.urls]

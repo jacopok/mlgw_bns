@@ -29,3 +29,4 @@ frequency_downsampling_histograms.py
 !mlgw_bns/data/*.h5
 !mlgw_bns/data/*.pkl
 !mlgw_bns/data/*.yaml
+.claude/settings.json
