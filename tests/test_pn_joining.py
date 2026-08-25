@@ -46,7 +46,7 @@ def test_default_model_pn_connection(default_model, mass, seed):
 
 @pytest.mark.requires_default
 def test_default_model_extendibility():
-    model = Model.default()
+    model = Model.default_for_testing()
     params = ParametersWithExtrinsic.gw170817()
 
     assert model.extend_with_post_newtonian
@@ -71,7 +71,7 @@ def test_default_model_extendibility():
 
 @pytest.mark.requires_default
 def test_default_model_evaluation_does_not_depend_on_frequency_grid():
-    model = Model.default()
+    model = Model.default_for_testing()
     params = ParametersWithExtrinsic.gw170817()
 
     freqs = np.geomspace(1e-3, 1e3)

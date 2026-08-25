@@ -1,6 +1,7 @@
 """This module defines the `fixtures <https://docs.pytest.org/en/6.2.x/fixture.html>`__ 
 which all other testing files can then use."""
 
+import glob
 import os
 
 import h5py
@@ -13,6 +14,8 @@ from mlgw_bns import Model, ParametersWithExtrinsic
 from mlgw_bns.data_management import ParameterRanges
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
 from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
+from mlgw_bns.higher_order_modes import Mode
+from mlgw_bns.modes_model import ModesModel
 
 
 def pytest_addoption(parser):
@@ -113,7 +116,12 @@ def model():
     model = Model(name, pca_components_number=20)
     yield model
 
-    for filename in [model.filename_arrays, model.filename_metadata, model.filename_nn]:
+    for filename in [
+        model.filename_arrays,
+        model.filename_metadata,
+        model.filename_nn,
+        model.filename_timeshifts,
+    ]:
         try:
             os.remove(filename)
         except FileNotFoundError:
@@ -134,7 +142,32 @@ def trained_model(generated_model):
 
 @pytest.fixture(scope="session")
 def default_model():
-    yield Model.default()
+    yield Model.default_for_testing()
+
+
+@pytest.fixture(scope="session")
+def modes_model():
+    name = "test_modes_model"
+    mm = ModesModel(modes=[Mode(2, 2), Mode(2, 1)], filename=name, pca_components_number=10)
+    yield mm
+
+    for filename in glob.glob(f"{name}*"):
+        try:
+            os.remove(filename)
+        except FileNotFoundError:
+            pass
+
+
+@pytest.fixture(scope="session")
+def generated_modes_model(modes_model):
+    modes_model.generate(6, 30, 30)
+    yield modes_model
+
+
+@pytest.fixture(scope="session")
+def trained_modes_model(generated_modes_model):
+    generated_modes_model.set_hyper_and_train_nn()
+    yield generated_modes_model
 
 
 @pytest.fixture

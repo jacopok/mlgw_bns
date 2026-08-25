@@ -40,7 +40,7 @@ def test_quick_model_with_validation_mismatches(trained_model):
 
     vm = ValidateModel(trained_model)
 
-    mismatches = vm.validation_mismatches(16)
+    mismatches = vm.validation_mismatches(16, include_time_shifts=True)
 
     for m in mismatches:
         assert m < TRAINED_MODEL_MAX_MISMATCH
@@ -60,7 +60,7 @@ def test_quick_model_with_validation_mismatches(trained_model):
 )
 def test_default_models_with_validation_mismatches(model_name, tolerance):
 
-    model = Model.default(model_name)
+    model = Model.default_for_testing(model_name)
     vm = ValidateModel(model)
 
     mismatches = vm.validation_mismatches(16, seed=1)
@@ -78,7 +78,7 @@ def test_default_models_with_validation_mismatches(model_name, tolerance):
 @pytest.mark.parametrize("model_name", MODELS_AVAILABLE)
 def test_default_models_speed(model_name, benchmark):
 
-    model = Model.default(model_name)
+    model = Model.default_for_testing(model_name)
 
     frequencies = np.geomspace(20, 2000, num=1000)
     benchmark(model.predict, frequencies, ParametersWithExtrinsic.gw170817())
@@ -89,7 +89,7 @@ def test_default_models_speed(model_name, benchmark):
 @pytest.mark.parametrize("model_name", MODELS_AVAILABLE)
 def test_default_models_speed_extended(model_name, benchmark):
 
-    model = Model.default(model_name)
+    model = Model.default_for_testing(model_name)
 
     frequencies = np.geomspace(0.1, 2000, num=1000)
     benchmark(model.predict, frequencies, ParametersWithExtrinsic.gw170817())
@@ -100,7 +100,7 @@ def test_default_models_speed_extended(model_name, benchmark):
 @pytest.mark.parametrize("model_name", MODELS_AVAILABLE)
 def test_default_models_low_frequency(model_name, benchmark):
 
-    model = Model.default(model_name)
+    model = Model.default_for_testing(model_name)
 
     frequencies = np.geomspace(1e-3, 1e-2, num=1000)
 

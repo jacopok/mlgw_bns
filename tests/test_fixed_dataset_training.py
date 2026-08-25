@@ -23,7 +23,7 @@ def fixed_generator_pair(dataset):
 
     gen = dataset.make_parameter_generator(seed=1)
     params = ParameterSet.from_parameter_generator(gen, 5)
-    waveforms = dataset.generate_waveforms_from_params(params)
+    waveforms, params = dataset.generate_waveforms_from_params(params)
     return make_fixed_generation_pair(dataset.frequencies, params, waveforms)
 
 
