@@ -63,7 +63,7 @@ def test_model_metadata_loading(generated_model):
 
     generated_model.load()
 
-    assert generated_model.initial_frequency_hz < 20.0
+    assert generated_model.initial_frequency_hz == 20.0
     assert generated_model.parameter_ranges.mass_range == (2.0, 4.0)
     assert generated_model.multibanding == True
 
@@ -73,7 +73,9 @@ def test_downsampling_indices_characteristics(generated_model):
     generated_model.save()
 
     with generated_model.file_arrays as f:
-        assert 50 < f["downsampling/amplitude_indices"][10] < 10_000
+        # the upper bound was widened alongside the q_range default,
+        # which was extended from (1.0, 2.85) to (1.0, 3.0)
+        assert 50 < f["downsampling/amplitude_indices"][10] < 15_000
 
         # this holds when training on residuals
         # assert 20_000 < file["downsampling/amplitude_indices"][10] < 30_000
