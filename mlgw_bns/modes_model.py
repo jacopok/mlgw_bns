@@ -557,6 +557,14 @@ class ModesModel:
         same meaning as in :meth:`Model.generate`; setting one of them to
         ``None`` reuses pre-existing data for that step.
 
+        The (2,2) mode is generated *first*, on its own. Its result is
+        then used to fit the shared cross-mode time-shift predictor (see
+        :meth:`train_time_shifts_predictor`) before any other mode is
+        generated, so that every other mode's PCA/NN training residuals
+        are flattened using this same, shared :math:`\\Delta t(\\theta)`
+        rather than one independently (and more noisily) fit from that
+        mode's own residuals.
+
         Parameters
         ----------
         training_downsampling_dataset_size : int, optional
@@ -568,13 +576,80 @@ class ModesModel:
         training_nn_dataset_size : int, optional
             Size of the dataset used to train the neural network on the
             PCA residuals. Defaults to 256.
+
+        Raises
+        ------
+        ValueError
+            If ``Mode(2, 2)`` is not among :attr:`modes`.
         """
+        reference_mode = Mode(2, 2)
+        if reference_mode not in self.modes:
+            raise ValueError(
+                "ModesModel.generate() requires Mode(2, 2) to be among "
+                "`self.modes`, since the shared time-shift predictor is "
+                "trained from it."
+            )
+
+        self.models[reference_mode].generate(
+            training_downsampling_dataset_size=training_downsampling_dataset_size,
+            training_pca_dataset_size=training_pca_dataset_size,
+            training_nn_dataset_size=training_nn_dataset_size,
+        )
+
+        if training_nn_dataset_size is not None:
+            self.train_time_shifts_predictor()
+
         for mode in self.modes:
+            if mode == reference_mode:
+                continue
             self.models[mode].generate(
                 training_downsampling_dataset_size=training_downsampling_dataset_size,
                 training_pca_dataset_size=training_pca_dataset_size,
                 training_nn_dataset_size=training_nn_dataset_size,
+                timeshifts_predictor=self.time_shifts_predictor,
             )
+
+    def train_time_shifts_predictor(self) -> None:
+        """Train the shared, cross-mode merger-time-shift predictor.
+
+        Trained once, from the (2,2) mode's own time-shift training data
+        (the parameters and linear-in-frequency trends computed by that
+        mode's :meth:`Model.generate`): the same :math:`\\Delta t(\\theta)`
+        correction is then reused to flatten the training residuals of
+        every other mode (see :meth:`generate`), rather than fitting a
+        separate, individually noisier regressor per mode. Sets
+        :attr:`time_shifts_predictor`.
+
+        Must be called after the (2,2) mode's own :meth:`Model.generate`
+        (this is what :meth:`generate` does automatically) and before any
+        other mode is generated.
+
+        Raises
+        ------
+        ValueError
+            If ``Mode(2, 2)`` is not among :attr:`modes`, or if that
+            mode has not been through :meth:`Model.generate` yet.
+        """
+        reference_mode = Mode(2, 2)
+        if reference_mode not in self.modes:
+            raise ValueError(
+                "The shared time-shift predictor is trained from the (2,2) "
+                "mode, which is not among this ModesModel's modes."
+            )
+
+        reference_model = self.models[reference_mode]
+        training_parameters = reference_model.training_parameters
+        training_timeshifts = getattr(reference_model, "training_timeshifts_data", None)
+        if training_parameters is None or training_timeshifts is None:
+            raise ValueError(
+                "The (2,2) mode has no time-shift training data available; "
+                "call `generate()` before training the time-shift predictor."
+            )
+
+        self.time_shifts_predictor = TimeshiftsNN(
+            training_params=training_parameters.parameter_array,
+            training_timeshifts=training_timeshifts,
+        ).fit()
 
     def set_hyper_and_train_nn(
         self,

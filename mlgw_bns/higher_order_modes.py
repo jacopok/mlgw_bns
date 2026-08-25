@@ -33,6 +33,135 @@ EOB_SUPPORTED_MODES: list[Mode] = [
     Mode(l, m) for l in range(2, 5) for m in range(1, l + 1)
 ]
 
+#: Modes which are summed together by :meth:`TEOBResumSModeGenerator.get_polarizations`.
+SUMMED_MODES: list[Mode] = [Mode(2, 2), Mode(3, 3), Mode(2, 1), Mode(4, 4)]
+
+#: Number of frequency bins, below the start of the requested band, for which
+#: the TEOBResumS output is generated and then discarded; see
+#: :func:`start_integration_early`.
+N_ADDITIONAL_BINS: int = 256
+
+
+def initial_frequency_scaling(modes: Iterable[Mode]) -> float:
+    r"""Factor by which the TEOBResumS ``initial_frequency`` must be lowered
+    in order for all the given modes to have support down to it.
+
+    TEOBResumS interprets ``initial_frequency`` as the *gravitational wave*
+    frequency of the :math:`(2, 2)` mode at the start of the ODE integration,
+    i.e. twice the orbital frequency. Since the :math:`(\ell, m)` mode
+    oscillates at :math:`m` times the orbital frequency, its frequency-domain
+    representation only has support above
+
+    .. math::
+
+        f^{\ell m}_{\text{min}} = \frac{m}{2} f_{\text{initial}}
+
+    and is identically zero below it. Asking for the :math:`(4,4)` mode on a
+    grid starting at :math:`f_{\text{initial}}` therefore yields garbage on the
+    whole lower half of the band. To avoid this we start the integration at
+    :math:`(2 / m_{\text{max}}) f_{\text{initial}}` instead.
+
+    The factor is capped at 1: modes with :math:`m \leq 2` already have support
+    below the requested initial frequency, and lowering it further would only
+    make the integration needlessly long.
+
+    Parameters
+    ----------
+    modes : Iterable[Mode]
+        Modes which will be generated with this parameter dictionary.
+
+    Returns
+    -------
+    float
+        Multiplicative factor to apply to ``initial_frequency``.
+
+    Examples
+    --------
+    >>> initial_frequency_scaling([Mode(2, 2)])
+    1.0
+    >>> initial_frequency_scaling([Mode(2, 1)])
+    1.0
+    >>> initial_frequency_scaling([Mode(3, 3)])
+    0.6666666666666666
+    >>> initial_frequency_scaling([Mode(2, 2), Mode(4, 4)])
+    0.5
+    """
+
+    return min(1.0, 2.0 / max(mode.m for mode in modes))
+
+
+def start_integration_early(
+    par_dict: dict,
+    frequencies: Optional[np.ndarray],
+    modes: Iterable[Mode],
+    n_additional: int = N_ADDITIONAL_BINS,
+) -> slice:
+    r"""Lower the TEOBResumS initial frequency in-place, and return the slice
+    which discards the extra samples thus generated.
+
+    This is a workaround for `a TEOBResumS bug
+    <https://bitbucket.org/teobresums/teobresums/issues/11/phase-gradient-is-incorrect-at-the>`_
+    which makes the phase gradient incorrect in the first few samples after the
+    start of the ODE integration: we start earlier and crop the output, so that
+    the corrupted section falls outside the band we care about.
+
+    The margin is measured in :math:`(2,2)` frequency bins, and it is applied
+    *after* the mode-dependent rescaling of :func:`initial_frequency_scaling`.
+    In the frequency of the :math:`(\ell, m)` mode itself the margin is thus
+    :math:`(m / 2) n_{\text{additional}} \Delta f`, i.e. it corresponds to the
+    same interval of time at the start of the integration for every mode.
+
+    Note that ``n_additional`` alone is *not* enough for modes with
+    :math:`m > 2`: no matter how many bins are added, the mode has no support
+    below :math:`(m/2) f_{\text{initial}}`, which is why the rescaling is
+    needed. This shows up as a jump of hundreds (:math:`(3,3)`) or thousands
+    (:math:`(4,4)`) of radians in the phase residuals at low frequency.
+
+    Parameters
+    ----------
+    par_dict : dict
+        TEOBResumS parameter dictionary, as returned by
+        :meth:`WaveformParameters.teobresums`. Modified in-place: the
+        ``initial_frequency`` is lowered, and if ``frequencies`` is given the
+        ``df`` key is replaced by ``interp_freqs`` and ``freqs``.
+    frequencies : np.ndarray, optional
+        Frequencies (natural units) at which the waveform is required.
+        If ``None``, TEOBResumS's own uniform grid with spacing ``df`` is used.
+    modes : Iterable[Mode]
+        Modes which will be generated with this parameter dictionary.
+    n_additional : int
+        Number of :math:`(2,2)` frequency bins of margin.
+
+    Returns
+    -------
+    slice
+        Slice to be applied to the TEOBResumS output arrays in order to
+        restrict them to the originally requested frequency band.
+    """
+
+    f_0 = par_dict["initial_frequency"]
+    delta_f = par_dict["df"]
+
+    new_f0 = f_0 * initial_frequency_scaling(modes) - delta_f * n_additional
+    par_dict["initial_frequency"] = new_f0
+
+    if frequencies is not None:
+        par_dict["freqs"] = list(
+            np.insert(
+                frequencies,
+                0,
+                np.arange(f_0 - delta_f * n_additional, f_0, step=delta_f),
+            )
+        )
+        par_dict.pop("df")
+        par_dict["interp_freqs"] = "yes"
+        return slice(-len(frequencies), None)
+
+    # TEOBResumS returns a uniform grid starting at ``initial_frequency``,
+    # so the number of samples to discard grows when it is rescaled.
+    return slice(int(round((f_0 - new_f0) / delta_f)), None)
+
+
 # TODO fix these, but it's not so bad now -
 # these are only wrong by a constant scaling
 
@@ -60,7 +189,7 @@ class ModeGenerator(WaveformGenerator):
 
     @property
     def mode(self) -> Optional[Mode]:
-        """Currently selected :math:`(\ell, m)` mode."""
+        """Currently selected :math:`(\\ell, m)` mode."""
         return self._mode
 
     @mode.setter
@@ -115,7 +244,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
     eobrun_callable : Callable[[dict], tuple]
         Python wrapper around TEOBResumS (e.g. ``EOBRunPy``).
     mode : Mode
-        Spherical-harmonic mode :math:`(\ell, m)` to generate.
+        Spherical-harmonic mode :math:`(\\ell, m)` to generate.
     """
 
     supported_modes = EOB_SUPPORTED_MODES
@@ -173,32 +302,10 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
 
         par_dict: dict = params.teobresums()
 
-        n_additional = 256
-        f_0 = par_dict["initial_frequency"]
-        delta_f = par_dict["df"]
-        new_f0 = f_0 - delta_f * n_additional
-        par_dict["initial_frequency"] = new_f0
-
-        to_slice = (
-            slice(-len(frequencies), None)
-            if frequencies is not None
-            else slice(n_additional, None)
-        )
-
-        if frequencies is not None:
-            frequencies_list = list(
-                np.insert(
-                    frequencies,
-                    0,
-                    np.arange(f_0 - delta_f * n_additional, f_0, step=delta_f),
-                )
-            )
-            par_dict.pop("df")
-            par_dict["interp_freqs"] = "yes"
-            par_dict["freqs"] = frequencies_list
+        to_slice = start_integration_early(par_dict, frequencies, SUMMED_MODES)
 
         par_dict["arg_out"] = "yes"
-        par_dict["use_mode_lm"] = [1, 4, 0, 8]  # (22, 33, 21, 44) summed
+        par_dict["use_mode_lm"] = [mode_to_k(mode) for mode in SUMMED_MODES]
         par_dict["inclination"] = np.pi / 3
 
         # print(without_keys(par_dict, {"freqs"}))
@@ -250,27 +357,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
 
         par_dict: dict = params.teobresums()
 
-        n_additional = 256
-
-        f_0 = par_dict["initial_frequency"]
-        delta_f = par_dict["df"]
-        par_dict["initial_frequency"] = f_0 - delta_f * n_additional
-        to_slice = (
-            slice(-len(frequencies), None)
-            if frequencies is not None
-            else slice(n_additional, None)
-        )
-        if frequencies is not None:
-            frequencies_list = list(
-                np.insert(
-                    frequencies,
-                    0,
-                    np.arange(f_0 - delta_f * n_additional, f_0, step=delta_f),
-                )
-            )
-            par_dict.pop("df")
-            par_dict["interp_freqs"] = "yes"
-            par_dict["freqs"] = frequencies_list
+        to_slice = start_integration_early(par_dict, frequencies, [self.mode])
 
         par_dict["arg_out"] = "yes"
         par_dict["use_mode_lm"] = [mode_to_k(self.mode)]
@@ -285,6 +372,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         phase = hflm[str(mode_to_k(self.mode))][1][to_slice]
         amplitude = hflm[str(mode_to_k(self.mode))][0][to_slice] * params.eta
         phase = self._align_mode_phase_to_merger(phase, f_spa, dyn['tc'])
+        phase = - (phase - phase[0])
 
         return (f_spa, amplitude, phase)
 
@@ -297,30 +385,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
 
         par_dict: dict = params.teobresums()
 
-        n_additional = 256
-
-        f_0 = par_dict["initial_frequency"]  # TODO: change it to par_dict["initial_frequency"]
-        delta_f = par_dict["df"]
-        new_f0 = f_0 - delta_f * n_additional
-        par_dict["initial_frequency"] = new_f0
-
-        to_slice = (
-            slice(-len(frequencies), None)
-            if frequencies is not None
-            else slice(n_additional, None)
-        )
-
-        if frequencies is not None:
-            frequencies_list = list(
-                np.insert(
-                    frequencies,
-                    0,
-                    np.arange(f_0 - delta_f * n_additional, f_0, step=delta_f),
-                )
-            )
-            par_dict.pop("df")
-            par_dict["interp_freqs"] = "yes"
-            par_dict["freqs"] = frequencies_list
+        to_slice = start_integration_early(par_dict, frequencies, [self.mode])
 
         par_dict["arg_out"] = "yes"
         par_dict["use_mode_lm"] = [mode_to_k(self.mode)]
@@ -341,6 +406,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         amplitude = hflm[str(mode_to_k(self.mode))][0][to_slice] * params.eta
         phase = hflm[str(mode_to_k(self.mode))][1][to_slice]
         phase = self._align_mode_phase_to_merger(phase, f_spa, dyn['tc'])
+        phase = - (phase - phase[0])
 
         return (f_spa, amplitude, phase)
 
@@ -381,12 +447,12 @@ def spherical_harmonic_spin_2(
 def spherical_harmonic_spin_2_conjugate(  # TODO: change it's name
     mode: Mode, inclination: float, azimuth: float
 ) -> complex:
-    r"""Complex conjugate partner of :math:`^{-2}Y_{\ell m}` via :math:`(\ell, -m)`.
+    r"""Complex conjugate partner of :math:`^{-2}Y_{\ell m}` via :math:`(\\ell, -m)`.
 
     Parameters
     ----------
     mode : Mode
-        Spherical-harmonic indices :math:`(\ell, m)`.
+        Spherical-harmonic indices :math:`(\\ell, m)`.
     inclination : float
         Inclination :math:`\iota`.
     azimuth : float
@@ -412,7 +478,7 @@ def wigner_d_function_spin_2(mode: Mode, inclination: float) -> complex:
     Parameters
     ----------
     mode : Mode
-        Spherical-harmonic indices :math:`(\ell, m)`.
+        Spherical-harmonic indices :math:`(\\ell, m)`.
     inclination : float
         Inclination :math:`\iota`.
 
@@ -462,7 +528,7 @@ def mode_to_k(mode: Mode) -> int:
     Parameters
     ----------
     mode : Mode
-        Spherical-harmonic indices :math:`(\ell, m)`.
+        Spherical-harmonic indices :math:`(\\ell, m)`.
 
     Returns
     -------
