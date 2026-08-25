@@ -447,7 +447,14 @@ class Residuals(SavableData):
                 phase residual is zero, and so is the one corresponding
                 to this fraction of the frequencies.
                 Defaults to 0.2.
-                
+
+                Note that this is a fraction of the *number of sample
+                points*, not of the frequency range, so the frequency it
+                corresponds to depends on how the phase is sampled. This
+                is by design: the resulting time shift is used to flatten
+                residuals on the same grid it was computed on, so the two
+                stay consistent as long as they use the same sampling.
+
         Returns
         -------
         timeshifts: np.ndarray
@@ -455,21 +462,45 @@ class Residuals(SavableData):
                 
         """
 
-        number_of_points = self.phase_residuals.shape[1]
-
-        index = int(first_section_flat * number_of_points)
-        slopes = np.empty(len(self.phase_residuals))
+        timeshifts = self.phase_timeshifts(frequencies, first_section_flat)
 
         for i, phase_arr in enumerate(self.phase_residuals):
-            slopes[i] = (phase_arr[index] - phase_arr[0]) / (
-                frequencies[index] - frequencies[0]
+            self.phase_residuals[i] = phase_arr - (
+                2 * np.pi * timeshifts[i] * (frequencies - frequencies[0])
             )
-            
-            self.phase_residuals[i] = (
-                phase_arr - slopes[i] * (frequencies - frequencies[0])
-            )
-        
-        return slopes / (2 * np.pi)
+
+        return timeshifts
+
+    def phase_timeshifts(
+        self, frequencies: np.ndarray, first_section_flat: float = 0.2
+    ) -> np.ndarray:
+        """Time shifts implied by the linear term :meth:`flatten_phase` removes.
+
+        Unlike :meth:`flatten_phase`, this does not modify the residuals, so
+        it can be used on a set of residuals which still needs to be used in
+        its raw form afterwards.
+
+        Parameters
+        ----------
+        frequencies: np.ndarray
+                Frequencies to which the phase points correspond.
+        first_section_flat: float
+                See :meth:`flatten_phase`. Defaults to 0.2.
+
+        Returns
+        -------
+        timeshifts: np.ndarray
+                Timeshifts, in seconds if the frequencies given are in Hz.
+        """
+
+        index = int(first_section_flat * self.phase_residuals.shape[1])
+
+        phase_difference = np.asarray(
+            self.phase_residuals[:, index] - self.phase_residuals[:, 0],
+            dtype=np.float64,
+        )
+
+        return phase_difference / (frequencies[index] - frequencies[0]) / (2 * np.pi)
 
 @dataclass
 class PrincipalComponentData(SavableData):

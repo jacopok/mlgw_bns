@@ -589,6 +589,26 @@ class Model:
             training_pca_dataset_size, training_nn_dataset_size
         )
 
+        if training_nn_dataset_size is not None:
+            # A single dataset serves both the time-shift predictor and the
+            # network: the former only needs one number per waveform, read
+            # off the phase residuals which the latter is trained on anyway.
+            #
+            # The residuals are generated at the downsampled frequencies:
+            # the time shift is a chord of the phase residual, so the
+            # full-resolution grid buys nothing here while costing a factor
+            # `waveform_length / (amp_length + phi_length)` --- of order a
+            # thousand --- in memory.
+            logging.info("Generating the training dataset")
+            freq_downsampled, parameters, residuals = (
+                self.dataset.generate_residuals(
+                    training_nn_dataset_size,
+                    self.downsampling_indices,
+                    flatten_phase=False,
+                )
+            )
+            frequencies_hz = self.dataset.natural_units_to_hz(freq_downsampled)
+
         # LEARN Δt(θ), needed below to remove the linear trend
         # from the phase residuals before PCA and NN training.
         # `TimeshiftsNN` (RFF + Ridge) rather than `TimeshiftsGPR`: the
@@ -600,16 +620,16 @@ class Model:
             self.timeshifts_predictor = timeshifts_predictor
         elif training_nn_dataset_size is not None:
             logging.info("Training the time-shifts predictor")
-            _, parameters, residuals_timeshifts = self.dataset.generate_residuals(
-                training_nn_dataset_size, flatten_phase=False
-            )
 
-            self.training_timeshifts_data = residuals_timeshifts.flatten_phase(frequencies=self.dataset.frequencies_hz)
+            # `phase_timeshifts` rather than `flatten_phase`, since the
+            # residuals are needed in their raw form further down.
+            self.training_timeshifts_data = residuals.phase_timeshifts(
+                frequencies=frequencies_hz
+            )
             self.timeshifts_predictor = TimeshiftsNN(
                 training_params=parameters.parameter_array,
                 training_timeshifts=self.training_timeshifts_data
             ).fit()
-            self.training_parameters = parameters
         else:
             assert self.timeshifts_predictor is not None
 
@@ -627,15 +647,11 @@ class Model:
             assert self.pca_data is not None
 
         if training_nn_dataset_size is not None:
-            logging.info("Generating the training dataset for the network")
-            freq_downsampled, parameters, residuals = self.dataset.generate_residuals(
-                training_nn_dataset_size, self.downsampling_indices, flatten_phase=False
-            )
-
+            logging.info("Removing the linear trend from the training residuals")
             residuals.phase_residuals = remove_linear_trend(
                 parameters=parameters,
                 phi_diff=residuals.phase_residuals,
-                frq=self.dataset.natural_units_to_hz(freq_downsampled),
+                frq=frequencies_hz,
                 timeshifts_predictor=self.timeshifts_predictor,
             )
 
