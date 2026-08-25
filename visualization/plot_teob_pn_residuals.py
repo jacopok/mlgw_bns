@@ -1,0 +1,77 @@
+"""Generate many TEOBResumS/PN training residuals for the (2,1), (2,2),
+(3,3), (4,4) modes, with parameters drawn from the same distribution used
+to build the training dataset for a new model, and plot the amplitude and
+phase residuals for all of them.
+
+These are exactly the quantities a per-mode `Model` is trained to
+reproduce: `amplitude_residual = log(|A_eob| / |A_pn|)` and
+`phase_residual = phi_eob - phi_pn`, as computed by
+`WaveformGenerator.generate_residuals`.
+
+Run with: python visualization/plot_teob_pn_residuals.py
+"""
+
+import matplotlib
+import numpy as np
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+
+from mlgw_bns.dataset_generation import Dataset
+from mlgw_bns.higher_order_modes import Mode, teob_mode_generator_factory
+
+MODES = [Mode(2, 1), Mode(2, 2), Mode(3, 3), Mode(4, 4)]
+N_WAVEFORMS = 100
+
+dataset = Dataset(initial_frequency_hz=20.0, srate_hz=4096.0)
+
+# Same distribution used when generating the training dataset for a new
+# Model: uniform draws over `dataset.parameter_ranges`.
+parameter_generator = dataset.make_parameter_generator()
+params_list = [next(parameter_generator) for _ in range(N_WAVEFORMS)]
+
+f_hz = np.arange(20.0, 2048.0, 0.1)
+f_natural = dataset.hz_to_natural_units(f_hz)
+
+fig, axes = plt.subplots(2, len(MODES), figsize=(16, 6), sharex=True)
+
+cmap = matplotlib.colormaps["viridis"]
+q_min, q_max = dataset.parameter_ranges.q_range
+colors = [cmap((p.mass_ratio - q_min) / (q_max - q_min)) for p in params_list]
+
+for i, mode in enumerate(MODES):
+    generator = teob_mode_generator_factory(mode)
+
+    for params, color in tqdm(zip(params_list, colors)):
+        # `generate_residuals` returns None when the EOB amplitude is
+        # discarded (e.g. amp <= 0 somewhere, for the (2,1)/(3,3) modes).
+        residuals = generator.generate_residuals(params, f_natural)
+        if residuals is None:
+            continue
+        amplitude_residual, phase_residual = residuals
+
+        axes[0, i].plot(f_natural, amplitude_residual, color=color, alpha=0.5, linewidth=0.8)
+        axes[1, i].plot(f_natural, phase_residual, color=color, alpha=0.5, linewidth=0.8)
+
+    axes[0, i].set_title(rf"$(\ell, m) = ({mode.l}, {mode.m})$")
+    axes[1, i].set_xlabel(r"$Mf$")
+
+axes[0, 0].set_ylabel(r"$\log(A_{\rm EOB} / A_{\rm PN})$")
+axes[1, 0].set_ylabel(r"$\phi_{\rm EOB} - \phi_{\rm PN}$ [rad]")
+
+for ax_row in axes:
+    for ax in ax_row:
+        ax.grid(True)
+        ax.set_xscale("log")
+
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=q_min, vmax=q_max))
+fig.colorbar(sm, ax=axes, label="Mass ratio $q$", pad=0.01)
+
+fig.suptitle(
+    f"TEOBResumS/PN training residuals, {N_WAVEFORMS} waveforms drawn "
+    "from the training parameter distribution"
+)
+
+outfile = "teob_pn_residuals_21_22_33_44.png"
+fig.savefig(outfile, dpi=150)
+print(f"Saved plot to {outfile}")
+plt.show()
