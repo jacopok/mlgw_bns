@@ -1420,7 +1420,7 @@ dev = [
     { name = "pytest-profiling", specifier = ">=1.8.1" },
     { name = "scalene", specifier = ">=1.5.51" },
     { name = "snakeviz", specifier = ">=2.2.2" },
-    { name = "teobresums", specifier = ">=4.4.1" },
+    { name = "teobresums", directory = "../../teobresums/Python" },
     { name = "tox", specifier = ">=4.23.2" },
     { name = "tox-gh-actions", specifier = ">=3.2.0" },
     { name = "virtualenv", specifier = ">=20.28.1" },
@@ -2862,8 +2862,7 @@ wheels = [
 [[package]]
 name = "teobresums"
 version = "4.4.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/32/ab/9de90fdee4970db80febdacc5839a9a77ccb410d8b61f5c7226288a851e7/teobresums-4.4.1.tar.gz", hash = "sha256:e6359fa6eeb0598f2aace272c6ce22932c980db0cdf90061907801d32c22981c", size = 219438, upload-time = "2023-11-15T22:30:24.104Z" }
+source = { directory = "../../teobresums/Python" }
 
 [[package]]
 name = "textual"

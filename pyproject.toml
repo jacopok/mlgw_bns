@@ -86,3 +86,6 @@ packages = ["mlgw_bns"]
  
 [tool.isort]
 profile = "black"
+
+[tool.uv.sources]
+teobresums = { path = "../../teobresums/Python" }

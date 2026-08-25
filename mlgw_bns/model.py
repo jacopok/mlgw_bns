@@ -532,6 +532,7 @@ class Model:
         training_downsampling_dataset_size: Optional[int] = 64,
         training_pca_dataset_size: Optional[int] = 256,
         training_nn_dataset_size: Optional[int] = 256,
+        timeshifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None,
     ) -> None:
         """Generate a new model from scratch.
 
@@ -553,6 +554,11 @@ class Model:
                 By default 256.
         training_nn_dataset_size : int, optional
                 By default 256.
+        timeshifts_predictor : TimeshiftsGPR or TimeshiftsNN, optional
+                If given, used as :attr:`timeshifts_predictor` instead of
+                fitting a new one from this model's own residuals. Used by
+                :class:`~mlgw_bns.modes_model.ModesModel` to share a single
+                predictor, trained on the (2,2) mode, across every mode.
 
         """
 
@@ -563,15 +569,22 @@ class Model:
         else:
             assert self.downsampling_indices is not None
 
-        # TRAIN GPR TO LEARN Δt(θ), needed below to remove the linear trend
+        # LEARN Δt(θ), needed below to remove the linear trend
         # from the phase residuals before PCA and NN training.
-        if training_nn_dataset_size is not None:
+        # `TimeshiftsNN` (RFF + Ridge) rather than `TimeshiftsGPR`: the
+        # latter's `GaussianProcessRegressor` defaults to
+        # `normalize_y=False`, so with a zero-mean prior and a
+        # unit-amplitude RBF kernel it collapses to predicting 0 for
+        # timeshift targets whose magnitude is far from unity.
+        if timeshifts_predictor is not None:
+            self.timeshifts_predictor = timeshifts_predictor
+        elif training_nn_dataset_size is not None:
             _, parameters, residuals_timeshifts = self.dataset.generate_residuals(
                 training_nn_dataset_size, flatten_phase=False
             )
 
             self.training_timeshifts_data = residuals_timeshifts.flatten_phase(frequencies=self.dataset.frequencies_hz)
-            self.timeshifts_predictor = TimeshiftsGPR(
+            self.timeshifts_predictor = TimeshiftsNN(
                 training_params=parameters.parameter_array,
                 training_timeshifts=self.training_timeshifts_data
             ).fit()
