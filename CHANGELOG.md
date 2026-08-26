@@ -16,9 +16,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scripts under `visualization/` to validate a trained model and the time-shift
     predictor, and to inspect the TEOBResumS modes, their PN residuals and the
     parameters discarded during training.
+- Precessing waveforms: `mlgw_bns.precessing_model.PrecessingModel` twists the
+    surrogate's co-precessing multipoles into the inertial frame, along the
+    Euler angles obtained by integrating the PN spin-precession dynamics
+    (`mlgw_bns.twist_waveform`). The twist is done in the frequency domain, with
+    each multipole's angles looked up at its own stationary-phase orbital
+    frequency. `check_aligned_spin_limit` asserts that it reduces to
+    `Model.predict` when the in-plane spins vanish.
+- `Model.coprecessing_modes_dict`, returning the bare multipoles
+    `A exp(i phi) / eta` without any sky projection, which is what the twist
+    needs. The surrogate, post-Newtonian and EOB sources of amplitude and phase
+    now all go through one internal helper rather than three copies of the same
+    loop.
+- `visualization/plot_twisted_waveforms.py`, which checks the twist against its
+    analytic limits and plots the PN angles and the resulting polarizations, and
+    `visualization/precessing_mismatches.py`, which computes precessing-waveform
+    mismatches over random source positions and inclinations.
 
 ### Changed
 
+- The Wigner d-function and the spin-weighted spherical harmonics now live only
+    in `mlgw_bns.special_func`, vectorized over the angle;
+    `higher_order_modes.wigner_d_function_spin_2`, the named harmonics in
+    `mlgw_bns.spherical_harmonics` and `mlgw_bns.twist_waveform` all delegate to
+    it instead of carrying their own copy.
 - **Breaking**: `Model` is now the multi-mode surrogate, holding one `ModeModel`
     per spherical-harmonic mode. What used to be called `Model` --- the single-mode
     workhorse --- is now `ModeModel`, and lives in `mlgw_bns.mode_model`.

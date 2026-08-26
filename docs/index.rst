@@ -48,6 +48,7 @@ Welcome to ``mlgw_bns``'s documentation!
    package_reference/principal_component_analysis
    package_reference/neural_network
    package_reference/hyperparameter_optimization
+   package_reference/precessing_model
    package_reference/model_validation
    package_reference/fixed_dataset_training
    
