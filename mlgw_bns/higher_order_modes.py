@@ -259,6 +259,20 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         self.eobrun_callable = eobrun_callable
 
     @staticmethod
+    def _merger_time(dyn: Any, htlm: Any) -> float:
+        """Merger time of a TEOBResumS run, in natural units.
+
+        Recent TEOBResumS versions put ``EOBPars->tc`` straight into the
+        dynamics dictionary. Releases up to and including the 4.4.1 sdist
+        on PyPI do not, so fall back on the last sample of the shared
+        time-domain grid, which is the same quantity in the FD case
+        (``EOBPars->tc`` is set to ``hlm.time[-1]`` there).
+        """
+        if "tc" in dyn:
+            return float(dyn["tc"])
+        return float(np.asarray(htlm["t"])[-1])
+
+    @staticmethod
     def _align_mode_phase_to_merger(
         phase: np.ndarray, frequencies: np.ndarray, tc: float
     ) -> np.ndarray:
@@ -271,9 +285,6 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         referenced to the start of the ODE integration. For a waveform
         starting near 20 Hz this offset is on the order of :math:`10^7 M`,
         which would otherwise show up as a huge secular term in the phase.
-        We reproduce the same shift here using the merger time exposed via
-        the time-domain ``htlm`` output (``EOBPars->tc`` in the TEOBResumS
-        source is exactly ``hlm.time[-1]`` in the FD case).
 
         Parameters
         ----------
@@ -281,9 +292,8 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
             Raw ``hflm`` phase.
         frequencies : np.ndarray
             Frequencies (natural units) matching ``phase``.
-        htlm : dict
-            Time-domain mode dictionary returned by ``eobrun_callable``
-            with ``arg_out="yes"``; only the shared ``"t"`` array is used.
+        tc : float
+            Merger time, as returned by :meth:`_merger_time`.
 
         Returns
         -------
@@ -371,7 +381,9 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         # _, phase = phase_unwrapping(hp)
         phase = hflm[str(mode_to_k(self.mode))][1][to_slice]
         amplitude = hflm[str(mode_to_k(self.mode))][0][to_slice] * params.eta
-        phase = self._align_mode_phase_to_merger(phase, f_spa, dyn['tc'])
+        phase = self._align_mode_phase_to_merger(
+            phase, f_spa, self._merger_time(dyn, htlm)
+        )
         phase = - (phase - phase[0])
 
         return (f_spa, amplitude, phase)
@@ -405,7 +417,9 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         # _, phase = phase_unwrapping(hp)
         amplitude = hflm[str(mode_to_k(self.mode))][0][to_slice] * params.eta
         phase = hflm[str(mode_to_k(self.mode))][1][to_slice]
-        phase = self._align_mode_phase_to_merger(phase, f_spa, dyn['tc'])
+        phase = self._align_mode_phase_to_merger(
+            phase, f_spa, self._merger_time(dyn, htlm)
+        )
         phase = - (phase - phase[0])
 
         return (f_spa, amplitude, phase)

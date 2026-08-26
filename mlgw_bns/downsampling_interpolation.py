@@ -211,7 +211,7 @@ class DownsamplingTraining(ABC):
         Hz. Holding the endpoint keeps the result bounded and obviously
         wrong-looking rather than catastrophically wrong-looking; callers
         that need a genuine continuation outside the band should use
-        :meth:`Model.predict_amplitude_phase`, which extends with a
+        :meth:`ModeModel.predict_amplitude_phase`, which extends with a
         post-Newtonian waveform.
 
         """

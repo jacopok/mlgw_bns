@@ -6,17 +6,17 @@ repos:
         -   id: check-added-large-files
             args: ['--maxkb=10000']
     -   repo: local
-        hooks: 
-        - id: system
+        hooks:
+        - id: black
           name: Black
-          entry: poetry run black 
+          entry: uv run black
           types: [python]
           language: system
 
     -   repo: local
         hooks:
-        - id: system
+        - id: mypy
           name: MyPy
-          entry: poetry run mypy
+          entry: uv run mypy
           types: [python]
           language: system

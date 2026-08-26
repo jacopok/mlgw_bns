@@ -6,6 +6,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Higher-order-mode support: the model shipped with the package now reconstructs
+    the (2,2), (2,1), (3,3) and (4,4) modes and sums them into the observer-frame
+    polarizations.
+
+### Changed
+
+- **Breaking**: `Model` is now the multi-mode surrogate, holding one `ModeModel`
+    per spherical-harmonic mode. What used to be called `Model` --- the single-mode
+    workhorse --- is now `ModeModel`, and lives in `mlgw_bns.mode_model`.
+    The class previously called `ModesModel` is now `Model`, in `mlgw_bns.model`.
+    Its `models` mapping is now called `mode_models`.
+- **Breaking**: `Model.predict` returns the two polarizations `(hp, hc)`,
+    like `ModeModel.predict`, instead of `(h, hp, hc)` where the first element
+    was the redundant combination `hp - 1j * hc`.
+- The `time_shifts` argument of `Model.predict` and `Model.predict_modes_dict`
+    is now optional: if it is not given, the shifts aligning the mode mergers
+    are predicted from the source parameters with `Model.time_shifts_predictor`.
+- `Model.default_for_testing()` loads the higher-order-mode model
+    (`mlgw_bns/data/default_hom`) rather than the old single-mode checkpoints.
+- TEOBResumS is now taken from PyPI rather than from a checkout expected to sit
+    next to this repository.
+- The project is built and developed with [uv](https://docs.astral.sh/uv/)
+    instead of poetry.
+
+### Fixed
+
+- `Model.predict` did not rescale the mode time shifts, which are stored in
+    units of the reference total mass of the dataset, to the total mass being
+    requested, while `Model.predict_modes_dict` did: the two therefore
+    disagreed for any total mass other than the reference one.
+
+### Removed
+
+- **Breaking**: the `default` and `fast` single-mode pretrained checkpoints, and
+    with them `ModeModel.default_for_testing`.
+
+
 ## [0.12.1] - 2022-11-01
 
 ### Fixed

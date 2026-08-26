@@ -16,14 +16,14 @@ from optuna.visualization import (
 import plotly.graph_objects as go
 
 from .data_management import Residuals
-from .model import Hyperparameters, Model
+from .mode_model import Hyperparameters, ModeModel
 from .model_validation import ValidateModel
 from .neural_network import best_trial_under_n
 
 
 class HyperparameterOptimization:
     """Manager for the optimization of the hyperparameters
-    corresponding to a certain :class:`Model`.
+    corresponding to a certain :class:`ModeModel`.
 
     The optimization performed is over two variables:
     the reconstruction accuracy and the training time.
@@ -49,7 +49,7 @@ class HyperparameterOptimization:
 
     Parameters
     ----------
-    model: Model
+    model: ModeModel
             Reference model for the optimization.
     optimization_seed: int, optional
             Seed for the random number to be used in the optimization.
@@ -89,7 +89,7 @@ class HyperparameterOptimization:
 
     def __init__(
         self,
-        model: Model,
+        model: ModeModel,
         optimization_seed: int = 42,
         hyper_validation_fraction: float = 0.01,
         study: Optional[optuna.Study] = None,

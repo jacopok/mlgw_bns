@@ -40,6 +40,7 @@ Welcome to ``mlgw_bns``'s documentation!
    :name: package_reference
    
    package_reference/model
+   package_reference/mode_model
    package_reference/dataset_generation
    package_reference/multibanding.rst
    package_reference/downsampling_interpolation

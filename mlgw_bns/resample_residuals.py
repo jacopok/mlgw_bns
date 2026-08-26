@@ -3,15 +3,14 @@ import logging
 import numpy as np
 from numba import njit  # type: ignore
 from scipy.spatial import distance
-import matplotlib.pyplot as plt
 
 
 from .dataset_generation import Dataset, FDWaveforms, ParameterSet
 from .downsampling_interpolation import DownsamplingIndices, DownsamplingTraining
-from .model import Model, ParametersWithExtrinsic, compute_polarizations
+from .mode_model import ModeModel, ParametersWithExtrinsic, compute_polarizations
 
 
-class ModelPredictingInverted(Model):
+class ModelPredictingInverted(ModeModel):
     def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
         """Calculate the waveforms in the plus and cross polarizations,
         accounting for extrinsic parameters
@@ -205,6 +204,8 @@ def plot_signals_with_alignment(a, b, pad_function = None):
         len(correlate_result),
     )
 
+    import matplotlib.pyplot as plt
+
     fig, axes = plt.subplots(5, 1, figsize=(10, 18))
     
     axes[0].plot(a, alpha=0.7, label="a", marker="o")
@@ -291,6 +292,8 @@ def compare_and_plot_signals_with_alignment(a, b, bshift_method = 'mean_fill', p
     if bshift_method is 'all':
         num_charts = 5
     
+    import matplotlib.pyplot as plt
+
     fig, axes = plt.subplots(num_charts, 1, figsize=(10, num_charts * chart_height))
     
     # Turn on markers only if < 50 points

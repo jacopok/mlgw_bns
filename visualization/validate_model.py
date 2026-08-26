@@ -1,4 +1,4 @@
-r"""Validate a trained :class:`ModesModel` (as produced by
+r"""Validate a trained :class:`Model` (as produced by
 ``make_default_dataset.py``), both mode-by-mode and for the full
 multi-mode waveform reconstruction.
 
@@ -19,17 +19,17 @@ Three things are produced:
    :math:`10^{-6}` --- without the weight beside it, that reads as the
    worst thing in the model rather than the least important.
 3. **Full-waveform mismatches**, comparing the multi-mode reconstruction
-   (:meth:`ModesModel.predict_modes_dict`) against the EOB ground truth
-   (:meth:`ModesModel.get_teob_modes_dict`), marginalising over both a
+   (:meth:`Model.predict_modes_dict`) against the EOB ground truth
+   (:meth:`Model.get_teob_modes_dict`), marginalising over both a
    time shift and a reference azimuthal phase.
 
 The one place this deviates from :mod:`mlgw_bns.model_validation` is the
 time-shift predictor: :class:`ValidateModel` reaches for each individual
-``Model.timeshifts_predictor``, whereas a :class:`ModesModel` trains a
+``ModeModel.timeshifts_predictor``, whereas a :class:`Model` trains a
 single shared predictor from the (2,2) mode and applies it to every mode.
 :class:`SharedTimeshiftValidateModel` below overrides just that lookup.
 
-Run with: python visualization/validate_modes_model.py
+Run with: python visualization/validate_model.py
 """
 
 import logging
@@ -41,9 +41,9 @@ import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 
 from mlgw_bns.higher_order_modes import Mode
-from mlgw_bns.model import ParametersWithExtrinsic
+from mlgw_bns.mode_model import ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
-from mlgw_bns.modes_model import ModesModel
+from mlgw_bns.model import Model
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -64,19 +64,19 @@ TOTAL_MASS = 2.8
 
 
 class SharedTimeshiftValidateModel(ValidateModel):
-    """:class:`ValidateModel` using a :class:`ModesModel`'s shared predictor.
+    """:class:`ValidateModel` using a :class:`Model`'s shared predictor.
 
-    A :class:`ModesModel` trains one time-shift predictor (from the (2,2)
+    A :class:`Model` trains one time-shift predictor (from the (2,2)
     mode) and reuses it for every mode, so validating a single mode must
     use that shared predictor rather than the per-mode one that
     :meth:`ValidateModel.time_shifts_predictor` would return.
 
     Parameters
     ----------
-    model : Model
+    model : ModeModel
         The per-mode model to validate.
     shared_predictor : TimeshiftsNN or TimeshiftsGPR
-        The owning :class:`ModesModel`'s ``time_shifts_predictor``.
+        The owning :class:`Model`'s ``time_shifts_predictor``.
     **kwargs
         Forwarded to :class:`ValidateModel`.
     """
@@ -88,15 +88,15 @@ class SharedTimeshiftValidateModel(ValidateModel):
     def time_shifts_predictor(self):
         if self._shared_predictor is None:
             raise ValueError(
-                "The ModesModel has no shared time-shift predictor; "
+                "The Model has no shared time-shift predictor; "
                 "train or load one before validating."
             )
         return self._shared_predictor
 
 
-def load_model() -> ModesModel:
-    """Load the trained :class:`ModesModel` from disk."""
-    model = ModesModel(
+def load_model() -> Model:
+    """Load the trained :class:`Model` from disk."""
+    model = Model(
         modes=MODES,
         filename=MODEL_FILENAME,
     )
@@ -158,7 +158,7 @@ def mlgw_eob_residuals(validator: ValidateModel, n_waveforms: int):
     )
 
 
-def plot_residuals(modes_model: ModesModel) -> dict:
+def plot_residuals(model: Model) -> dict:
     """Plot the per-mode mlgw-EOB residuals; return them keyed by mode.
 
     Three rows: the amplitude residual, the raw phase residual, and the
@@ -173,13 +173,13 @@ def plot_residuals(modes_model: ModesModel) -> dict:
     )
 
     cmap = matplotlib.colormaps["viridis"]
-    q_min, q_max = modes_model.dataset.parameter_ranges.q_range
+    q_min, q_max = model.dataset.parameter_ranges.q_range
 
     residuals_by_mode = {}
 
     for i, mode in enumerate(MODES):
         validator = SharedTimeshiftValidateModel(
-            modes_model.models[mode], modes_model.time_shifts_predictor
+            model.mode_models[mode], model.time_shifts_predictor
         )
         amp_f, phi_f, amp_res, phi_res, param_set = mlgw_eob_residuals(
             validator, N_RESIDUAL_WAVEFORMS
@@ -228,13 +228,13 @@ def plot_residuals(modes_model: ModesModel) -> dict:
     return residuals_by_mode
 
 
-def per_mode_mismatches(modes_model: ModesModel) -> dict:
+def per_mode_mismatches(model: Model) -> dict:
     """Compute the single-mode mismatch distribution for every mode."""
     mismatches_by_mode = {}
 
     for mode in MODES:
         validator = SharedTimeshiftValidateModel(
-            modes_model.models[mode], modes_model.time_shifts_predictor
+            model.mode_models[mode], model.time_shifts_predictor
         )
         mismatches = validator.validation_mismatches(
             N_MISMATCH_WAVEFORMS, seed=SEED, include_time_shifts=True
@@ -248,11 +248,11 @@ def per_mode_mismatches(modes_model: ModesModel) -> dict:
     return mismatches_by_mode
 
 
-def full_waveform_mismatches(modes_model: ModesModel) -> tuple:
+def full_waveform_mismatches(model: Model) -> tuple:
     r"""Compute the multi-mode full-waveform mismatch distribution.
 
-    Compares :meth:`ModesModel.predict_modes_dict` against the EOB ground
-    truth from :meth:`ModesModel.get_teob_modes_dict`, restricted to the
+    Compares :meth:`Model.predict_modes_dict` against the EOB ground
+    truth from :meth:`Model.get_teob_modes_dict`, restricted to the
     band where the EOB waveform is actually defined (it is zero-padded
     below its starting frequency).
 
@@ -268,11 +268,11 @@ def full_waveform_mismatches(modes_model: ModesModel) -> tuple:
     power_fractions : dict[Mode, np.ndarray]
         Per-mode power fractions, one entry per waveform.
     """
-    reference_model = modes_model.models[Mode(2, 2)]
+    reference_model = model.mode_models[Mode(2, 2)]
     validator = ValidateModel(reference_model)
     frequencies = validator.frequencies
 
-    parameter_generator = modes_model.dataset.make_parameter_generator(SEED)
+    parameter_generator = model.dataset.make_parameter_generator(SEED)
 
     def inner_product(a: np.ndarray, mask: np.ndarray) -> float:
         """PSD-weighted power of a complex waveform over the support."""
@@ -300,14 +300,8 @@ def full_waveform_mismatches(modes_model: ModesModel) -> tuple:
             total_mass=TOTAL_MASS,
         )
 
-        time_shift = modes_model.time_shifts_predictor.predict(
-            [intrinsic.array]
-        )[0]
-
-        predicted = modes_model.predict_modes_dict(
-            frequencies, params, time_shifts=time_shift
-        )
-        true = modes_model.get_teob_modes_dict(frequencies, params)
+        predicted = model.predict_modes_dict(frequencies, params)
+        true = model.get_teob_modes_dict(frequencies, params)
 
         # The EOB modes are zero below the frequency where the waveform
         # actually starts; restrict to the common support.
@@ -431,16 +425,16 @@ def plot_mismatches(
 
 
 if __name__ == "__main__":
-    modes_model = load_model()
+    model = load_model()
 
     print("Computing mlgw-EOB residuals...")
-    plot_residuals(modes_model)
+    plot_residuals(model)
 
     print("Computing per-mode mismatches...")
-    mismatches_by_mode = per_mode_mismatches(modes_model)
+    mismatches_by_mode = per_mode_mismatches(model)
 
     print("Computing full-waveform mismatches and per-mode power shares...")
-    full_mismatches, power_fractions = full_waveform_mismatches(modes_model)
+    full_mismatches, power_fractions = full_waveform_mismatches(model)
 
     report_weighted_mismatches(mismatches_by_mode, power_fractions, full_mismatches)
     plot_mismatches(mismatches_by_mode, full_mismatches, power_fractions)

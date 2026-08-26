@@ -3,13 +3,13 @@ import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 
 from mlgw_bns.dataset_generation import ParameterSet, TEOBResumSGenerator
-from mlgw_bns.model import Model, ParametersWithExtrinsic
+from mlgw_bns.mode_model import ModeModel, ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 
 
-def test_model_str(trained_model):
-    assert str(trained_model) == (
-        "Model(filename=test_model, "
+def test_model_str(trained_mode_model):
+    assert str(trained_mode_model) == (
+        "ModeModel(filename=test_mode_model, "
         "auxiliary_data_available=True, nn_available=True, "
         "training_dataset_available=True, "
         "waveforms_available = 100, "
@@ -20,8 +20,8 @@ def test_model_str(trained_model):
     )
 
 
-def test_new_model_without_name():
-    m = Model()
+def test_new_mode_model_without_name():
+    m = ModeModel()
 
     with pytest.raises(ValueError):
         m.filename_arrays
@@ -33,46 +33,46 @@ def test_new_model_without_name():
     assert not m.nn_available
 
 
-def test_model_saving_downsampling_indices_and_pca(generated_model):
+def test_model_saving_downsampling_indices_and_pca(generated_mode_model):
 
-    generated_model.save()
+    generated_mode_model.save()
 
-    with generated_model.file_arrays as f:
+    with generated_mode_model.file_arrays as f:
         assert "downsampling/amplitude_indices" in f
         assert f["downsampling/amplitude_indices"][0] == 0
         assert "principal_component_analysis/eigenvalues" in f
 
 
-def test_model_metadata_saving(generated_model):
+def test_model_metadata_saving(generated_mode_model):
 
-    generated_model.save()
-    saved_metadata_dict = generated_model.load_metadata()
-    model_metadata_dict = generated_model.metadata_dict
+    generated_mode_model.save()
+    saved_metadata_dict = generated_mode_model.load_metadata()
+    model_metadata_dict = generated_mode_model.metadata_dict
 
     assert model_metadata_dict == saved_metadata_dict
     assert "initial_frequency_hz" in model_metadata_dict
     assert "srate_hz" in model_metadata_dict
 
 
-def test_model_metadata_loading(generated_model):
+def test_model_metadata_loading(generated_mode_model):
 
-    generated_model.save()
-    generated_model.initial_frequency_hz = 1000.0
-    generated_model.parameter_ranges.mass_range = (1.0, 5.0)
-    generated_model.multibanding = False
+    generated_mode_model.save()
+    generated_mode_model.initial_frequency_hz = 1000.0
+    generated_mode_model.parameter_ranges.mass_range = (1.0, 5.0)
+    generated_mode_model.multibanding = False
 
-    generated_model.load()
+    generated_mode_model.load()
 
-    assert generated_model.initial_frequency_hz == 20.0
-    assert generated_model.parameter_ranges.mass_range == (2.0, 4.0)
-    assert generated_model.multibanding == True
+    assert generated_mode_model.initial_frequency_hz == 20.0
+    assert generated_mode_model.parameter_ranges.mass_range == (2.0, 4.0)
+    assert generated_mode_model.multibanding == True
 
 
-def test_downsampling_indices_characteristics(generated_model):
+def test_downsampling_indices_characteristics(generated_mode_model):
 
-    generated_model.save()
+    generated_mode_model.save()
 
-    with generated_model.file_arrays as f:
+    with generated_mode_model.file_arrays as f:
         # the upper bound was widened alongside the q_range default,
         # which was extended from (1.0, 2.85) to (1.0, 3.0)
         assert 50 < f["downsampling/amplitude_indices"][10] < 15_000

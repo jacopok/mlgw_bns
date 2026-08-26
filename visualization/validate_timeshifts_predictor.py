@@ -1,10 +1,10 @@
 """Validate the shared time-shift predictor of the ``default_hom`` model.
 
-A :class:`ModesModel` trains one regressor --- saved as
+A :class:`Model` trains one regressor --- saved as
 ``default_hom_timeshifts.pkl`` --- mapping the intrinsic parameters
 :math:`[q, \\Lambda_1, \\Lambda_2, \\chi_1, \\chi_2]` to the time shift
 :math:`\\Delta t(\\theta)` in seconds, and reuses it for every mode. That
-:math:`\\Delta t` is what :func:`mlgw_bns.model.remove_linear_trend` takes
+:math:`\\Delta t` is what :func:`mlgw_bns.mode_model.remove_linear_trend` takes
 out of the phase residuals before the PCA and the network ever see them,
 and what the prediction adds back afterwards, so an error here is a pure
 linear-in-frequency phase error in every predicted waveform.
@@ -39,7 +39,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from mlgw_bns.higher_order_modes import Mode
-from mlgw_bns.modes_model import ModesModel
+from mlgw_bns.model import Model
 from mlgw_bns.neural_network import load_timeshifts_predictor_from_file
 
 logging.basicConfig(level=logging.WARNING)
@@ -68,13 +68,13 @@ def load_pieces():
     """Return the (2,2) model and the predictor being validated.
 
     The predictor is loaded from its checkpoint explicitly, rather than
-    taken from the :class:`ModesModel`, so that it is unambiguous which
+    taken from the :class:`Model`, so that it is unambiguous which
     file this script is scoring.
     """
-    modes_model = ModesModel(modes=[REFERENCE_MODE], filename=str(MODEL_FILENAME))
-    modes_model.load()
+    model = Model(modes=[REFERENCE_MODE], filename=str(MODEL_FILENAME))
+    model.load()
 
-    model = modes_model.models[REFERENCE_MODE]
+    model = model.mode_models[REFERENCE_MODE]
     if model.downsampling_indices is None:
         raise RuntimeError(
             f"{MODEL_FILENAME} has no downsampling indices; "
@@ -98,7 +98,7 @@ def true_and_predicted_timeshifts(model, predictor):
     -------
     true_timeshifts : np.ndarray
         Target values, in seconds, exactly as
-        :meth:`Model.generate` computes them for training.
+        :meth:`ModeModel.generate` computes them for training.
     predicted_timeshifts : np.ndarray
         The predictor's output for the same parameters.
     band_hz : tuple[float, float]
@@ -171,7 +171,7 @@ def plot(error, relative_error, dephasing, band_hz):
     """Histogram the three error measures.
 
     The magnitudes are histogrammed on log-spaced bins, as
-    ``validate_modes_model.py`` does for mismatches: the errors span
+    ``validate_model.py`` does for mismatches: the errors span
     several decades --- a tight core with a handful of outliers an order
     of magnitude or two out --- and linear bins collapse the core into a
     single column. The sign of the error carries no information the

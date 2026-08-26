@@ -38,11 +38,11 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 from mlgw_bns.higher_order_modes import Mode
-from mlgw_bns.model import ParametersWithExtrinsic
+from mlgw_bns.mode_model import ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
-from mlgw_bns.modes_model import ModesModel
+from mlgw_bns.model import Model
 
-from validate_modes_model import SharedTimeshiftValidateModel
+from validate_model import SharedTimeshiftValidateModel
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -80,45 +80,45 @@ OUTFILE = REPO_ROOT / "mode_accuracy_vs_power.png"
 DATA_CACHE = REPO_ROOT / "mode_accuracy_vs_power.npz"
 
 
-def load_or_train() -> ModesModel:
+def load_or_train() -> Model:
     """Load the cached model, training and saving it if it is not there."""
-    modes_model = ModesModel(
+    model = Model(
         modes=MODES,
         filename=str(MODEL_FILENAME),
         initial_frequency_hz=INITIAL_FREQUENCY_HZ,
     )
 
     if Path(f"{MODEL_FILENAME}_l2_m2_arrays.h5").exists():
-        modes_model.load()
-        if modes_model.nn_available:
+        model.load()
+        if model.nn_available:
             print(f"Loaded cached model from {MODEL_FILENAME}*")
-            return modes_model
+            return model
 
     print(f"Training a model (sizes {TRAINING_SIZES})...")
-    modes_model.generate(*TRAINING_SIZES)
-    modes_model.set_hyper_and_train_nn()
-    modes_model.save(include_training_data=False)
-    return modes_model
+    model.generate(*TRAINING_SIZES)
+    model.set_hyper_and_train_nn()
+    model.save(include_training_data=False)
+    return model
 
 
-def collect(modes_model: ModesModel):
+def collect(model: Model):
     """Return per-waveform accuracy, power fraction, mass ratio, sign flag.
 
     The two axes are measured by different routes, deliberately.
 
     The *accuracy* is the per-mode mismatch from :class:`ValidateModel`,
-    the same quantity ``validate_modes_model.py`` reports: the mode is
+    the same quantity ``validate_model.py`` reports: the mode is
     compared in its own amplitude/phase representation, with the learned
     time-shift correction applied and the phase anchored at the start of
     the band.
 
     The *power fraction* has to come from the summed waveform, so it uses
-    :meth:`ModesModel.predict_modes_dict` / ``get_teob_modes_dict``.
+    :meth:`Model.predict_modes_dict` / ``get_teob_modes_dict``.
 
     Scoring *any* mode through the mode dictionaries with
     :meth:`ValidateModel.mismatch` would be wrong, for a reason which has
     nothing to do with which mode it is. The waveforms
-    :meth:`ModesModel.predict_modes_dict` returns sit about 15 ms away in
+    :meth:`Model.predict_modes_dict` returns sit about 15 ms away in
     time from the ones ``get_teob_modes_dict`` returns --- a common
     origin offset, the same for every mode to within a few percent --- and
     :meth:`ValidateModel.mismatch` searches time shifts only within
@@ -140,7 +140,7 @@ def collect(modes_model: ModesModel):
 
     # --- accuracy, through the per-mode validator -------------------------
     mode_validator = SharedTimeshiftValidateModel(
-        modes_model.models[TARGET_MODE], modes_model.time_shifts_predictor
+        model.mode_models[TARGET_MODE], model.time_shifts_predictor
     )
     parameter_set = mode_validator.param_set(N_WAVEFORMS, SEED)
 
@@ -164,7 +164,7 @@ def collect(modes_model: ModesModel):
     ])
 
     # --- contribution, through the summed waveform ------------------------
-    reference_model = modes_model.models[Mode(2, 2)]
+    reference_model = model.mode_models[Mode(2, 2)]
     validator = ValidateModel(reference_model)
     frequencies = validator.frequencies
     psd = validator.psd_values
@@ -196,7 +196,7 @@ def collect(modes_model: ModesModel):
         )
 
         try:
-            true = modes_model.get_teob_modes_dict(frequencies, params)
+            true = model.get_teob_modes_dict(frequencies, params)
         except Exception as e:  # noqa: BLE001
             logging.warning("Skipping a parameter tuple: %s", e)
             continue
@@ -316,8 +316,8 @@ if __name__ == "__main__":
         mass_ratios = cached["mass_ratios"]
         sign_changes = cached["sign_changes"].astype(bool)
     else:
-        modes_model = load_or_train()
-        mismatches, fractions, mass_ratios, sign_changes = collect(modes_model)
+        model = load_or_train()
+        mismatches, fractions, mass_ratios, sign_changes = collect(model)
         np.savez(
             DATA_CACHE,
             mismatches=mismatches,

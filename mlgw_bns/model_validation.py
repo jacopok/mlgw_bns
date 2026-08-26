@@ -1,7 +1,7 @@
 r"""Validation utilities for trained waveform surrogate models.
 
 This module provides :class:`ValidateModel`, the main entry point for
-quantifying the accuracy of a trained :class:`~mlgw_bns.model.Model` by
+quantifying the accuracy of a trained :class:`~mlgw_bns.mode_model.ModeModel` by
 computing noise-weighted mismatches between EOB reference waveforms and
 their surrogate reconstructions.
 
@@ -37,7 +37,7 @@ from tqdm import tqdm  # type: ignore
 
 from .data_management import FDWaveforms
 from .dataset_generation import ParameterSet
-from .model import FrequencyTooHighError, FrequencyTooLowError, Model
+from .mode_model import FrequencyTooHighError, FrequencyTooLowError, ModeModel
 from .neural_network import NeuralNetwork, TimeshiftsGPR, TimeshiftsNN
 from .resample_residuals import cartesian_waveforms_at_frequencies
 
@@ -50,8 +50,8 @@ class ValidateModel:
 
     Parameters
     ----------
-    model : Model
-            Model to validate.
+    model : ModeModel
+            ModeModel to validate.
     psd_name : str
             Name of the power spectral density to use in the computation
             of the mismatches. Currently only ``"ET"`` (default) is
@@ -68,7 +68,7 @@ class ValidateModel:
 
     def __init__(
         self,
-        model: Model,
+        model: ModeModel,
         psd_name: str = "ET",
         custom_frequencies: bool = True,
     ) -> None:
@@ -123,7 +123,7 @@ class ValidateModel:
         """Return the merger-time-shift predictor trained for :attr:`model`.
 
         This is the same predictor trained (or loaded) by
-        :attr:`model`, i.e. :attr:`Model.timeshifts_predictor`, so
+        :attr:`model`, i.e. :attr:`ModeModel.timeshifts_predictor`, so
         that the time-shift correction applied during validation
         matches the one used to remove the linear trend from the
         phase residuals during training.
@@ -859,11 +859,11 @@ class ValidateModel:
         """Check that ``frequencies`` lies within the model's sampled band.
 
         The counterpart, for the validation code path, of the band check
-        in :meth:`Model.predict_amplitude_phase`: the waveforms compared
+        in :meth:`ModeModel.predict_amplitude_phase`: the waveforms compared
         here are only known at the downsampling nodes, and
         :meth:`DownsamplingTraining.resample` does not continue them
         outside that range --- it holds the endpoint value, which is not
-        a waveform. Unlike :meth:`Model.predict_amplitude_phase` there is
+        a waveform. Unlike :meth:`ModeModel.predict_amplitude_phase` there is
         no post-Newtonian extension to fall back on (the EOB reference
         waveforms are not available outside the band either), so an
         out-of-band request is always an error here.
@@ -895,7 +895,7 @@ class ValidateModel:
                 f"Validation frequencies start at {np.min(frequencies)} Hz, below the "
                 f"model's first downsampling node at {f_min} Hz. Waveforms cannot "
                 "be reconstructed there; restrict `self.frequencies` to the "
-                "model's band, or use `Model.predict_amplitude_phase`, which "
+                "model's band, or use `ModeModel.predict_amplitude_phase`, which "
                 "extends with a post-Newtonian waveform."
             )
 
