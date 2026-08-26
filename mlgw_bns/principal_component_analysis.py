@@ -1,7 +1,7 @@
 """Functionality for the PCA-decomposition of arbitrary data.
 
 The classes defined here are meant to be lightweight: they do not store 
-the data, instead deferring its management to the higher-level :class:`Model` class.
+the data, instead deferring its management to the higher-level :class:`ModeModel` class.
 """
 
 from __future__ import annotations

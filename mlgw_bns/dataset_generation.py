@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Callable, ClassVar, Optional, Type, Union
 
-import matplotlib.pyplot as plt
 import h5py
 import numpy as np
 from numpy.random import default_rng
@@ -857,8 +856,8 @@ class Dataset:
     Examples
     --------
     >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
-    >>> print(dataset.delta_f_hz) # should be 1/256 Hz, doctest: +NUMBER
-    0.001953125
+    >>> print(dataset.delta_f_hz) # should be 1/4096 Hz, doctest: +NUMBER
+    0.000244140625
 
     Class Attributes
     ----------------

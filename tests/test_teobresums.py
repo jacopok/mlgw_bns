@@ -3,7 +3,7 @@ import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 
 from mlgw_bns.dataset_generation import ParameterSet
-from mlgw_bns.model import Model, ParametersWithExtrinsic
+from mlgw_bns.mode_model import ParametersWithExtrinsic
 
 
 def test_geometric_units_normalization(dataset, teob_generator):

@@ -1,32 +1,50 @@
-from mlgw_bns.model import Model
-from mlgw_bns.modes_model import ModesModel
-from mlgw_bns.higher_order_modes import Mode
+"""Train the model shipped with the package, and install it into `mlgw_bns/data/`.
+
+Training writes `default_hom_*` in the current directory, with the training
+residuals included so that the model can be retrained or validated without
+regenerating them; `install()` then re-saves it into the package without
+those residuals, which takes it from ~100 MB to ~2 MB.
+
+Run with: python make_default_dataset.py
+"""
+
 import logging
+
+from mlgw_bns.model import DEFAULT_MODES, MODELS_AVAILABLE, PRETRAINED_MODEL_FOLDER, Model
+
 logging.basicConfig(level=logging.INFO)
 
-def main_model():
-    m = Model("default", initial_frequency_hz=5.)
-    m.generate(2 ** 10, 2 ** 13, 2 ** 17)
-    m.set_hyper_and_train_nn()
-    m.save(include_training_data=False)
+#: Where training writes its output, relative to the current directory.
+TRAINING_BASENAME = MODELS_AVAILABLE[0]
 
-def model_2():
-    m = Model("fast", initial_frequency_hz=15.)
-    m.generate(2 ** 9, 2 ** 10, 2 ** 10)
-    m.set_hyper_and_train_nn()
-    m.save(include_training_data=False)
+#: Where the packaged copy lives, relative to the repository root.
+PACKAGED_BASENAME = f"mlgw_bns/{PRETRAINED_MODEL_FOLDER}{MODELS_AVAILABLE[0]}"
 
-def modes_model():
-    m = ModesModel(
-        modes=[Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)],
-        filename="default_hom",
-        initial_frequency_hz=5.,
+
+def train() -> None:
+    model = Model(
+        modes=list(DEFAULT_MODES),
+        filename=TRAINING_BASENAME,
+        initial_frequency_hz=5.0,
     )
-    m.generate(2 ** 8, 2 ** 8, 2 ** 8)
-    m.set_hyper_and_train_nn()
-    m.save(include_training_data=False)
+    model.generate(2**8, 2**12, 2**13)
+    model.set_hyper_and_train_nn()
+    model.save(include_training_data=True)
+
+
+def install() -> None:
+    """Copy the trained model into the package, without the training data."""
+    model = Model(modes=list(DEFAULT_MODES), filename=TRAINING_BASENAME)
+    model.load()
+
+    if not model.nn_available:
+        raise RuntimeError(f"No trained networks found at {TRAINING_BASENAME}; run train() first.")
+
+    model.base_filename = PACKAGED_BASENAME
+    model.save(include_training_data=False)
+    logging.info("Installed the default model into %s", PACKAGED_BASENAME)
+
 
 if __name__ == "__main__":
-    # main_model()
-    # model_2()
-    modes_model()
+    train()
+    install()

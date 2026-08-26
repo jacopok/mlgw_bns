@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from EOBRun_module import EOBRunPy
 
-from mlgw_bns import Model
+from mlgw_bns import ModeModel
 from mlgw_bns.dataset_generation import (
     ParameterRanges,
     ParameterSet,
@@ -86,7 +86,7 @@ def test_arbitrary_index_waveform_recovery(fixed_generator_pair):
 def test_training_model_on_fixed_data(fixed_generator_pair):
     fixed_parameter_generator, fixed_waveform_generator = fixed_generator_pair
 
-    model = Model(
+    model = ModeModel(
         waveform_generator=fixed_waveform_generator,
         parameter_generator=fixed_parameter_generator,
         initial_frequency_hz=20.0,

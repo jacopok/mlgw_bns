@@ -26,7 +26,7 @@ PARAM_LABELS = [r"$q$", r"$\Lambda_1$", r"$\Lambda_2$", r"$\chi_1$", r"$\chi_2$"
 dataset = Dataset(initial_frequency_hz=20.0, srate_hz=4096.0)
 
 # Same distribution used when generating the training dataset for a new
-# Model: uniform draws over `dataset.parameter_ranges`.
+# ModeModel: uniform draws over `dataset.parameter_ranges`.
 parameter_generator = dataset.make_parameter_generator()
 params_list = [next(parameter_generator) for _ in range(N_WAVEFORMS)]
 samples = np.array([params.array for params in params_list])

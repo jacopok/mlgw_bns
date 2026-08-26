@@ -6,9 +6,3 @@ Model for waveform generation
 
 .. autoclass:: mlgw_bns.model.Model
     :members:
-
-.. autoclass:: mlgw_bns.model.ParametersWithExtrinsic
-    :members:
-
-.. autofunction:: mlgw_bns.model.compute_polarizations
-

@@ -10,47 +10,11 @@ import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
 
-from mlgw_bns import Model, ParametersWithExtrinsic
+from mlgw_bns import Model, ModeModel, ParametersWithExtrinsic
 from mlgw_bns.data_management import ParameterRanges
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
 from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
 from mlgw_bns.higher_order_modes import Mode
-from mlgw_bns.modes_model import ModesModel
-
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--rundefault",
-        action="store_true",
-        default=False,
-        help=(
-            "also run the tests which need the packaged default model "
-            "(mlgw_bns/data/default_*); they are skipped by default"
-        ),
-    )
-
-
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers", "requires_default: need the default model to run"
-    )
-
-
-def pytest_collection_modifyitems(config, items):
-    """Skip the tests needing the packaged default model, unless asked.
-    """
-    if config.getoption("--rundefault"):
-        # the user asked for them explicitly: run all tests
-        return
-    default_unavailable = pytest.mark.skip(
-        reason=(
-            "the packaged default model needs to be regenerated; "
-            "pass --rundefault to run this anyway"
-        )
-    )
-    for item in items:
-        if "requires_default" in item.keywords:
-            item.add_marker(default_unavailable)
 
 
 @fixture(name="variable_dataset")
@@ -119,16 +83,17 @@ def greedy_downsampling_training(dataset):
 
 
 @pytest.fixture(scope="session")
-def model():
-    name = "test_model"
-    model = Model(name, pca_components_number=20)
-    yield model
+def mode_model():
+    """Untrained single-mode model, writing to files in the cwd."""
+    name = "test_mode_model"
+    mode_model = ModeModel(name, pca_components_number=20)
+    yield mode_model
 
     for filename in [
-        model.filename_arrays,
-        model.filename_metadata,
-        model.filename_nn,
-        model.filename_timeshifts,
+        mode_model.filename_arrays,
+        mode_model.filename_metadata,
+        mode_model.filename_nn,
+        mode_model.filename_timeshifts,
     ]:
         try:
             os.remove(filename)
@@ -137,27 +102,31 @@ def model():
 
 
 @pytest.fixture(scope="session")
-def generated_model(model):
-    model.generate(8, 100, 100)
-    yield model
+def generated_mode_model(mode_model):
+    mode_model.generate(8, 100, 100)
+    yield mode_model
 
 
 @pytest.fixture(scope="session")
-def trained_model(generated_model):
-    generated_model.set_hyper_and_train_nn()
-    yield generated_model
+def trained_mode_model(generated_mode_model):
+    generated_mode_model.set_hyper_and_train_nn()
+    yield generated_mode_model
 
 
 @pytest.fixture(scope="session")
 def default_model():
+    """The pretrained multi-mode model shipped with the package."""
     yield Model.default_for_testing()
 
 
 @pytest.fixture(scope="session")
-def modes_model():
-    name = "test_modes_model"
-    mm = ModesModel(modes=[Mode(2, 2), Mode(2, 1)], filename=name, pca_components_number=10)
-    yield mm
+def model():
+    """Untrained multi-mode model, writing to files in the cwd."""
+    name = "test_model"
+    model = Model(
+        modes=[Mode(2, 2), Mode(2, 1)], filename=name, pca_components_number=10
+    )
+    yield model
 
     for filename in glob.glob(f"{name}*"):
         try:
@@ -167,15 +136,15 @@ def modes_model():
 
 
 @pytest.fixture(scope="session")
-def generated_modes_model(modes_model):
-    modes_model.generate(6, 30, 30)
-    yield modes_model
+def generated_model(model):
+    model.generate(6, 30, 30)
+    yield model
 
 
 @pytest.fixture(scope="session")
-def trained_modes_model(generated_modes_model):
-    generated_modes_model.set_hyper_and_train_nn()
-    yield generated_modes_model
+def trained_model(generated_model):
+    generated_model.set_hyper_and_train_nn()
+    yield generated_model
 
 
 @pytest.fixture

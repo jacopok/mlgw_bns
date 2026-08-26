@@ -1,6 +1,6 @@
 extend_with_post_newtonian: true
-extend_with_zeros_at_high_frequency: false
-initial_frequency_hz: 15.0
+extend_with_zeros_at_high_frequency: true
+initial_frequency_hz: 5.0
 multibanding: true
 parameter_ranges:
   chi1_range: !!python/tuple
@@ -20,6 +20,6 @@ parameter_ranges:
   - 4.0
   q_range: !!python/tuple
   - 1.0
-  - 2.85
+  - 3.0
 pca_components_number: 30
 srate_hz: 4096.0

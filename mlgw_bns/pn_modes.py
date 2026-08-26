@@ -5,7 +5,7 @@ amplitude and phase of each spherical-harmonic mode :math:`(\ell, m)`
 emitted by a quasi-circular compact binary. They are used as a low-cost
 analytical fallback (and as a Taylor-F2 cross-check) for the
 neural-network surrogate that lives in
-:mod:`~mlgw_bns.modes_model`.
+:mod:`~mlgw_bns.model`.
 
 Two main outputs are exposed:
 
@@ -770,7 +770,7 @@ def psi_lm(H_lm_callable: H_callable, mode: Mode) -> Callable_Waveform:
 
 
 # ---------------------------------------------------------------------------
-# Public registries used by `higher_order_modes` and `modes_model`.
+# Public registries used by `higher_order_modes` and `model`.
 #
 # Each maps a `Mode` to a ready-to-call function
 # ``(params, frequencies) -> array``. Adding support for a new mode is a

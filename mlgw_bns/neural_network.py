@@ -425,7 +425,7 @@ class SklearnNetwork(NeuralNetwork):
 class TimeshiftsGPR:
     """Gaussian-Process regressor for merger time shifts between modes.
 
-    Used by :class:`~mlgw_bns.modes_model.ModesModel` to align the
+    Used by :class:`~mlgw_bns.model.Model` to align the
     mergers of different higher-order modes in the time domain before
     they are combined into the polarizations. The inputs (intrinsic
     parameters) are min-max scaled to ``[0, 1]`` before being passed to

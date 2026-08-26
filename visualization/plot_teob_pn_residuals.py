@@ -3,7 +3,7 @@
 to build the training dataset for a new model, and plot the amplitude and
 phase residuals for all of them.
 
-These are exactly the quantities a per-mode `Model` is trained to
+These are exactly the quantities a per-mode `ModeModel` is trained to
 reproduce: `amplitude_residual = log(|A_eob| / |A_pn|)` and
 `phase_residual = phi_eob - phi_pn`, as computed by
 `WaveformGenerator.generate_residuals`.
@@ -11,8 +11,8 @@ reproduce: `amplitude_residual = log(|A_eob| / |A_pn|)` and
 The third row shows the phase residual with the linear-in-frequency term
 `2 pi (f - f_0) Delta_t(theta)` removed, using the shared time-shift
 predictor trained for the `default_hom` model in the top-level folder.
-This is the same subtraction `Model.generate` applies (via
-`mlgw_bns.model.remove_linear_trend`) before the PCA and the network see
+This is the same subtraction `ModeModel.generate` applies (via
+`mlgw_bns.mode_model.remove_linear_trend`) before the PCA and the network see
 the residuals, so the third row --- not the second --- is what a model
 actually has to learn.
 
@@ -34,7 +34,7 @@ MODES = [Mode(2, 1), Mode(2, 2), Mode(3, 3), Mode(4, 4)]
 N_WAVEFORMS = 100
 
 #: Shared cross-mode time-shift predictor of the `default_hom` model, saved
-#: by `ModesModel.save` next to the per-mode checkpoints in the repository
+#: by `Model.save` next to the per-mode checkpoints in the repository
 #: root. It maps [q, lambda_1, lambda_2, chi_1, chi_2] to a time shift in
 #: seconds, at the reference total mass `Dataset.total_mass`.
 TIMESHIFTS_FILE = Path(__file__).resolve().parent.parent / "default_hom_timeshifts.pkl"
@@ -49,7 +49,7 @@ if not TIMESHIFTS_FILE.exists():
 timeshifts_predictor = load_timeshifts_predictor_from_file(str(TIMESHIFTS_FILE))
 
 # Same distribution used when generating the training dataset for a new
-# Model: uniform draws over `dataset.parameter_ranges`.
+# ModeModel: uniform draws over `dataset.parameter_ranges`.
 parameter_generator = dataset.make_parameter_generator()
 params_list = [next(parameter_generator) for _ in range(N_WAVEFORMS)]
 
@@ -80,7 +80,7 @@ for i, mode in enumerate(MODES):
             continue
         amplitude_residual, phase_residual = residuals
 
-        # Same subtraction as `mlgw_bns.model.remove_linear_trend`: take out
+        # Same subtraction as `mlgw_bns.mode_model.remove_linear_trend`: take out
         # the time-shift term and re-anchor the residual to zero at the first
         # frequency, since a constant phase offset is not learned either.
         phase_residual_flattened = (

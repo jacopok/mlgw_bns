@@ -49,7 +49,7 @@ dataset = Dataset(
 )
 
 # Same distribution used when generating the training dataset for a new
-# Model: uniform draws over `dataset.parameter_ranges`.
+# ModeModel: uniform draws over `dataset.parameter_ranges`.
 parameter_generator = dataset.make_parameter_generator(seed=2)
 params_list = [next(parameter_generator) for _ in range(N_WAVEFORMS)]
 

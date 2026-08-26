@@ -16,12 +16,10 @@ tests/test_results.xml
 .mutmut-cache
 *.h5
 *.pkl
-mlgw_bns/model.py
 prof.html
 .gitignore
 try_model_validation.py
 !mlgw_bns/data/best_trials.pkl
-mlgw_bns/data_management.py
 *.pdf
 *.prof
 profile_model_prediction.py
