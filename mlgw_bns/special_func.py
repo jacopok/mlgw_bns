@@ -1,84 +1,151 @@
+r"""Shared special functions and small numerical helpers.
+
+The Wigner :math:`d` and spin-weighted spherical harmonic
+implementations here are the single source of truth for the whole
+package: :mod:`~mlgw_bns.model` uses them to project the co-precessing
+modes onto the observer's sky, :mod:`~mlgw_bns.higher_order_modes` uses
+them for the :math:`s=-2` specialisation, and
+:mod:`~mlgw_bns.twist_waveform` uses them to build the Wigner-:math:`D`
+matrices of the precessing twist. They mirror ``wigner_d_function()``
+and ``spinsphericalharm()`` in TEOBResumS' ``C/src/SpecialFuns.c``.
+
+Both accept either a scalar angle or a numpy array of angles.
+"""
+
 import math
+from typing import Tuple, Union
+
 import numpy as np
 
-# Helper function to compute factorial (Python's math.factorial is used)
-def factorial(n):
+__all__ = [
+    "factorial",
+    "wigner_d_function",
+    "spinsphericalharm",
+    "unwrap_euler",
+    "dynamic_then_uniform_grid",
+    "reduced_tidal_parameter",
+    "effective_spin_parameter",
+]
+
+#: Either a single angle or an array of them.
+AngleLike = Union[float, np.ndarray]
+
+
+def factorial(n: int) -> int:
+    """Factorial :math:`n!`, mirroring ``fact()`` in TEOBResumS.
+
+    Parameters
+    ----------
+    n : int
+        Non-negative integer.
+
+    Returns
+    -------
+    int
+        :math:`n!`.
+
+    Raises
+    ------
+    ValueError
+        If ``n`` is negative.
+    """
+    if n < 0:
+        raise ValueError("computing a negative factorial")
     return math.factorial(n)
 
-# Function to compute the Wigner d-function d^l_{m,s}(i)
-def wigner_d_function(l, m, s, i):
-    """
-    Compute the Wigner d-function d^l_{m,s}(i) as described in (II.8) of 
-    https://arxiv.org/pdf/0709.0093.pdf.
 
-    Parameters:
-    l (int): upper index
-    m (int): first lower index
-    s (int): second lower index
-    i (float): argument of the Wigner d-function (angle in radians)
+def wigner_d_function(l: int, m: int, s: int, i: AngleLike) -> AngleLike:
+    r"""Wigner :math:`d`-function :math:`d^{\ell}_{m,s}(\iota)`.
 
-    Returns:
-    float: The value of the Wigner d-function d^l_{m,s}(i)
+    As given in Eq. (II.8) of `arXiv:0709.0093
+    <https://arxiv.org/pdf/0709.0093.pdf>`_.
+
+    Parameters
+    ----------
+    l : int
+        Upper index :math:`\ell`.
+    m : int
+        First lower index.
+    s : int
+        Second lower index.
+    i : float or np.ndarray
+        Argument of the Wigner :math:`d`-function, in radians. May be an
+        array, in which case an array of the same shape is returned.
+
+    Returns
+    -------
+    float or np.ndarray
+        The value of :math:`d^{\ell}_{m,s}(\iota)`.
     """
-    
-    # Compute half-angle cos and sin for the given input
-    costheta = math.cos(i * 0.5)
-    sintheta = math.sin(i * 0.5)
-    
-    # Normalization factor: sqrt( (l+m)! * (l-m)! * (l+s)! * (l-s)! )
-    norm = math.sqrt(factorial(l + m) * factorial(l - m) * factorial(l + s) * factorial(l - s))
-    
-    # Set the bounds for summation: ki and kf are the range of summation indices
+
+    angle = np.asarray(i, dtype=float)
+    costheta = np.cos(angle * 0.5)
+    sintheta = np.sin(angle * 0.5)
+
+    norm = math.sqrt(
+        factorial(l + m) * factorial(l - m) * factorial(l + s) * factorial(l - s)
+    )
+
+    # Bounds of the summation over k.
     ki = max(0, m - s)
     kf = min(l + m, l - s)
-    
-    # Initialize the Wigner d-function value
-    dWig = 0.0
-    
-    # Loop over k from ki to kf, summing the terms of the series
-    for k in range(ki, kf + 1):
-        # Compute the current term of the summation
-        div = 1.0 / (factorial(k) * factorial(l + m - k) * factorial(l - s - k) * factorial(s - m + k))
-        
-        # Accumulate the terms: (-1)^k * (cos(theta))^(2l+m-s-2k) * (sin(theta))^(2k+s-m)
-        dWig += div * (pow(-1, k) * pow(costheta, 2 * l + m - s - 2 * k) * pow(sintheta, 2 * k + s - m))
-    
-    # Return the final value: norm * sum of the series
-    return norm * dWig
 
-def spinsphericalharm(s, l, m, phi, i):
+    d_wigner = np.zeros_like(costheta)
+    for k in range(ki, kf + 1):
+        div = 1.0 / (
+            factorial(k) * factorial(l + m - k) * factorial(l - s - k) * factorial(s - m + k)
+        )
+        d_wigner = d_wigner + div * (
+            (-1.0) ** k
+            * costheta ** (2 * l + m - s - 2 * k)
+            * sintheta ** (2 * k + s - m)
+        )
+
+    result = norm * d_wigner
+    return result if result.ndim else float(result)
+
+
+def spinsphericalharm(
+    s: int, l: int, m: int, phi: AngleLike, i: AngleLike
+) -> Tuple[AngleLike, AngleLike]:
+    r"""Spin-weighted spherical harmonic :math:`{}_{s}Y_{\ell m}(\varphi, \iota)`.
+
+    As given in Eq. (II.7) of `arXiv:0709.0093
+    <https://arxiv.org/pdf/0709.0093.pdf>`_.
+
+    Parameters
+    ----------
+    s : int
+        Spin weight.
+    l : int
+        Multipolar index :math:`\ell`.
+    m : int
+        Multipolar index :math:`m`.
+    phi : float or np.ndarray
+        Azimuthal angle, in radians.
+    i : float or np.ndarray
+        Polar angle, in radians.
+
+    Returns
+    -------
+    tuple
+        ``(rY, iY)``: the real and imaginary parts of
+        :math:`{}_{s}Y_{\ell m}`.
+
+    Raises
+    ------
+    ValueError
+        If ``(l, m)`` are not a valid pair of indices.
     """
-    Compute the spin-weighted spherical harmonics Y_{lm}^s(phi, i).
-    
-    Parameters:
-    s (int): Spin weight
-    l (int): Multipolar index l
-    m (int): Multipolar index m
-    phi (float): Azimuthal angle (radians)
-    i (float): Polar angle (radians)
-    
-    Returns:
-    tuple: (rY, iY) where rY is the real part and iY is the imaginary part of the spin-weighted spherical harmonic
-    """
-    
-    # Check for valid (l, m) values
+
     if l < 0 or m < -l or m > l:
         raise ValueError("Invalid (l,m) values in spinsphericalharm")
-    
-    # Compute the normalization constant c
-    c = (-1.0)**(-s) * math.sqrt((2.0 * l + 1.0) / (4.0 * math.pi))
-    
-    # Compute the Wigner d-function value
-    dWigner = c * wigner_d_function(l, m, -s, i)
-    
-    # Compute the real part of the spin-weighted spherical harmonic
-    rY = math.cos(m * phi) * dWigner
-    
-    # Compute the imaginary part of the spin-weighted spherical harmonic
-    iY = math.sin(m * phi) * dWigner
-    
-    # Return the real and imaginary parts
-    return rY, iY
+
+    c = (-1.0) ** (-s) * math.sqrt((2.0 * l + 1.0) / (4.0 * math.pi))
+    d_wigner = c * wigner_d_function(l, m, -s, i)
+
+    return np.cos(m * np.asarray(phi)) * d_wigner, np.sin(m * np.asarray(phi)) * d_wigner
+
 
 def unwrap_euler(p):
     size = len(p)
