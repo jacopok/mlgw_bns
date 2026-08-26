@@ -387,7 +387,8 @@ def _pn_spin_precession_rhs(nu, q, y):
     return np.concatenate([dSA, dSB, dLh, [dgamma, domg]])
 
 
-def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step=None):
+def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step=None,
+                                 refinement=32, rtol=1.0e-11, atol=1.0e-13):
     """
     Integrate the closed PN spin-precession ODE system that TEOBResumS
     solves in eob_spin_dyn()/eob_spin_dyn_integrate() for
@@ -413,6 +414,18 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
     f0 : initial GW (2,2) frequency, M*f0 in geometric units (so the
          initial M*Omega_orb = pi*f0, matching EOBPars->initial_frequency).
     t_max : safety cutoff on the integration time (geometric units, M=1).
+    refinement : int
+        Number of sub-intervals each accepted step of the integrator is
+        split into, using its dense output, before the angles are
+        returned. The integrator is accurate but takes long steps --- a
+        whole inspiral can be covered in a couple of hundred of them ---
+        and the returned arrays are meant to be *interpolated*, so the
+        grid has to resolve the precession, not merely carry it. Without
+        this the angles are perfectly accurate at the returned points
+        and visibly wrong between them. Costs only polynomial
+        evaluations, no extra right-hand sides.
+    rtol, atol : float
+        Tolerances passed to the integrator.
 
     Returns
     -------
@@ -450,16 +463,24 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
     event_domega_negative.direction = -1
 
     sol = solve_ivp(rhs, (0.0, t_max), y0, method="DOP853",
-                     rtol=1.0e-11, atol=1.0e-13,
+                     rtol=rtol, atol=atol,
                      events=[event_reach_merger, event_domega_negative],
+                     dense_output=True,
                      max_step=(max_step if max_step is not None else np.inf))
 
     if not sol.success:
         raise RuntimeError(f"PN spin-precession integration failed: {sol.message}")
 
-    t = sol.t
-    SA, SB, Lh = sol.y[0:3].T, sol.y[3:6].T, sol.y[6:9].T
-    gamma, Momega = sol.y[9], sol.y[10]
+    if refinement > 1 and sol.t.size > 1:
+        steps = np.diff(sol.t)[:, np.newaxis]
+        offsets = np.arange(refinement)[np.newaxis, :] / refinement
+        t = np.append((sol.t[:-1, np.newaxis] + steps * offsets).ravel(), sol.t[-1])
+        y = sol.sol(t)
+    else:
+        t, y = sol.t, sol.y
+
+    SA, SB, Lh = y[0:3].T, y[3:6].T, y[6:9].T
+    gamma, Momega = y[9], y[10]
 
     alpha = np.arctan2(Lh[:, 1], Lh[:, 0])
     beta = np.arccos(np.clip(Lh[:, 2], -1.0, 1.0))
@@ -475,10 +496,18 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
 
 def compute_hpc(hTlm, hTlm_neg, hTl0, phi, iota):
     """
-    Combine twisted inertial multipoles into h+, hx for a given reference
-    phase `phi` and inclination `iota`, mirroring compute_hpc() in the
+    Combine twisted inertial multipoles into h+, hx for a given azimuth
+    `phi` and inclination `iota`, mirroring compute_hpc() in the
     "generic spins" (precessing) branch: no +m/-m symmetry is assumed,
     m<0 and m=0 multipoles are used directly.
+
+    `phi` is the azimuth of the line of sight, entering the harmonics as
+    exp(i m phi). TEOBResumS parametrises the same freedom through its
+    `coalescence_angle` parameter, with phi = pi/2 - coalescence_angle,
+    so its default of 0 corresponds to phi = pi/2. With that
+    identification this function reproduces the C code's h+ and hx to
+    machine precision; see
+    visualization/validate_twist_against_teob.py.
 
     Returns h = h+ - i*hx as a complex ndarray.
     """
@@ -500,5 +529,6 @@ def compute_hpc(hTlm, hTlm_neg, hTl0, phi, iota):
         Y = rY + 1j * iY
         h += hlm * Y
 
-    # h = h+ - i*hx  ==  sumr - i*sumi  (see compute_hpc in the C code)
-    return h.real - 1j * h.imag
+    # compute_hpc() in the C code sets hplus = sumr and hcross = -sumi,
+    # so h+ - i*hx is the sum itself
+    return h
