@@ -1,4 +1,4 @@
-"""Validate a trained :class:`ModesModel` (as produced by
+r"""Validate a trained :class:`ModesModel` (as produced by
 ``make_default_dataset.py``), both mode-by-mode and for the full
 multi-mode waveform reconstruction.
 
@@ -10,7 +10,14 @@ Three things are produced:
    training distribution. This is the most direct picture of what the
    surrogate gets wrong, and where in frequency it does so.
 2. **Per-mode mismatches**, via :class:`ValidateModel`, which
-   marginalises over a global time shift and phase.
+   marginalises over a global time shift and phase. These are reported
+   alongside each mode's *share of the PSD-weighted power* in the summed
+   waveform, because a mismatch is a relative measure and so says nothing
+   on its own about how much a mode matters. The (2,1) mode in
+   particular carries :math:`\sim 10^{-5}` of the power and can post a
+   mismatch of order unity while the full waveform is accurate to
+   :math:`10^{-6}` --- without the weight beside it, that reads as the
+   worst thing in the model rather than the least important.
 3. **Full-waveform mismatches**, comparing the multi-mode reconstruction
    (:meth:`ModesModel.predict_modes_dict`) against the EOB ground truth
    (:meth:`ModesModel.get_teob_modes_dict`), marginalising over both a
@@ -26,6 +33,7 @@ Run with: python visualization/validate_modes_model.py
 """
 
 import logging
+from typing import Optional
 
 import matplotlib
 import numpy as np
@@ -234,13 +242,25 @@ def per_mode_mismatches(modes_model: ModesModel) -> dict:
     return mismatches_by_mode
 
 
-def full_waveform_mismatches(modes_model: ModesModel) -> np.ndarray:
-    """Compute the multi-mode full-waveform mismatch distribution.
+def full_waveform_mismatches(modes_model: ModesModel) -> tuple:
+    r"""Compute the multi-mode full-waveform mismatch distribution.
 
     Compares :meth:`ModesModel.predict_modes_dict` against the EOB ground
     truth from :meth:`ModesModel.get_teob_modes_dict`, restricted to the
     band where the EOB waveform is actually defined (it is zero-padded
     below its starting frequency).
+
+    Also accumulates, per mode, the fraction of the total PSD-weighted
+    power that mode carries, :math:`(h_{\ell m}|h_{\ell m}) / (h|h)`
+    with :math:`h = \sum_{\ell m} h_{\ell m}`. The truth waveforms are
+    already being generated here, so this costs nothing extra.
+
+    Returns
+    -------
+    mismatches : np.ndarray
+        Full-waveform mismatches.
+    power_fractions : dict[Mode, np.ndarray]
+        Per-mode power fractions, one entry per waveform.
     """
     reference_model = modes_model.models[Mode(2, 2)]
     validator = ValidateModel(reference_model)
@@ -248,7 +268,19 @@ def full_waveform_mismatches(modes_model: ModesModel) -> np.ndarray:
 
     parameter_generator = modes_model.dataset.make_parameter_generator(SEED)
 
+    def inner_product(a: np.ndarray, mask: np.ndarray) -> float:
+        """PSD-weighted power of a complex waveform over the support."""
+        return float(
+            np.abs(
+                np.trapezoid(
+                    np.conj(a[mask]) * a[mask] / validator.psd_values[mask],
+                    x=frequencies[mask],
+                )
+            )
+        )
+
     mismatches = []
+    power_fractions: dict = {mode: [] for mode in MODES}
     for _ in range(N_FULL_WAVEFORM_MISMATCHES):
         intrinsic = next(parameter_generator)
         params = ParametersWithExtrinsic(
@@ -287,18 +319,62 @@ def full_waveform_mismatches(modes_model: ModesModel) -> np.ndarray:
             )
         )
 
+        total_power = inner_product(sum(true.values()), support)
+        for mode in MODES:
+            key = (mode.l, mode.m)
+            if key in true and total_power > 0:
+                power_fractions[mode].append(
+                    inner_product(true[key], support) / total_power
+                )
+
     mismatches = np.array(mismatches)
+    power_fractions = {
+        mode: np.array(values) for mode, values in power_fractions.items()
+    }
     print(
         f"  full waveform: median {np.median(mismatches):.3e}, "
         f"worst {np.max(mismatches):.3e}"
     )
-    return mismatches
+    return mismatches, power_fractions
+
+
+def report_weighted_mismatches(
+    mismatches_by_mode: dict, power_fractions: dict, full_mismatches: np.ndarray
+) -> None:
+    """Print per-mode mismatches next to each mode's share of the power.
+
+    The last column is the product of the two: a crude but useful figure
+    of merit, since to first order a mode's mismatch contributes to the
+    full-waveform error in proportion to how much of the signal it is.
+    """
+    print()
+    print(f"  {'mode':>6}  {'mismatch (med)':>15}  {'power share':>13}  "
+          f"{'product':>10}")
+    for mode in MODES:
+        mismatch = np.median(mismatches_by_mode[mode])
+        fractions = power_fractions.get(mode, np.array([]))
+        if not len(fractions):
+            print(f"  ({mode.l},{mode.m})  {mismatch:15.3e}  {'n/a':>13}  {'n/a':>10}")
+            continue
+        share = np.median(fractions)
+        print(f"  ({mode.l},{mode.m})  {mismatch:15.3e}  {share:13.3e}  "
+              f"{mismatch * share:10.3e}")
+    print(f"  {'full':>6}  {np.median(full_mismatches):15.3e}  "
+          f"{1.0:13.3e}  {np.median(full_mismatches):10.3e}")
+    print()
 
 
 def plot_mismatches(
-    mismatches_by_mode: dict, full_mismatches: np.ndarray
+    mismatches_by_mode: dict,
+    full_mismatches: np.ndarray,
+    power_fractions: Optional[dict] = None,
 ) -> None:
-    """Plot the per-mode and full-waveform mismatch distributions."""
+    r"""Plot the per-mode and full-waveform mismatch distributions.
+
+    Each mode's legend entry carries its share of the PSD-weighted power,
+    so that a broad mismatch distribution can be read against how much
+    that mode actually contributes.
+    """
     fig, ax = plt.subplots(figsize=(9, 5))
 
     all_values = list(mismatches_by_mode.values()) + [full_mismatches]
@@ -306,12 +382,15 @@ def plot_mismatches(
     bins = np.geomspace(finite.min(), finite.max(), 30)
 
     for mode, mismatches in mismatches_by_mode.items():
+        label = rf"$(\ell, m) = ({mode.l}, {mode.m})$"
+        if power_fractions and len(power_fractions.get(mode, [])):
+            label += f"  [{np.median(power_fractions[mode]):.1e} of power]"
         ax.hist(
             mismatches,
             bins=bins,
             histtype="step",
             linewidth=1.8,
-            label=rf"$(\ell, m) = ({mode.l}, {mode.m})$",
+            label=label,
         )
     if len(full_mismatches):
         ax.hist(
@@ -326,6 +405,10 @@ def plot_mismatches(
 
     ax.set_xscale("log")
     ax.set_xlabel("Mismatch")
+    ax.set_title(
+        "per-mode mismatches are relative: read them against the power share",
+        fontsize="small",
+    )
     ax.set_ylabel("Count")
     ax.grid(True)
     ax.legend()
@@ -346,7 +429,8 @@ if __name__ == "__main__":
     print("Computing per-mode mismatches...")
     mismatches_by_mode = per_mode_mismatches(modes_model)
 
-    print("Computing full-waveform mismatches...")
-    full_mismatches = full_waveform_mismatches(modes_model)
+    print("Computing full-waveform mismatches and per-mode power shares...")
+    full_mismatches, power_fractions = full_waveform_mismatches(modes_model)
 
-    plot_mismatches(mismatches_by_mode, full_mismatches)
+    report_weighted_mismatches(mismatches_by_mode, power_fractions, full_mismatches)
+    plot_mismatches(mismatches_by_mode, full_mismatches, power_fractions)
