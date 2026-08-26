@@ -31,7 +31,7 @@ from mlgw_bns.higher_order_modes import Mode, teob_mode_generator_factory
 from mlgw_bns.neural_network import load_timeshifts_predictor_from_file
 
 MODES = [Mode(2, 1), Mode(2, 2), Mode(3, 3), Mode(4, 4)]
-N_WAVEFORMS = 20
+N_WAVEFORMS = 100
 
 #: Shared cross-mode time-shift predictor of the `default_hom` model, saved
 #: by `ModesModel.save` next to the per-mode checkpoints in the repository
@@ -96,7 +96,7 @@ for i, mode in enumerate(MODES):
     axes[0, i].set_title(rf"$(\ell, m) = ({mode.l}, {mode.m})$")
     axes[2, i].set_xlabel(r"$Mf$")
 
-axes[0, 0].set_ylabel(r"$\log(A_{\rm EOB} / A_{\rm PN})$")
+axes[0, 0].set_ylabel(r"$A_{\rm EOB} / A_{\rm PN}$")
 axes[1, 0].set_ylabel(r"$\phi_{\rm EOB} - \phi_{\rm PN}$ [rad]")
 axes[2, 0].set_ylabel(
     r"$\phi_{\rm EOB} - \phi_{\rm PN} - 2 \pi (f - f_0) \Delta t$ [rad]"
@@ -105,7 +105,7 @@ axes[2, 0].set_ylabel(
 for ax_row in axes:
     for ax in ax_row:
         ax.grid(True)
-        # ax.set_xscale("log")
+        ax.set_xscale("log")
 
 sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=q_min, vmax=q_max))
 fig.colorbar(sm, ax=axes, label="Mass ratio $q$", pad=0.01)
