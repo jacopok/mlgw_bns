@@ -97,11 +97,26 @@ def test_training_model_on_fixed_data(fixed_generator_pair):
 
     # now we want to test the model against different waveforms,
     # so we need to switch its waveform generation to the regular ones
+    training_frequencies = np.copy(model.dataset.frequencies)
+
     model.parameter_generator = UniformParameterGenerator(
         model.dataset, parameter_ranges=ParameterRanges()
     )
-    model.waveform_generator = TEOBResumSGenerator(EOBRunPy)
+    teob_generator = TEOBResumSGenerator(EOBRunPy)
+    # Pin the grid the model was trained on. `Dataset.frequencies_hz`
+    # defers to `waveform_generator.frequencies` when it is set, and falls
+    # back to the multibanded grid otherwise; since `downsampling_indices`
+    # are *indices* into that array, letting it change out from under them
+    # makes the nodes point at completely different frequencies.
+    teob_generator.frequencies = training_frequencies
+    model.waveform_generator = teob_generator
+
     vm = ValidateModel(model)
     ms = vm.validation_mismatches(5)
 
-    assert np.all(m < 0.01 for m in ms)
+    # Not a quality check: a model trained on 5 waveforms with 5 principal
+    # components is not accurate (mismatches here are O(0.5)). This only
+    # asserts that the fixed-data training pipeline produces something that
+    # can be validated at all.
+    assert np.all(np.isfinite(ms))
+    assert np.all(np.array(ms) <= 1.0)
