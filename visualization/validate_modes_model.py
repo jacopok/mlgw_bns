@@ -5,7 +5,7 @@ multi-mode waveform reconstruction.
 Three things are produced:
 
 1. **mlgw-EOB residuals**, per mode: the amplitude ratio
-   ``log(A_mlgw / A_EOB)`` and the phase difference
+   ``A_mlgw / A_EOB`` and the phase difference
    ``phi_mlgw - phi_EOB``, for many parameter sets drawn from the
    training distribution. This is the most direct picture of what the
    surrogate gets wrong, and where in frequency it does so.
@@ -38,6 +38,7 @@ from typing import Optional
 import matplotlib
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.stats import gaussian_kde
 
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.model import ParametersWithExtrinsic
@@ -49,7 +50,7 @@ logging.basicConfig(level=logging.WARNING)
 MODEL_FILENAME = "../default_hom"
 MODES = [Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
 
-N_RESIDUAL_WAVEFORMS = 1000
+N_RESIDUAL_WAVEFORMS = 40
 N_MISMATCH_WAVEFORMS = 1000
 N_FULL_WAVEFORM_MISMATCHES = 1000
 
@@ -122,7 +123,10 @@ def mlgw_eob_residuals(validator: ValidateModel, n_waveforms: int):
     frequencies_hz : np.ndarray
         Frequencies of the phase/amplitude sample points, in Hz.
     amplitude_residuals : np.ndarray
-        ``log(A_mlgw / A_EOB)``, shape ``(n_waveforms, n_amp_points)``.
+        ``A_mlgw / A_EOB``, shape ``(n_waveforms, n_amp_points)``.
+        A perfect reconstruction gives 1, not 0: the model now works
+        with the amplitude ratio rather than its logarithm, so that
+        sign changes in the EOB amplitude are representable.
     phase_residuals : np.ndarray
         ``phi_mlgw - phi_EOB``, shape ``(n_waveforms, n_phase_points)``.
     parameter_set : ParameterSet
@@ -140,7 +144,7 @@ def mlgw_eob_residuals(validator: ValidateModel, n_waveforms: int):
     downsampling = validator.model.downsampling_indices
     frequencies_hz = validator.model.dataset.frequencies_hz
 
-    amplitude_residuals = np.log(
+    amplitude_residuals = (
         predicted_waveforms.amplitudes / true_waveforms.amplitudes
     )
     phase_residuals = predicted_waveforms.phases - true_waveforms.phases
@@ -195,15 +199,17 @@ def plot_residuals(modes_model: ModesModel) -> dict:
         axes[0, i].set_title(rf"$(\ell, m) = ({mode.l}, {mode.m})$")
         axes[2, i].set_xlabel("$f$ [Hz]")
 
-    axes[0, 0].set_ylabel(r"$\log(A_{\rm mlgw} / A_{\rm EOB})$")
+    axes[0, 0].set_ylabel(r"$A_{\rm mlgw} / A_{\rm EOB}$")
     axes[1, 0].set_ylabel(r"$\phi_{\rm mlgw} - \phi_{\rm EOB}$ [rad]")
     axes[2, 0].set_ylabel("phase residual,\nlinear trend removed [rad]")
 
-    for ax_row in axes:
+    # The amplitude row holds a ratio, so its "no error" line sits at 1;
+    # the two phase rows are differences, so theirs sit at 0.
+    for reference, ax_row in zip([1.0, 0.0, 0.0], axes):
         for ax in ax_row:
             ax.grid(True)
             ax.set_xscale("log")
-            ax.axhline(0.0, color="black", linewidth=0.8, linestyle="--")
+            ax.axhline(reference, color="black", linewidth=0.8, linestyle="--")
 
     sm = plt.cm.ScalarMappable(
         cmap=cmap, norm=plt.Normalize(vmin=q_min, vmax=q_max)
@@ -371,6 +377,9 @@ def plot_mismatches(
 ) -> None:
     r"""Plot the per-mode and full-waveform mismatch distributions.
 
+    Each distribution is shown as a KDE, evaluated in :math:`\log_{10}`
+    of the mismatch (since the values span several orders of magnitude
+    and the axis is log-scaled) and then mapped back onto that axis.
     Each mode's legend entry carries its share of the PSD-weighted power,
     so that a broad mismatch distribution can be read against how much
     that mode actually contributes.
@@ -379,29 +388,30 @@ def plot_mismatches(
 
     all_values = list(mismatches_by_mode.values()) + [full_mismatches]
     finite = np.concatenate([v[v > 0] for v in all_values if len(v)])
-    bins = np.geomspace(finite.min(), finite.max(), 30)
+    log_grid = np.linspace(np.log10(finite.min()), np.log10(finite.max()), 400)
+    grid = 10**log_grid
+
+    def plot_kde(values: np.ndarray, **kwargs) -> None:
+        positive = values[values > 0]
+        if len(positive) < 2:
+            return
+        log_values = np.log10(positive)
+        density = gaussian_kde(log_values)(log_grid)
+        ax.plot(grid, density, **kwargs)
 
     for mode, mismatches in mismatches_by_mode.items():
         label = rf"$(\ell, m) = ({mode.l}, {mode.m})$"
         if power_fractions and len(power_fractions.get(mode, [])):
-            label += f"  [{np.median(power_fractions[mode]):.1e} of power]"
-        ax.hist(
-            mismatches,
-            bins=bins,
-            histtype="step",
-            linewidth=1.8,
-            label=label,
-        )
-    if len(full_mismatches):
-        ax.hist(
-            full_mismatches,
-            bins=bins,
-            histtype="step",
-            linewidth=2.2,
-            linestyle="--",
-            color="black",
-            label="full waveform",
-        )
+            label += f"  [{np.median(power_fractions[mode]):.3%} of power]"
+        plot_kde(mismatches, linewidth=1.8, label=label)
+
+    plot_kde(
+        full_mismatches,
+        linewidth=2.2,
+        linestyle="--",
+        color="black",
+        label="full waveform",
+    )
 
     ax.set_xscale("log")
     ax.set_xlabel("Mismatch")
@@ -409,10 +419,10 @@ def plot_mismatches(
         "per-mode mismatches are relative: read them against the power share",
         fontsize="small",
     )
-    ax.set_ylabel("Count")
+    ax.set_ylabel(r"Density [per $\log_{10}$ mismatch]")
     ax.grid(True)
     ax.legend()
-    fig.suptitle("Per-mode and full-waveform mismatches")
+    fig.suptitle("Per-mode and full-waveform mismatch distributions (KDE)")
     fig.tight_layout()
 
     outfile = "validation_mismatches.png"
