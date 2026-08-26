@@ -427,7 +427,7 @@ class Residuals(SavableData):
 
         """
         return cls(
-            np.log(waveforms_1.amplitudes / waveforms_2.amplitudes),
+            waveforms_1.amplitudes / waveforms_2.amplitudes,
             waveforms_1.phases - waveforms_2.phases,
         )
 

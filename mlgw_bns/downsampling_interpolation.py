@@ -401,18 +401,8 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
         """
 
         generator = self.dataset.make_parameter_generator()
-        # For modes (2,1) and (3,3), oversample params to compensate for amp_teob<=0 discards
-        oversample = (
-            1.5
-            if (
-                self.dataset.current_mode is not None
-                and (self.dataset.current_mode.l, self.dataset.current_mode.m) in ((2, 1), (3, 3))
-            )
-            else 1.0
-        )
-        n_params = int(training_dataset_size * oversample)
         param_set = self.dataset.parameter_set_cls.from_parameter_generator(
-            generator, n_params
+            generator, training_dataset_size
         )
 
         waveforms, _ = self.dataset.generate_waveforms_from_params(
@@ -597,18 +587,8 @@ class RDPDownsamplingTraining(DownsamplingTraining):
     def train(self, training_dataset_size: int) -> DownsamplingIndices:
         """Compute downsampling indices using RDP."""
         generator = self.dataset.make_parameter_generator()
-        # For modes (2,1) and (3,3), oversample params to compensate for amp_teob<=0 discards
-        oversample = (
-            1.5
-            if (
-                self.dataset.current_mode is not None
-                and (self.dataset.current_mode.l, self.dataset.current_mode.m) in ((2, 1), (3, 3))
-            )
-            else 1.0
-        )
-        n_params = int(training_dataset_size * oversample)
         param_set = self.dataset.parameter_set_cls.from_parameter_generator(
-            generator, n_params
+            generator, training_dataset_size
         )
         waveforms, _ = self.dataset.generate_waveforms_from_params(
             param_set, n_jobs=self.n_jobs
