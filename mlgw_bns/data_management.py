@@ -443,9 +443,8 @@ class Residuals(SavableData):
                 Frequencies to which the phase points correspond.
                 Required for the linear term subtraction.
         first_section_flat: float
-                The linear term is chosen so that the first
-                phase residual is zero, and so is the one corresponding
-                to this fraction of the frequencies.
+                Fraction of the sample points, starting from the lowest
+                frequency, over which the linear term is fitted.
                 Defaults to 0.2.
 
                 Note that this is a fraction of the *number of sample
@@ -474,11 +473,28 @@ class Residuals(SavableData):
     def phase_timeshifts(
         self, frequencies: np.ndarray, first_section_flat: float = 0.2
     ) -> np.ndarray:
-        """Time shifts implied by the linear term :meth:`flatten_phase` removes.
+        r"""Time shifts implied by the linear term :meth:`flatten_phase` removes.
 
         Unlike :meth:`flatten_phase`, this does not modify the residuals, so
         it can be used on a set of residuals which still needs to be used in
         its raw form afterwards.
+
+        The time shift is the least-squares slope, divided by
+        :math:`2\pi`, of the phase residual against frequency over the
+        lowest ``first_section_flat`` fraction of the sample points, with
+        a free intercept.
+
+        Restricting the fit to low frequencies is deliberate: the
+        misalignment this term is meant to capture is a genuine time
+        offset of the inspiral, whereas at high frequency the EOB-PN
+        phase difference departs from linearity for physical reasons
+        that no time shift can absorb. Fitting over the whole band would
+        let that high-frequency structure bias the slope.
+
+        A least-squares slope rather than the chord through two points:
+        the two-point estimate inherits whatever local wiggle happens to
+        sit on those two samples, which makes the regression target
+        noisier than the quantity it is trying to represent.
 
         Parameters
         ----------
@@ -491,16 +507,37 @@ class Residuals(SavableData):
         -------
         timeshifts: np.ndarray
                 Timeshifts, in seconds if the frequencies given are in Hz.
+
+        Raises
+        ------
+        ValueError
+                If the low-frequency section holds fewer than two
+                distinct frequencies, so that no slope is defined.
         """
 
-        index = int(first_section_flat * self.phase_residuals.shape[1])
+        index = max(int(first_section_flat * self.phase_residuals.shape[1]), 2)
 
-        phase_difference = np.asarray(
-            self.phase_residuals[:, index] - self.phase_residuals[:, 0],
-            dtype=np.float64,
+        low_frequencies = np.asarray(frequencies[:index], dtype=np.float64)
+        low_residuals = np.asarray(
+            self.phase_residuals[:, :index], dtype=np.float64
         )
 
-        return phase_difference / (frequencies[index] - frequencies[0]) / (2 * np.pi)
+        centered_frequencies = low_frequencies - np.mean(low_frequencies)
+        frequency_spread = centered_frequencies @ centered_frequencies
+
+        if frequency_spread == 0.0:
+            raise ValueError(
+                "Cannot fit a time shift: the lowest "
+                f"{index} sample points are all at the same frequency."
+            )
+
+        centered_residuals = low_residuals - np.mean(
+            low_residuals, axis=1, keepdims=True
+        )
+
+        slopes = centered_residuals @ centered_frequencies / frequency_spread
+
+        return slopes / (2 * np.pi)
 
 @dataclass
 class PrincipalComponentData(SavableData):

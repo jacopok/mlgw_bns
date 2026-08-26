@@ -739,12 +739,30 @@ class Model:
             for arr in arr_list:
                 arr.save_to_file(f)
 
-    def save(self, include_training_data: bool = True) -> None:
+    def save(
+        self,
+        include_training_data: bool = True,
+        include_timeshifts_predictor: bool = True,
+    ) -> None:
+        """Save this model to the files derived from :attr:`filename`.
+
+        Parameters
+        ----------
+        include_training_data : bool, optional
+                Whether to also persist the training residuals and
+                parameters. Defaults to ``True``.
+        include_timeshifts_predictor : bool, optional
+                Whether to write :attr:`timeshifts_predictor` to
+                ``{filename}_timeshifts.pkl``. Defaults to ``True``.
+                :meth:`ModesModel.save` passes ``False``: every mode
+                shares a single predictor, which that class saves once
+                under its own base filename rather than once per mode.
+        """
         self.save_metadata()
         self.save_arrays(include_training_data)
         if self.nn is not None:
             self.nn.save(self.filename_nn)
-        if self.timeshifts_predictor is not None:
+        if include_timeshifts_predictor and self.timeshifts_predictor is not None:
             self.timeshifts_predictor.save_model(self.filename_timeshifts)
 
     def save_new(self, include_training_data: bool = True) -> None:
