@@ -38,13 +38,12 @@ from mlgw_bns.modes_model import ModesModel
 
 logging.basicConfig(level=logging.WARNING)
 
-MODEL_FILENAME = "default_hom"
-MODES = [Mode(2, 2), Mode(2, 1)]
-INITIAL_FREQUENCY_HZ = 5.0
+MODEL_FILENAME = "../default_hom"
+MODES = [Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
 
-N_RESIDUAL_WAVEFORMS = 25
-N_MISMATCH_WAVEFORMS = 25
-N_FULL_WAVEFORM_MISMATCHES = 15
+N_RESIDUAL_WAVEFORMS = 100
+N_MISMATCH_WAVEFORMS = 100
+N_FULL_WAVEFORM_MISMATCHES = 100
 
 SEED = 17
 
@@ -91,7 +90,6 @@ def load_model() -> ModesModel:
     model = ModesModel(
         modes=MODES,
         filename=MODEL_FILENAME,
-        initial_frequency_hz=INITIAL_FREQUENCY_HZ,
     )
     model.load()
     if not model.nn_available:
