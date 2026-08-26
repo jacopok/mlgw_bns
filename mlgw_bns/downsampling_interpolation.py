@@ -196,6 +196,24 @@ class DownsamplingTraining(ABC):
         -------
         new_y : np.ndarray
             Function evaluated at the coordinates ``new_x``.
+
+        Notes
+        -----
+        Points of ``new_x`` outside the range spanned by ``x_ds`` are
+        *not* extrapolated: they are assigned the value at the nearest
+        endpoint of ``x_ds``. A cubic spline extrapolates with the
+        polynomial piece fit to its outermost interval, and the greedy
+        downsampling can leave that interval orders of magnitude narrower
+        than the extrapolation distance --- the (2,2) mode's first few
+        amplitude nodes can sit on consecutive points of the (very finely
+        spaced) low-frequency grid --- in which case the extrapolated
+        values diverge by many orders of magnitude within a fraction of a
+        Hz. Holding the endpoint keeps the result bounded and obviously
+        wrong-looking rather than catastrophically wrong-looking; callers
+        that need a genuine continuation outside the band should use
+        :meth:`Model.predict_amplitude_phase`, which extends with a
+        post-Newtonian waveform.
+
         """
 
         if x_ds.shape != y_ds.shape:
@@ -206,7 +224,17 @@ class DownsamplingTraining(ABC):
 
         # Time all 4 interpolation methods
         # t0 = time.perf_counter()
-        spline_result = interpolate.CubicSpline(x_ds, y_ds)(new_x)
+        spline_result = interpolate.CubicSpline(x_ds, y_ds, extrapolate=False)(new_x)
+
+        # `extrapolate=False` leaves NaNs outside the node range; clamp
+        # to the endpoint values instead.
+        spline_result = np.asarray(spline_result)
+        below = np.asarray(new_x) < x_ds[0]
+        above = np.asarray(new_x) > x_ds[-1]
+        if below.any():
+            spline_result[below] = y_ds[0]
+        if above.any():
+            spline_result[above] = y_ds[-1]
         # t_spline = time.perf_counter() - t0
 
         # t0 = time.perf_counter()
