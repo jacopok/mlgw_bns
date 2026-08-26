@@ -706,14 +706,22 @@ class ValidateModel:
             )
 
             if not res.success:
-                logging.warning(
-                    "Full waveform mismatch optimization did not succeed: %s. "
-                    "Returning fallback mismatch 1.0.",
+                # L-BFGS-B occasionally reports an uninformative "ABNORMAL"
+                # termination when the optimum sits at (or very near) a
+                # bound of the periodic phi_c parameter, even though res.x
+                # is typically still a good, sometimes near-optimal, point.
+                # Fall back to the coarse grid search's estimate only if it
+                # is actually better, rather than discarding res.x outright.
+                logging.info(
+                    "Full waveform mismatch refinement did not converge cleanly "
+                    "(%s); using the better of the refined and grid-search estimates.",
                     res.message,
                 )
-                return 1.0
+                best_val = min(best_val, res.fun)
+            else:
+                best_val = res.fun
 
-            return 1 - (-res.fun) / norm
+            return 1 - (-best_val) / norm
 
         except Exception as e:
             logging.warning(
