@@ -1,4 +1,3 @@
-#!/usr/bin/python3
 """
 Standalone reproduction of the TEOBResumS waveform "twisting" procedure.
 
@@ -15,9 +14,8 @@ with the D-matrix built out of Wigner-d functions d^l_{m,n}(beta) and the
 usual m=<0 symmetry of the co-precessing multipoles,
 H_{l,-n} = (-1)^l H_{l,n}^*.
 
-This script reimplements, line for line, the algebra of:
+This module reimplements, line for line, the algebra of:
 
-  - wigner_d_function()   in C/src/SpecialFuns.c
   - rmap_twist()          in C/src/TEOBResumSUtils.c
   - twist_hlm_TD()        in C/src/TEOBResumSWaveform.c
   - compute_hpc()         in C/src/TEOBResumSWaveform.c  (bonus: h+, hx)
@@ -33,63 +31,27 @@ EOBPars->spin_flx == SPIN_FLX_PN (default) branch:
   - eob_mrg_momg()        in C/src/TEOBResumSFits.c       (stop frequency)
 
 
+(The Wigner d-function and the spin-weighted spherical harmonics of
+C/src/SpecialFuns.c live in mlgw_bns.special_func, which is shared with
+the rest of the package.)
+
 Convention (matches the C code throughout):
     h_{l,m} = A_{l,m} * exp(-i * phi_{l,m}),   phi_{l,m} increasing in time.
+
+For the surrogate-facing, frequency-domain use of all this --- taking
+the aligned-spin mlgw_bns multipoles as the co-precessing ones and
+twisting them into a full precessing waveform --- see
+mlgw_bns.precessing_model.
 """
 
 import math
+
 import numpy as np
-from scipy.integrate import solve_ivp, cumulative_trapezoid
+from scipy.integrate import solve_ivp  # type: ignore
+
+from .special_func import spinsphericalharm, wigner_d_function
 
 _EULER_GAMMA = 0.5772156649015328606065121  # matches EulerGamma in TEOBResumS.h
-
-
-# ---------------------------------------------------------------------------
-# Special functions (C/src/SpecialFuns.c)
-# ---------------------------------------------------------------------------
-
-def fact(n):
-    """Factorial, n!. Mirrors fact() in C/src/SpecialFuns.c."""
-    if n < 0:
-        raise ValueError("computing a negative factorial")
-    return math.factorial(n)
-
-
-def wigner_d_function(l, m, s, angle):
-    """
-    Wigner d-function d^l_{m,s}(angle), Eq. (II.8) of arXiv:0709.0093.
-    Mirrors wigner_d_function() in C/src/SpecialFuns.c exactly.
-
-    `angle` may be a scalar or a numpy array (radians).
-    """
-    angle = np.asarray(angle, dtype=float)
-    costheta = np.cos(angle * 0.5)
-    sintheta = np.sin(angle * 0.5)
-    norm = math.sqrt(fact(l + m) * fact(l - m) * fact(l + s) * fact(l - s))
-    ki = max(0, m - s)
-    kf = min(l + m, l - s)
-    dWig = np.zeros_like(costheta)
-    for k in range(ki, kf + 1):
-        div = 1.0 / (fact(k) * fact(l + m - k) * fact(l - s - k) * fact(s - m + k))
-        dWig = dWig + div * ((-1.0) ** k) * (costheta ** (2 * l + m - s - 2 * k)) \
-                                          * (sintheta ** (2 * k + s - m))
-    return norm * dWig
-
-
-def spin_weighted_spherical_harmonic(s, l, m, phi, iota):
-    """
-    Spin-weighted spherical harmonic _sY_lm(phi, iota), Eq. (II.7) of
-    arXiv:0709.0093. Mirrors spinsphericalharm() in C/src/SpecialFuns.c.
-
-    Returns (real part, imaginary part).
-    """
-    if l < 0 or m < -l or m > l:
-        raise ValueError("wrong (l,m) inside spin_weighted_spherical_harmonic")
-    c = ((-1.0) ** (-s)) * math.sqrt((2.0 * l + 1.0) / (4.0 * math.pi))
-    dWigner = c * wigner_d_function(l, m, -s, iota)
-    rY = math.cos(m * phi) * dWigner
-    iY = math.sin(m * phi) * dWigner
-    return rY, iY
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +74,8 @@ def complex_to_amp_phase(h):
 # The twist itself  (C/src/TEOBResumSWaveform.c: twist_hlm_TD)
 # ---------------------------------------------------------------------------
 
-def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial):
+def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial,
+                include_positive_n=True, include_negative_n=True):
     """
     Twist co-precessing multipoles into the inertial frame.
 
@@ -122,11 +85,20 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial):
         Co-precessing multipoles for n = 1 .. l (m>0 only; the m<0
         co-precessing multipoles are reconstructed from the standard
         symmetry H_{l,-n} = (-1)^l H_{l,n}^*, exactly as the C code does).
-        h = A*exp(-i*phi) convention. All arrays share the same time grid.
+        h = A*exp(-i*phi) convention. All arrays share the same grid.
     alpha, beta, gamma : ndarray
-        Euler angles (radians) on that same time grid.
+        Euler angles (radians) on that same grid.
     lm_inertial : iterable of (l, m), m > 0
         Inertial-frame multipoles to produce.
+    include_positive_n, include_negative_n : bool
+        Whether to include, in the sum over the co-precessing index n,
+        the n>0 multipoles and their n<0 partners respectively. Both
+        default to True, which is what the time-domain twist of the C
+        code does. Splitting the two halves apart is what lets the same
+        routine be used in the frequency domain, where the n>0 and n<0
+        co-precessing multipoles have their support at opposite signs of
+        the frequency and so must be twisted separately --- see
+        :func:`~mlgw_bns.precessing_model.twist_modes_frequency_domain`.
 
     Returns
     -------
@@ -170,10 +142,12 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial):
                 # n<0 co-precessing multipole via H_{l,-n} = (-1)^l H_{l,n}^*
                 hln_real_n, hln_imag_n = eps * real, -eps * imag
 
-                sumr += dl_mn * (cosng * hln_real_p - sinng * hln_imag_p) \
-                      + dl_mnn * (cosng * hln_real_n + sinng * hln_imag_n)
-                sumi += dl_mn * (sinng * hln_real_p + cosng * hln_imag_p) \
-                      + dl_mnn * (-sinng * hln_real_n + cosng * hln_imag_n)
+                if include_positive_n:
+                    sumr += dl_mn * (cosng * hln_real_p - sinng * hln_imag_p)
+                    sumi += dl_mn * (sinng * hln_real_p + cosng * hln_imag_p)
+                if include_negative_n:
+                    sumr += dl_mnn * (cosng * hln_real_n + sinng * hln_imag_n)
+                    sumi += dl_mnn * (-sinng * hln_real_n + cosng * hln_imag_n)
 
             hTlm_real = sumr * np.cos(emm * alpha) + sumi * np.sin(emm * alpha)
             hTlm_imag = -sumr * np.sin(emm * alpha) + sumi * np.cos(emm * alpha)
@@ -512,114 +486,19 @@ def compute_hpc(hTlm, hTlm_neg, hTl0, phi, iota):
     h = np.zeros(size, dtype=complex)
 
     for (l, m), hlm in hTlm.items():
-        rY, iY = spin_weighted_spherical_harmonic(-2, l, m, phi, iota)
+        rY, iY = spinsphericalharm(-2, l, m, phi, iota)
         Y = rY + 1j * iY
         h += hlm * Y
 
     for (l, mneg), hlm in hTlm_neg.items():
-        rY, iY = spin_weighted_spherical_harmonic(-2, l, mneg, phi, iota)
+        rY, iY = spinsphericalharm(-2, l, mneg, phi, iota)
         Y = rY + 1j * iY
         h += hlm * Y
 
     for (l, _), hlm in hTl0.items():
-        rY, iY = spin_weighted_spherical_harmonic(-2, l, 0, phi, iota)
+        rY, iY = spinsphericalharm(-2, l, 0, phi, iota)
         Y = rY + 1j * iY
         h += hlm * Y
 
     # h = h+ - i*hx  ==  sumr - i*sumi  (see compute_hpc in the C code)
     return h.real - 1j * h.imag
-
-
-# ---------------------------------------------------------------------------
-# Self-test
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-
-    t = np.linspace(0.0, 100.0, 2000)
-
-    # Synthetic co-precessing (2,2) and (2,1) multipoles.
-    amp22 = 1.0 - 0.2 * np.exp(-t / 50.0)
-    phi22 = 0.05 * t + 0.01 * t ** 2
-    amp21 = 0.1 * amp22
-    phi21 = phi22  # arbitrary toy relation
-
-    hlm_coprec = {
-        (2, 2): amp_phase_to_complex(amp22, phi22),
-        (2, 1): amp_phase_to_complex(amp21, phi21),
-    }
-
-    # --- Sanity check 1: beta = 0 must reduce the twist to a pure
-    #     z-rotation, i.e. amplitude unchanged and
-    #     phi_out = phi_in + m*(alpha-gamma). ---
-    alpha = 0.3 * np.sin(0.02 * t)
-    gamma = 0.2 * np.cos(0.03 * t)
-    beta = np.zeros_like(t)
-
-    hTlm, hTlm_neg, hTl0 = twist_modes(hlm_coprec, alpha, beta, gamma,
-                                        lm_inertial=[(2, 2), (2, 1)])
-
-    for (l, m) in [(2, 2), (2, 1)]:
-        a_in, p_in = amp22 if m == 2 else amp21, phi22 if m == 2 else phi21
-        a_out, p_out = complex_to_amp_phase(hTlm[(l, m)])
-        expected_phase = p_in + m * (alpha - gamma)
-        assert np.allclose(a_out, a_in, atol=1e-10), f"amplitude mismatch for mode {(l,m)}"
-        assert np.allclose(np.angle(np.exp(1j * (p_out - expected_phase))), 0.0, atol=1e-8), \
-            f"phase mismatch for mode {(l,m)}"
-    print("beta=0 sanity check passed.")
-
-    # --- Sanity check 2: a generic precession must conserve, at every
-    #     time, the total power sum_m |h_{l,m}|^2 across the twist,
-    #     since Wigner-D rotations are unitary. ---
-    beta = 0.4 + 0.1 * np.sin(0.05 * t)
-    hTlm, hTlm_neg, hTl0 = twist_modes(hlm_coprec, alpha, beta, gamma,
-                                        lm_inertial=[(2, 2), (2, 1)])
-
-    power_in = amp22 ** 2 + amp21 ** 2 \
-             + amp22 ** 2 + amp21 ** 2  # (2,2)&(2,-2), (2,1)&(2,-1) co-precessing partners
-    power_out = sum(np.abs(h) ** 2 for h in hTlm.values()) \
-              + sum(np.abs(h) ** 2 for h in hTlm_neg.values()) \
-              + sum(np.abs(h) ** 2 for h in hTl0.values())
-    assert np.allclose(power_in, power_out, rtol=1e-8), "power not conserved by the twist"
-    print("power-conservation sanity check passed.")
-
-    # --- h+, hx reconstruction demo ---
-    h = compute_hpc(hTlm, hTlm_neg, hTl0, phi=0.4, iota=0.7)
-    print(f"h+(t=0) = {h.real[0]:.6e},  hx(t=0) = {-h.imag[0]:.6e}")
-
-    # -----------------------------------------------------------------
-    # PN spin-precession dynamics
-    # -----------------------------------------------------------------
-
-    nu = 0.2222222222222222  # q = 2
-    f0 = 0.01                # M*f0
-
-    # --- Sanity check 3: zero spins must give a trivial, non-precessing
-    #     solution: Lhat stuck at (0,0,1) (beta==0) and gamma constant
-    #     for all time (no torque acts on it), throughout the inspiral. ---
-    sol0 = integrate_pn_spin_precession(nu, (0., 0., 0.), (0., 0., 0.), f0)
-    assert np.allclose(sol0["beta"], 0.0, atol=1e-12), "beta != 0 for a non-spinning binary"
-    assert np.allclose(sol0["Lh"], np.array([0., 0., 1.]), atol=1e-12), "Lhat drifted for a non-spinning binary"
-    assert np.allclose(sol0["gamma"], sol0["gamma"][0], atol=1e-12), "gamma is not constant for a non-spinning binary"
-    assert np.all(np.diff(sol0["Momega"]) > 0), "Momega is not monotonically increasing"
-    print(f"non-spinning PN sanity check passed "
-          f"(integrated to M*Omega = {sol0['Momega'][-1]:.4f} at t = {sol0['t'][-1]:.1f} M).")
-
-    # --- Full pipeline demo: PN precession -> Euler angles -> twist ->
-    #     h+, hx, for a generic precessing configuration. Uses a toy
-    #     (leading-order, non-EOB) co-precessing waveform model just to
-    #     exercise compute_hpc() end to end -- NOT a physical TEOBResumS
-    #     amplitude/phase model (see module docstring). ---
-    sol = integrate_pn_spin_precession(nu, (0.5, 0.3, 0.2), (-0.2, 0.1, 0.4), f0)
-    print(f"precessing PN sanity check: integrated {sol['t'].size} steps to "
-          f"M*Omega = {sol['Momega'][-1]:.4f} at t = {sol['t'][-1]:.1f} M, "
-          f"beta range = [{sol['beta'].min():.3f}, {sol['beta'].max():.3f}] rad.")
-
-    amp22_pn = 4.0 * nu * (sol["Momega"] * 2.0) ** (2.0 / 3.0)  # leading-order quadrupole amplitude
-    phi22_pn = 2.0 * cumulative_trapezoid(sol["Momega"], sol["t"], initial=0.0)
-    hlm_coprec_pn = {(2, 2): amp_phase_to_complex(amp22_pn, phi22_pn)}
-
-    hTlm, hTlm_neg, hTl0 = twist_modes(hlm_coprec_pn, sol["alpha"], sol["beta"], sol["gamma"],
-                                        lm_inertial=[(2, 2)])
-    h = compute_hpc(hTlm, hTlm_neg, hTl0, phi=0.0, iota=0.5)
-    print(f"full pipeline demo: |h(t=0)| = {abs(h[0]):.6e}, |h(t=-1)| = {abs(h[-1]):.6e}")

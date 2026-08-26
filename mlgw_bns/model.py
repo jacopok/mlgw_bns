@@ -758,6 +758,178 @@ class Model:
         # shared one they were all identical to anyway).
         self._propagate_time_shifts_predictor()
 
+    def _mode_amplitudes_and_phases(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        source: str,
+        time_shifts: Union[float, np.ndarray] = 0.0,
+        inclination: float = 0.0,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        r"""Amplitude and phase of every mode, from the requested source.
+
+        This is the one place where the per-mode
+        :math:`A_{\ell m}(f), \phi_{\ell m}(f)` are gathered; the
+        polarization builders (:meth:`_hpc_waveform`,
+        :meth:`_hpc_waveform_per_mode`, :meth:`get_teob_modes_dict`,
+        :meth:`coprecessing_modes_dict`) all go through it, so that they
+        cannot drift apart in their conventions.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate, in Hz.
+        params : ParametersWithExtrinsic
+            Source parameters.
+        source : str
+            Where the amplitude and phase come from:
+
+            * ``"surrogate"``: the trained :class:`ModeModel` networks,
+              with ``time_shifts`` applied as a linear-in-frequency
+              phase term;
+            * ``"post_newtonian"``: the TaylorF2-style expressions of
+              :mod:`~mlgw_bns.pn_modes`;
+            * ``"eob"``: a direct call into TEOBResumS, at ``inclination``.
+        time_shifts : np.ndarray or float
+            Per-mode time shifts, in units of the dataset's reference
+            total mass; a scalar is broadcast to every mode. Only used
+            when ``source`` is ``"surrogate"``.
+        inclination : float
+            Inclination, in radians, passed to TEOBResumS. Only used
+            when ``source`` is ``"eob"``.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            ``(amplitudes, phases)``, each of shape
+            ``(len(self.modes), len(frequencies))`` and ordered like
+            :attr:`modes`.
+
+        Raises
+        ------
+        ValueError
+            If ``source`` is not one of the three accepted values.
+        """
+        dataset = self.dataset
+
+        if source == "eob":
+            # A shallow copy of the dataset whose total_mass is the requested
+            # one, so that the EOB generator reads the natural-unit
+            # frequencies consistently.
+            dataset_for_teob = copy.copy(dataset)
+            dataset_for_teob.total_mass = params.total_mass
+            params_teob = params.intrinsic(dataset_for_teob)
+            f_natural = frequencies * params.mass_sum_seconds
+        elif source in ("surrogate", "post_newtonian"):
+            time_shifts_per_mode = _broadcast_time_shifts(time_shifts, len(self.modes))
+        else:
+            raise ValueError(
+                f"Unknown amplitude/phase source {source!r}: expected one of "
+                "'surrogate', 'post_newtonian', 'eob'."
+            )
+
+        amps_list: list[np.ndarray] = []
+        phases_list: list[np.ndarray] = []
+
+        for idx, mode in enumerate(self.modes):
+            if source == "post_newtonian":
+                parameters_intrinsic = params.intrinsic(dataset)
+                amp = _post_newtonian_amplitudes_by_mode[mode](
+                    parameters_intrinsic,
+                    frequencies * params.mass_sum_seconds,
+                )
+                phase = _post_newtonian_phases_by_mode[mode](
+                    parameters_intrinsic,
+                    frequencies * params.mass_sum_seconds,
+                )
+            elif source == "eob":
+                (
+                    _f_spa,
+                    amp,
+                    phase,
+                ) = self.mode_models[mode].waveform_generator.get_amplitude_phase_at_inclination(
+                    params_teob, f_natural, inclination=inclination
+                )
+            else:
+                amp, phase = self.mode_models[mode].predict_amplitude_phase_optimized(
+                    frequencies, params
+                )
+                # Time shifts are stored in units of the reference total mass
+                # of the dataset, so we rescale to the requested total mass.
+                ts_scaled = time_shifts_per_mode[idx] * (
+                    params.total_mass / self.dataset.total_mass
+                )
+                phase = phase + 2 * np.pi * frequencies * ts_scaled
+
+            amps_list.append(amp)
+            phases_list.append(phase)
+
+        return np.stack(amps_list), np.stack(phases_list)
+
+    def coprecessing_modes_dict(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        time_shifts: Optional[Union[float, np.ndarray]] = None,
+        source: str = "surrogate",
+    ) -> dict[tuple[int, int], np.ndarray]:
+        r"""Per-mode frequency-domain multipoles, with no sky projection.
+
+        Returns the multipoles :math:`\tilde{h}_{\ell m}(f)` themselves
+        --- what :meth:`predict_modes_dict` returns *before* it is
+        weighted by :math:`{}_{-2}Y_{\ell m}(\iota, \varphi)`:
+
+        .. math::
+            \tilde{h}_{\ell m}(f) = \frac{1}{\eta}
+                A_{\ell m}(f) e^{i \phi_{\ell m}(f)} \,.
+
+        For an aligned-spin binary --- which is all this surrogate models
+        --- these *are* the co-precessing-frame multipoles, which is what
+        makes them the natural input to the precessing twist of
+        :mod:`~mlgw_bns.precessing_model`.
+
+        Only :math:`m > 0` multipoles are returned: with the
+        :math:`\tilde{h}(f) = \int h(t) e^{2 \pi i f t} \mathrm{d}t`
+        convention used throughout, the :math:`m < 0` multipoles of an
+        inspiralling binary have their support at :math:`f < 0` and so
+        vanish on the positive-frequency grid, being recoverable there
+        from :math:`h_{\ell, -m} = (-1)^\ell h_{\ell m}^*`.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate the multipoles, in Hz.
+        params : ParametersWithExtrinsic
+            Source parameters. The inclination it carries is *not* used.
+        time_shifts : np.ndarray or float, optional
+            Per-mode time shifts (see :meth:`predict`). Predicted from
+            ``params`` if ``None``. Unused unless ``source`` is
+            ``"surrogate"``.
+        source : str
+            ``"surrogate"`` (default), ``"post_newtonian"`` or ``"eob"``;
+            see :meth:`_mode_amplitudes_and_phases`.
+
+        Returns
+        -------
+        dict[tuple[int, int], np.ndarray]
+            Mapping ``(l, m) -> h_lm(f)``, one complex array per mode.
+        """
+        amp_arr, phase_arr = self._mode_amplitudes_and_phases(
+            frequencies=frequencies,
+            params=params,
+            source=source,
+            time_shifts=(
+                self._resolve_time_shifts(params, time_shifts)
+                if source == "surrogate"
+                else 0.0
+            ),
+        )
+        eta = params.intrinsic(self.dataset).eta
+        return {
+            (mode.l, mode.m): amp_arr[i] * np.exp(1j * phase_arr[i]) / eta
+            for i, mode in enumerate(self.modes)
+        }
+
     def predict_amplitude_phase_mode(
         self,
         mode: Mode,
@@ -1014,43 +1186,18 @@ class Model:
             iota=inclination,
         )
 
-        time_shifts_per_mode = _broadcast_time_shifts(time_shifts, len(self.modes))
-
-        active_indices: list[int] = []
-        amps_list: list[np.ndarray] = []
-        phases_list: list[np.ndarray] = []
-        dataset = self.dataset
-
-        for idx, mode in enumerate(self.modes):
-            if use_pn:
-                parameters_intrinsic = params.intrinsic(dataset)
-                amp = _post_newtonian_amplitudes_by_mode[mode](
-                    parameters_intrinsic,
-                    frequencies * params.mass_sum_seconds,
-                )
-                phase = _post_newtonian_phases_by_mode[mode](
-                    parameters_intrinsic,
-                    frequencies * params.mass_sum_seconds,
-                )
-            else:
-                amp, phase = self.mode_models[mode].predict_amplitude_phase_optimized(
-                    frequencies, params
-                )
-                ts = time_shifts_per_mode[idx]
-                # Time shifts are stored in units of the reference total mass
-                # of the dataset, so we rescale to the requested total mass.
-                ts_scaled = ts * (params.total_mass / self.dataset.total_mass)
-                phase += 2 * np.pi * frequencies * ts_scaled
-            active_indices.append(idx)
-            amps_list.append(amp)
-            phases_list.append(phase)
-
-        if not active_indices:
+        if not self.modes:
             return {}
 
-        amp_arr = np.stack(amps_list)
-        cosphi_arr = np.cos(np.stack(phases_list))
-        sinphi_arr = np.sin(np.stack(phases_list))
+        amp_arr, phase_arr = self._mode_amplitudes_and_phases(
+            frequencies=frequencies,
+            params=params,
+            source="post_newtonian" if use_pn else "surrogate",
+            time_shifts=time_shifts,
+        )
+        active_indices = list(range(len(self.modes)))
+        cosphi_arr = np.cos(phase_arr)
+        sinphi_arr = np.sin(phase_arr)
         coeffs = _build_mode_coeffs(
             self.modes,
             active_indices,
@@ -1148,33 +1295,20 @@ class Model:
         if inclination is None:
             inclination = params.inclination
 
-        dataset = self.dataset
-        # Use a shallow copy of the dataset whose total_mass is set to the
-        # requested total mass, so that the EOB generator interprets the
-        # natural-unit frequencies consistently.
-        dataset_for_teob = copy.copy(dataset)
-        dataset_for_teob.total_mass = params.total_mass
-        params_teob = params.intrinsic(dataset_for_teob)
-
-        f_natural = frequencies * params.mass_sum_seconds
         Ylm_real, Ylm_imag, Ylm_real_mneg, Ylm_imag_mneg = self._compute_Ylm_modes(
             modes=self.modes,
             phi=0.0,
             iota=inclination,
         )
 
-        amps_list: list[np.ndarray] = []
-        phases_list: list[np.ndarray] = []
-        for mode in self.modes:
-            _f_spa, amp, phase = self.mode_models[mode].waveform_generator.get_amplitude_phase_at_inclination(
-                params_teob, f_natural, inclination=inclination
-            )
-            amps_list.append(amp)
-            phases_list.append(phase)
-
-        amp_arr = np.stack(amps_list)
-        cosphi_arr = np.cos(np.stack(phases_list))
-        sinphi_arr = np.sin(np.stack(phases_list))
+        amp_arr, phase_arr = self._mode_amplitudes_and_phases(
+            frequencies=frequencies,
+            params=params,
+            source="eob",
+            inclination=inclination,
+        )
+        cosphi_arr = np.cos(phase_arr)
+        sinphi_arr = np.sin(phase_arr)
         coeffs = _build_mode_coeffs(
             self.modes,
             list(range(len(self.modes))),
@@ -1184,7 +1318,7 @@ class Model:
             Ylm_imag_mneg,
         )
 
-        eta = params.intrinsic(dataset).eta
+        eta = params.intrinsic(self.dataset).eta
         result: dict[tuple[int, int], np.ndarray] = {}
         for i, mode in enumerate(self.modes):
             c = coeffs[i]
@@ -1243,45 +1377,19 @@ class Model:
             iota=inclination,
         )
 
-        time_shifts_per_mode = _broadcast_time_shifts(time_shifts, len(self.modes))
-
-        active_indices: list[int] = []
-        amps_list: list[np.ndarray] = []
-        phases_list: list[np.ndarray] = []
-
-        dataset = self.dataset
-        for idx, mode in enumerate(self.modes):
-            if use_pn:
-                parameters_intrinsic = params.intrinsic(dataset)
-                amp = _post_newtonian_amplitudes_by_mode[mode](
-                    parameters_intrinsic,
-                    frequencies * params.mass_sum_seconds,
-                )
-                phase = _post_newtonian_phases_by_mode[mode](
-                    parameters_intrinsic,
-                    frequencies * params.mass_sum_seconds,
-                )
-            else:
-                amp, phase = self.mode_models[mode].predict_amplitude_phase_optimized(
-                    frequencies, params
-                )
-                ts = time_shifts_per_mode[idx]
-                # Time shifts are stored in units of the reference total mass
-                # of the dataset, so we rescale to the requested total mass.
-                ts_scaled = ts * (params.total_mass / self.dataset.total_mass)
-                phase += 2 * np.pi * frequencies * ts_scaled
-
-            active_indices.append(idx)
-            amps_list.append(amp)
-            phases_list.append(phase)
-
-        if not active_indices:
+        if not self.modes:
             zeros = np.zeros_like(frequencies)
             return zeros, zeros.copy(), zeros.copy(), zeros.copy()
 
-        amp_arr = np.stack(amps_list)
-        cosphi_arr = np.cos(np.stack(phases_list))
-        sinphi_arr = np.sin(np.stack(phases_list))
+        amp_arr, phase_arr = self._mode_amplitudes_and_phases(
+            frequencies=frequencies,
+            params=params,
+            source="post_newtonian" if use_pn else "surrogate",
+            time_shifts=time_shifts,
+        )
+        active_indices = list(range(len(self.modes)))
+        cosphi_arr = np.cos(phase_arr)
+        sinphi_arr = np.sin(phase_arr)
         coeffs = _build_mode_coeffs(
             self.modes,
             active_indices,

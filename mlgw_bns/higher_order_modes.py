@@ -18,10 +18,10 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 import numpy as np
-from scipy.special import factorial  # type: ignore
 
 from .data_management import phase_unwrapping
 from .dataset_generation import WaveformGenerator, WaveformParameters
+from .special_func import wigner_d_function
 from .pn_modes import (
     Mode,
     _post_newtonian_amplitudes_by_mode,
@@ -489,10 +489,14 @@ def spherical_harmonic_spin_2_conjugate(  # TODO: change it's name
 def wigner_d_function_spin_2(mode: Mode, inclination: float) -> complex:
     r"""Wigner little-:math:`d` for spin :math:`s=-2` (Eq. II.8, arXiv:0709.0093).
 
+    Thin :math:`s=-2` specialisation of
+    :func:`~mlgw_bns.special_func.wigner_d_function`, which holds the
+    single implementation of the general :math:`d^{\ell}_{m,s}`.
+
     Parameters
     ----------
     mode : Mode
-        Spherical-harmonic indices :math:`(\\ell, m)`.
+        Spherical-harmonic indices :math:`(\ell, m)`.
     inclination : float
         Inclination :math:`\iota`.
 
@@ -501,35 +505,7 @@ def wigner_d_function_spin_2(mode: Mode, inclination: float) -> complex:
     complex
         Little-:math:`d` matrix element.
     """
-    return_value = 0
-
-    cos_i_halves = np.cos(inclination / 2)
-    sin_i_halves = np.sin(inclination / 2)
-
-    ki = max(0, mode.m - 2)
-    kf = min(mode.l + mode.m, mode.l - 2)
-
-    for k in range(ki, kf + 1):
-        norm = (
-            factorial(k)
-            * factorial(mode.l + mode.m - k)
-            * factorial(mode.l - 2 - k)
-            * factorial(k + 2 - mode.m)
-        )
-        return_value += (
-            (-1) ** k
-            * cos_i_halves ** (2 * mode.l + mode.m - 2 - 2 * k)
-            * sin_i_halves ** (2 * k + 2 - mode.m)
-        ) / norm
-
-    const = np.sqrt(
-        factorial(mode.l + mode.m)
-        * factorial(mode.l - mode.m)
-        * factorial(mode.l + 2)
-        * factorial(mode.l - 2)
-    )
-
-    return const * return_value
+    return wigner_d_function(mode.l, mode.m, 2, inclination)
 
 
 def mode_to_k(mode: Mode) -> int:
