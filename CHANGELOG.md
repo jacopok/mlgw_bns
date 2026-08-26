@@ -32,9 +32,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     analytic limits and plots the PN angles and the resulting polarizations, and
     `visualization/precessing_mismatches.py`, which computes precessing-waveform
     mismatches over random source positions and inclinations.
+- `visualization/validate_twist_against_teob.py`, which validates the twist
+    against TEOBResumS itself: it takes the co-precessing multipoles from an
+    aligned-spin run, twists them here, and compares against the inertial-frame
+    multipoles of a generic-spin run of the same binary. The dominant multipoles
+    agree to a few times 1e-5, the polarizations to 6e-5 on average, and the
+    residual is shown to vanish linearly with the opening angle, and to be
+    entirely in the Euler angles: fitting the three angles at each time
+    reproduces TEOBResumS' multipoles to 2e-14, so the rotation itself is
+    exact, and the recovered angles agree with the ones integrated here to
+    8e-06 rad in the combination the multipoles constrain sharply and to 3e-04
+    rad in the opening angle.
 
 ### Changed
 
+- `twist_waveform.compute_hpc` returned `h+ + i hx` rather than `h+ - i hx`;
+    with the sign corrected it reproduces TEOBResumS' polarizations to machine
+    precision, given that the C code's `coalescence_angle` is the azimuth
+    measured as `pi/2 - phi`. `PrecessingModel` was unaffected: it combines the
+    multipoles through `polarizations_from_inertial_modes` instead.
+- `twist_waveform.integrate_pn_spin_precession` now refines its output with the
+    integrator's dense output. DOP853 covers a whole inspiral in a couple of
+    hundred steps, which is accurate at those points but far too coarse to
+    interpolate the precession between them.
 - The Wigner d-function and the spin-weighted spherical harmonics now live only
     in `mlgw_bns.special_func`, vectorized over the angle;
     `higher_order_modes.wigner_d_function_spin_2`, the named harmonics in
