@@ -20,10 +20,13 @@ from mlgw_bns.modes_model import ModesModel
 
 def pytest_addoption(parser):
     parser.addoption(
-        "--defaultunavailable",
+        "--rundefault",
         action="store_true",
         default=False,
-        help="skip tests which require the default model to be up to date",
+        help=(
+            "also run the tests which need the packaged default model "
+            "(mlgw_bns/data/default_*); they are skipped by default"
+        ),
     )
 
 
@@ -34,11 +37,16 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    if not config.getoption("--defaultunavailable"):
-        # the user did not specify: run all tests
+    """Skip the tests needing the packaged default model, unless asked.
+    """
+    if config.getoption("--rundefault"):
+        # the user asked for them explicitly: run all tests
         return
-    default_unavailable = pytest.mark.skipif(
-        reason="Skip if the default dataset needs to be updated"
+    default_unavailable = pytest.mark.skip(
+        reason=(
+            "the packaged default model needs to be regenerated; "
+            "pass --rundefault to run this anyway"
+        )
     )
     for item in items:
         if "requires_default" in item.keywords:
