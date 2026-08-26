@@ -120,8 +120,7 @@ def mlgw_eob_residuals(validator: ValidateModel, n_waveforms: int):
     parameter_set : ParameterSet
         The (filtered) parameters these residuals correspond to.
     """
-    n_params = int(n_waveforms * validator._oversample_factor())
-    parameter_set = validator.param_set(n_params, SEED)
+    parameter_set = validator.param_set(n_waveforms, SEED)
 
     true_waveforms, parameter_set = validator.true_waveforms(parameter_set)
     phase0_eob = np.copy(true_waveforms.phases)

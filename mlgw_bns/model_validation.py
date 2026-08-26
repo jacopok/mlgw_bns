@@ -222,10 +222,6 @@ class ValidateModel:
     ) -> Tuple[FDWaveforms, ParameterSet]:
         """EOB waveforms corresponding to the given parameter set.
 
-        For modes :math:`(2,1)` and :math:`(3,3)`, parameter tuples with
-        ``amp_teob <= 0`` are discarded. The returned :class:`ParameterSet`
-        contains only the valid parameters.
-
         Parameters
         ----------
         param_set : ParameterSet
@@ -234,8 +230,7 @@ class ValidateModel:
         Returns
         -------
         Tuple[FDWaveforms, ParameterSet]
-                EOB waveforms and the parameter set that produced them
-                (filtered for modes 21/33 when ``amp_teob <= 0``).
+                EOB waveforms and the parameter set that produced them.
         """
         return self.model.dataset.generate_waveforms_from_params(
             param_set, self.model.downsampling_indices
@@ -371,10 +366,7 @@ class ValidateModel:
         List[float]
                 List of mismatches.
         """
-        # For modes (2,1) and (3,3), oversample parameters to compensate
-        # for amp_teob <= 0 discards in :meth:`true_waveforms`.
-        n_params = int(number_of_validation_waveforms * self._oversample_factor())
-        self.parameter_set = self.param_set(n_params, seed)
+        self.parameter_set = self.param_set(number_of_validation_waveforms, seed)
 
         if true_waveforms is None:
             true_waveforms, valid_param_set = self.true_waveforms(self.parameter_set)
@@ -434,8 +426,7 @@ class ValidateModel:
         List[float]
                 List of full waveform mismatches.
         """
-        n_params = int(number_of_validation_waveforms * self._oversample_factor())
-        self.parameter_set = self.param_set(n_params, seed)
+        self.parameter_set = self.param_set(number_of_validation_waveforms, seed)
 
         if true_waveforms is None:
             true_waveforms, valid_param_set = self.true_waveforms(self.parameter_set)
@@ -855,25 +846,6 @@ class ValidateModel:
                 e,
             )
             return 1.0
-
-    def _oversample_factor(self) -> float:
-        """Oversampling factor for parameter generation.
-
-        Modes :math:`(2,1)` and :math:`(3,3)` discard tuples for which
-        ``amp_teob <= 0`` in :meth:`true_waveforms`, so we sample
-        additional parameters to compensate.
-
-        Returns
-        -------
-        float
-                ``1.5`` for modes 21/33, ``1.0`` otherwise.
-        """
-        current_mode = self.model.dataset.current_mode
-        if current_mode is None:
-            return 1.0
-        if (current_mode.l, current_mode.m) in ((2, 1), (3, 3)):
-            return 1.5
-        return 1.0
 
     def _check_frequencies_in_band(self, frequencies: np.ndarray) -> None:
         """Check that ``frequencies`` lies within the model's sampled band.

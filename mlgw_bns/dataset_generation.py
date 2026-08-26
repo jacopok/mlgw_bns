@@ -288,16 +288,6 @@ class WaveformGenerator(ABC):
             params, frequencies
         )
 
-        # For modes (2,1) and (3,3): discard parameter sets where EOB amplitude <= 0 at any frequency.
-        # Zero/negative amplitude causes a π phase jump that the NN cannot learn.
-        if (
-            hasattr(self, "mode")
-            and self.mode is not None
-            and (self.mode.l, self.mode.m) in ((2, 1), (3, 3))
-            and np.any(amplitude_eob <= 0)
-        ):
-            return None
-
         amplitude_pn_ = self.post_newtonian_amplitude(params, frequencies_eob)
         phase_pn_ = self.post_newtonian_phase(params, frequencies_eob)
 
@@ -311,7 +301,7 @@ class WaveformGenerator(ABC):
             amplitude_pn = amplitude_pn_
             phase_pn = phase_pn_
 
-        return (np.log(np.abs(amplitude_eob) / np.abs(amplitude_pn)), phase_eob - phase_pn)
+        return (amplitude_eob / amplitude_pn, phase_eob - phase_pn)
 
 class BarePostNewtonianGenerator(WaveformGenerator):
     """Generate waveforms with
@@ -803,10 +793,17 @@ class Dataset:
     the dataset but not the data itself.
     (but I cannot think of a better one, maybe DatasetMeta?)
 
-    The amplitude residuals are defined as
-    :math:`\log(A _{\text{EOB}} / A_{\text{PN}})`,
+    The amplitude residuals are defined as the ratio
+    :math:`A _{\text{EOB}} / A_{\text{PN}}`,
     while the phase residuals are defined as
     :math:`\phi _{\text{EOB}} - \phi_{\text{PN}}`.
+
+    The amplitude residual is a plain ratio rather than its logarithm so
+    that it can carry a sign: the EOB mode amplitude crosses zero within
+    the band for the (2,1) and (3,3) modes, which is a physical
+    :math:`\pi` phase flip. Under a log-ratio that sign had to be thrown
+    away with an absolute value, and the affected parameter tuples
+    discarded entirely; here they are represented directly.
 
     Parameters
     ----------
@@ -1185,14 +1182,6 @@ class Dataset:
             amp_length = downsampling_indices.amp_length
             phi_length = downsampling_indices.phi_length
 
-        # For modes (2,1) and (3,3), use higher oversample to compensate for amp_teob<=0 discards
-        if (
-            oversample == 1.0
-            and self.current_mode is not None
-            and (self.current_mode.l, self.current_mode.m) in ((2, 1), (3, 3))
-        ):
-            oversample = 1.2
-
         # Calculate how many to generate
         n_generate = int(size * oversample)
 
@@ -1327,7 +1316,7 @@ class Dataset:
         )
 
         return FDWaveforms(
-            amplitudes=np.exp(amp_residuals) * pn_amps,
+            amplitudes=amp_residuals * pn_amps,
             phases=phi_residuals + pn_phis,
         )
 
@@ -1353,7 +1342,7 @@ class Dataset:
         -------
         tuple[FDWaveforms, ParameterSet]
             Waveforms and the parameter set that produced them.
-            For mode (2,1), invalid params (amp_teob <= 0) are excluded.
+            All the given parameters are used.
         """
 
         if downsampling_indices is None:
@@ -1389,14 +1378,6 @@ class Dataset:
             _, amp, phi = self.waveform_generator.effective_one_body_waveform(
                 par, self.frequencies
             )
-            # For modes (2,1) and (3,3): discard parameter sets where EOB amplitude <= 0 at any frequency.
-            # Zero/negative amplitude causes a π phase jump that the NN cannot learn.
-            if (
-                self.current_mode is not None
-                and (self.current_mode.l, self.current_mode.m) in ((2, 1), (3, 3))
-                and np.any(amp <= 0)
-            ):
-                return None
             return amp[amp_indices], phi[phi_indices], par.array
 
         with tqdm_joblib(tqdm(desc="Generating waveforms", total=len(waveform_param_list))):
@@ -1405,19 +1386,8 @@ class Dataset:
             )
 
         valid_results = [r for r in results if r is not None]
-        n_discarded = len(results) - len(valid_results)
-        if n_discarded > 0:
-            logging.warning(
-                "Discarded %i/%i parameter sets "
-                "(mode 21 or 33: amp_teob <= 0 at some frequency)",
-                n_discarded,
-                len(results),
-            )
         if len(valid_results) == 0:
-            raise RuntimeError(
-                "All parameter sets were discarded (mode 21 or 33: amp_teob <= 0). "
-                "Try different parameter ranges or increase the parameter set size."
-            )
+            raise RuntimeError("No waveforms could be generated.")
 
         amps = np.array([r[0] for r in valid_results])
         phis = np.array([r[1] for r in valid_results])

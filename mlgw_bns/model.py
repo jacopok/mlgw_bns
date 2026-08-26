@@ -1543,7 +1543,13 @@ def combine_amp_phase(
 def combine_residuals_amp(amp: np.ndarray, amp_pn: np.ndarray) -> np.ndarray:
     r"""Combine amplitude residuals with their Post-Newtonian counterparts,
     according to
-    :math:`A = A_{PN} e^{\Delta A}`.
+    :math:`A = A_{PN} \, \Delta A`.
+
+    The residual is the plain ratio :math:`A / A_{PN}`, not its logarithm:
+    a logarithm cannot represent the sign, and the EOB mode amplitude does
+    change sign (the (2,1) and (3,3) modes cross zero within the band),
+    which is a physical :math:`\pi` phase flip rather than something to
+    discard.
 
     This function is separated out just so that it can be decorated with ``@njit``.
 
@@ -1556,7 +1562,7 @@ def combine_residuals_amp(amp: np.ndarray, amp_pn: np.ndarray) -> np.ndarray:
     -------
     np.ndarray
     """
-    return amp_pn * np.exp(amp)
+    return amp_pn * amp
 
 
 @njit

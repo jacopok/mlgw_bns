@@ -95,7 +95,7 @@ def compute_cartesian_waveform(
     Parameters
     ----------
     amplitude_residuals : np.ndarray
-        Amplitude residuals, in the form :math:`\log (A / A_{\text{PN}})`.
+        Amplitude residuals, in the form :math:`A / A_{\text{PN}}`.
     amp_pn : np.ndarray
         Post-Newtonian baseline amplitude.
     phi_residuals : np.ndarray
@@ -116,7 +116,7 @@ def compute_cartesian_waveform(
         Cartesian waveform, :math:`h = A e^{i \phi}`.
     """
 
-    amp = np.exp(amplitude_residuals) * amp_pn
+    amp = amplitude_residuals * amp_pn
     phi = (
         phi_residuals
         + phi_pn
