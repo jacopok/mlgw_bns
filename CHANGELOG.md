@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Higher-order-mode support: the model shipped with the package now reconstructs
     the (2,2), (2,1), (3,3) and (4,4) modes and sums them into the observer-frame
     polarizations.
+- Progress bars for the (long) dataset generation and training stages, and
+    logging of the memory footprint of the arrays being allocated.
+- Scripts under `visualization/` to validate a trained model and the time-shift
+    predictor, and to inspect the TEOBResumS modes, their PN residuals and the
+    parameters discarded during training.
 
 ### Changed
 
@@ -31,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     next to this repository.
 - The project is built and developed with [uv](https://docs.astral.sh/uv/)
     instead of poetry.
+- **Breaking**: amplitude residuals are now stored and learned as
+    `A / A_PN` rather than `log(A / A_PN)`; datasets and models saved with the
+    previous convention cannot be reused.
+- The multibanded frequency grid now accounts for the mode being represented:
+    the seglen is scaled by `(m / 2) ** (8 / 3)`, and the safety margin on it
+    went from 5% to 15%. All modes are trained on the same, finest, (4,4) grid,
+    so that no cross-grid interpolation is needed when combining them.
+- CI and tox run on Python 3.12 and 3.13 (previously 3.8 to 3.10), through uv.
 
 ### Fixed
 
@@ -38,6 +51,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     units of the reference total mass of the dataset, to the total mass being
     requested, while `Model.predict_modes_dict` did: the two therefore
     disagreed for any total mass other than the reference one.
+- The cubic spline used to go from the downsampled nodes back to the full
+    frequency grid no longer extrapolates: points outside the node range are
+    held at the nearest endpoint value. The outermost interval of the greedy
+    downsampling can be orders of magnitude narrower than the extrapolation
+    distance, in which case the extrapolated values diverged wildly.
+- Mismatch computations no longer fall back to the value 1 whenever the
+    L-BFGS-B refinement reports an abnormal termination, which happens
+    routinely when the optimum sits at a bound of the periodic `phi_c`:
+    the better of the refined and grid-search estimates is used instead.
 
 ### Removed
 
