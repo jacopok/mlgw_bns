@@ -6,6 +6,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Higher-order-mode support: the model shipped with the package now reconstructs
+    the (2,2), (2,1), (3,3) and (4,4) modes and sums them into the observer-frame
+    polarizations.
+- Progress bars for the (long) dataset generation and training stages, and
+    logging of the memory footprint of the arrays being allocated.
+- Scripts under `visualization/` to validate a trained model and the time-shift
+    predictor, and to inspect the TEOBResumS modes, their PN residuals and the
+    parameters discarded during training.
+
+### Changed
+
+- **Breaking**: `Model` is now the multi-mode surrogate, holding one `ModeModel`
+    per spherical-harmonic mode. What used to be called `Model` --- the single-mode
+    workhorse --- is now `ModeModel`, and lives in `mlgw_bns.mode_model`.
+    The class previously called `ModesModel` is now `Model`, in `mlgw_bns.model`.
+    Its `models` mapping is now called `mode_models`.
+- **Breaking**: `Model.predict` returns the two polarizations `(hp, hc)`,
+    like `ModeModel.predict`, instead of `(h, hp, hc)` where the first element
+    was the redundant combination `hp - 1j * hc`.
+- The `time_shifts` argument of `Model.predict` and `Model.predict_modes_dict`
+    is now optional: if it is not given, the shifts aligning the mode mergers
+    are predicted from the source parameters with `Model.time_shifts_predictor`.
+- `Model.default_for_testing()` loads the higher-order-mode model
+    (`mlgw_bns/data/default_hom`) rather than the old single-mode checkpoints.
+- TEOBResumS is now taken from PyPI rather than from a checkout expected to sit
+    next to this repository.
+- The project is built and developed with [uv](https://docs.astral.sh/uv/)
+    instead of poetry.
+- **Breaking**: amplitude residuals are now stored and learned as
+    `A / A_PN` rather than `log(A / A_PN)`; datasets and models saved with the
+    previous convention cannot be reused.
+- The multibanded frequency grid now accounts for the mode being represented:
+    the seglen is scaled by `(m / 2) ** (8 / 3)`, and the safety margin on it
+    went from 5% to 15%. All modes are trained on the same, finest, (4,4) grid,
+    so that no cross-grid interpolation is needed when combining them.
+- CI and tox run on Python 3.12 and 3.13 (previously 3.8 to 3.10), through uv.
+
+### Fixed
+
+- `Model.predict` did not rescale the mode time shifts, which are stored in
+    units of the reference total mass of the dataset, to the total mass being
+    requested, while `Model.predict_modes_dict` did: the two therefore
+    disagreed for any total mass other than the reference one.
+- The cubic spline used to go from the downsampled nodes back to the full
+    frequency grid no longer extrapolates: points outside the node range are
+    held at the nearest endpoint value. The outermost interval of the greedy
+    downsampling can be orders of magnitude narrower than the extrapolation
+    distance, in which case the extrapolated values diverged wildly.
+- Mismatch computations no longer fall back to the value 1 whenever the
+    L-BFGS-B refinement reports an abnormal termination, which happens
+    routinely when the optimum sits at a bound of the periodic `phi_c`:
+    the better of the refined and grid-search estimates is used instead.
+
+### Removed
+
+- **Breaking**: the `default` and `fast` single-mode pretrained checkpoints, and
+    with them `ModeModel.default_for_testing`.
+
+
 ## [0.12.1] - 2022-11-01
 
 ### Fixed

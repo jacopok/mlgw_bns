@@ -1,6 +1,7 @@
 """This module defines the `fixtures <https://docs.pytest.org/en/6.2.x/fixture.html>`__ 
 which all other testing files can then use."""
 
+import glob
 import os
 
 import h5py
@@ -9,37 +10,11 @@ import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
 
-from mlgw_bns import Model, ParametersWithExtrinsic
+from mlgw_bns import Model, ModeModel, ParametersWithExtrinsic
 from mlgw_bns.data_management import ParameterRanges
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
 from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
-
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--defaultunavailable",
-        action="store_true",
-        default=False,
-        help="skip tests which require the default model to be up to date",
-    )
-
-
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers", "requires_default: need the default model to run"
-    )
-
-
-def pytest_collection_modifyitems(config, items):
-    if not config.getoption("--defaultunavailable"):
-        # the user did not specify: run all tests
-        return
-    default_unavailable = pytest.mark.skipif(
-        reason="Skip if the default dataset needs to be updated"
-    )
-    for item in items:
-        if "requires_default" in item.keywords:
-            item.add_marker(default_unavailable)
+from mlgw_bns.higher_order_modes import Mode
 
 
 @fixture(name="variable_dataset")
@@ -108,12 +83,52 @@ def greedy_downsampling_training(dataset):
 
 
 @pytest.fixture(scope="session")
+def mode_model():
+    """Untrained single-mode model, writing to files in the cwd."""
+    name = "test_mode_model"
+    mode_model = ModeModel(name, pca_components_number=20)
+    yield mode_model
+
+    for filename in [
+        mode_model.filename_arrays,
+        mode_model.filename_metadata,
+        mode_model.filename_nn,
+        mode_model.filename_timeshifts,
+    ]:
+        try:
+            os.remove(filename)
+        except FileNotFoundError:
+            pass
+
+
+@pytest.fixture(scope="session")
+def generated_mode_model(mode_model):
+    mode_model.generate(8, 100, 100)
+    yield mode_model
+
+
+@pytest.fixture(scope="session")
+def trained_mode_model(generated_mode_model):
+    generated_mode_model.set_hyper_and_train_nn()
+    yield generated_mode_model
+
+
+@pytest.fixture(scope="session")
+def default_model():
+    """The pretrained multi-mode model shipped with the package."""
+    yield Model.default_for_testing()
+
+
+@pytest.fixture(scope="session")
 def model():
+    """Untrained multi-mode model, writing to files in the cwd."""
     name = "test_model"
-    model = Model(name, pca_components_number=20)
+    model = Model(
+        modes=[Mode(2, 2), Mode(2, 1)], filename=name, pca_components_number=10
+    )
     yield model
 
-    for filename in [model.filename_arrays, model.filename_metadata, model.filename_nn]:
+    for filename in glob.glob(f"{name}*"):
         try:
             os.remove(filename)
         except FileNotFoundError:
@@ -122,7 +137,7 @@ def model():
 
 @pytest.fixture(scope="session")
 def generated_model(model):
-    model.generate(8, 100, 100)
+    model.generate(6, 30, 30)
     yield model
 
 
@@ -130,11 +145,6 @@ def generated_model(model):
 def trained_model(generated_model):
     generated_model.set_hyper_and_train_nn()
     yield generated_model
-
-
-@pytest.fixture(scope="session")
-def default_model():
-    yield Model.default()
 
 
 @pytest.fixture

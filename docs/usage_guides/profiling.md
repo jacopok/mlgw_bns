@@ -7,16 +7,15 @@ about which functions are taking the longest to run.
 
 In order to achieve this, we can make use of the `cProfile` module, combined
 with the `snakeviz` visualization tool. 
-Both of these dependencies should be installed when running the command
+Both of these dependencies are installed when running
 ```bash
-poetry install
+uv sync
 ```
-without the `--no-dev` option. 
 
 We write a script with the following imports:
 ```python
 from mlgw_bns import Model
-from mlgw_bns.model import ParametersWithExtrinsic
+from mlgw_bns.mode_model import ParametersWithExtrinsic
 
 import cProfile
 import pstats
@@ -83,7 +82,7 @@ This will generate a profile file which is not human-readable,
 but it can be nicely visualized with the `snakeviz` utility: 
 simply run 
 ```bash
-poetry run snakeviz prediction_profile.prof 
+uv run snakeviz prediction_profile.prof 
 ```
 from the command line, and a local webpage containing an interactive visualization 
 of the execution times of the various internal functions.
@@ -95,9 +94,9 @@ is that:
     is called `model.cartesian_waveforms_at_frequencies`, which calls 
     `downsampling_interpolation.resample` twice (once for amplitude, once for phase),
     and which in turns calls the scipy low-level functions `splrep` and `splev`;
-- some time is taken by the prediction of the waveforms (`model.Model.predict_waveforms_bulk`), of which
+- some time is taken by the prediction of the waveforms (`mode_model.ModeModel.predict_waveforms_bulk`), of which
   - some time (about half) is taken by the prediction of the residuals with the neural network and PCA:
-        `model.Model.predict_residuals_bulk`;
+        `mode_model.ModeModel.predict_residuals_bulk`;
   - some time (about half) is taken by the evaluation of the post-Newtonian amplitude and phase:
         `dataset_generation.Dataset.recompose_residuals`;
 - any remaining time required should be comparatively small.

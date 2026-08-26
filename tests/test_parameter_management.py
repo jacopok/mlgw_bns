@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from mlgw_bns.dataset_generation import ParameterSet
-from mlgw_bns.model import ParametersWithExtrinsic
+from mlgw_bns.mode_model import ParametersWithExtrinsic
 
 
 def test_wrong_number_of_parameters_fail():

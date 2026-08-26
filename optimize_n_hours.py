@@ -3,7 +3,7 @@ from mlgw_bns import *
 
 if __name__ == "__main__":
     try:
-        m = Model("optimization_dataset")
+        m = ModeModel("optimization_dataset")
         m.load()
     except FileNotFoundError:
         m.generate(512, 1 << 15, None)

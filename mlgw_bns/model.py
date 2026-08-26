@@ -1,457 +1,569 @@
+r"""Higher-order-mode surrogate model.
+
+This module defines :class:`Model`, a thin orchestrator that owns one
+:class:`ModeModel` instance per spherical-harmonic mode :math:`(\ell, m)` and
+combines their predictions into the two observer-frame polarizations
+:math:`h_+` and :math:`h_\times`.
+
+The waveform from a quasi-circular binary is decomposed on the basis of
+spin-weighted spherical harmonics :math:`{}_{-2}Y_{\ell m}(\iota, \varphi)`
+as
+
+.. math::
+    h_+ - i\, h_\times = \sum_{\ell m} A_{\ell m}(f)\, e^{-i \phi_{\ell m}(f)}
+                          \; {}_{-2}Y_{\ell m}(\iota, \varphi)\,,
+
+see for instance Appendix E of `arXiv:2004.06503
+<https://arxiv.org/pdf/2004.06503.pdf>`_. Each individual mode amplitude
+and phase is reconstructed by a :class:`ModeModel`, while the mode-relative
+time shifts that align the mergers across modes are supplied by an
+external predictor (``time_shifts_predictor``).
+
+The module also exposes two summation kernels --- a Numba parallel kernel
+and a NumPy ``einsum`` kernel --- that perform the per-frequency sum over
+modes, weighted by the appropriate combinations of the spin-weighted
+spherical harmonics.
+"""
+
 from __future__ import annotations
 
+import copy
 import logging
-import warnings
-from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass
-from functools import lru_cache
-from typing import IO, ClassVar, Optional, Type, Union
+from concurrent.futures import ThreadPoolExecutor
+from typing import IO, Optional, Union
 
-import h5py
-import joblib  # type: ignore
 import numpy as np
 from importlib.resources import files
-import yaml
-from dacite import from_dict
-from numba import njit  # type: ignore
+from numba import njit, prange  # type: ignore
 
-from .data_management import (
-    DownsamplingIndices,
-    FDWaveforms,
-    ParameterRanges,
-    PrincipalComponentData,
-    Residuals,
-    SavableData,
+from .dataset_generation import Dataset
+from .higher_order_modes import (
+    Mode,
+    ModeGeneratorFactory,
+    teob_mode_generator_factory,
+    _post_newtonian_amplitudes_by_mode,
+    _post_newtonian_phases_by_mode,
 )
-from .dataset_generation import (
-    BarePostNewtonianGenerator,
-    Dataset,
-    ParameterGenerator,
-    ParameterSet,
-    TEOBResumSGenerator,
-    WaveformGenerator,
-    WaveformParameters,
+from .mode_model import ModeModel, ParametersWithExtrinsic
+from .neural_network import (
+    Hyperparameters,
+    TimeshiftsGPR,
+    TimeshiftsNN,
+    load_timeshifts_predictor_from_file,
 )
-from .downsampling_interpolation import DownsamplingTraining, GreedyDownsamplingTraining
-from .neural_network import Hyperparameters, NeuralNetwork, SklearnNetwork, TimeshiftsGPR
-from .principal_component_analysis import (
-    PrincipalComponentAnalysisModel,
-    PrincipalComponentTraining,
-)
-from .taylorf2 import SUN_MASS_SECONDS, smoothing_func
+from .special_func import spinsphericalharm
 
+#: Subfolder, relative to the package, holding the pretrained models.
 PRETRAINED_MODEL_FOLDER = "data/"
-MODELS_AVAILABLE = ["default", "fast"]
+
+#: Names of the pretrained models shipped with the package.
+MODELS_AVAILABLE = ["default_hom"]
+
+#: Modes covered by the pretrained models.
+DEFAULT_MODES = [Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
 
 
-class FrequencyTooLowError(ValueError):
-    """Raised when the frequency given to the predictor is too low."""
+@njit(parallel=True, fastmath=True)
+def _sum_modes_numba(
+    amp: np.ndarray,
+    cosphi: np.ndarray,
+    sinphi: np.ndarray,
+    coeffs: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    r"""Sum the per-mode contributions into the two polarizations.
 
+    Each mode contributes a term of the form
+    :math:`A_{\ell m}(f)\, [\cos\phi_{\ell m}(f)\, c_{\rm cos}
+    + \sin\phi_{\ell m}(f)\, c_{\rm sin}]`
+    to the real/imaginary parts of :math:`h_+` and :math:`h_\times`, where
+    the coefficients :math:`c_{\rm cos}, c_{\rm sin}` are built from the
+    spin-weighted spherical harmonics by :func:`_build_mode_coeffs`.
 
-class FrequencyTooHighError(ValueError):
-    """Raised when the frequency given to the predictor is too high."""
-
-
-@dataclass
-class ParametersWithExtrinsic:
-    r"""Parameters for the generation of a single waveform,
-    including extrinsic parameters.
+    Numba-compiled with ``parallel=True`` and ``fastmath=True`` to vectorize
+    over frequency.
 
     Parameters
     ----------
-    mass_ratio : float
-            Mass ratio of the system, :math:`q = m_1 / m_2`,
-            where :math:`m_1 \geq m_2`, so :math:`q \geq 1`.
-    lambda_1 : float
-            Tidal polarizability of the larger star.
-            In papers it is typically denoted as :math:`\Lambda_1`;
-            for a definition see for example section D of
-            `this paper <http://arxiv.org/abs/1805.11579>`_.
-    lambda_2 : float
-            Tidal polarizability of the smaller star.
-    chi_1 : float
-            Aligned dimensionless spin component of the larger star.
-            The dimensionless spin is defined as
-            :math:`\chi_i = S_i / m_i^2` in
-            :math:`c = G = 1` natural units, where
-            :math:`S_i` is the :math:`z` component
-            of the dimensionful spin vector.
-            The :math:`z` axis is defined as the one which is
-            parallel to the orbital angular momentum of the binary.
-    chi_2 : float
-            Aligned spin component of the smaller star.
-    distance_mpc : float
-            Distance to the binary system, in Megaparsecs.
-    inclination : float
-            Inclination --- angle between the binary system's
-            angular momentum and the observation direction, in radians.
-    total_mass : float
-            Total mass of the binary system, in solar masses.
-    reference_phase : float
-            This will be set as the phase of the first point of the waveform.
-            Defaults to 0.
-    time_shift : float
-            The waveform will be shifted in the time domain
-            by this amount (measured in seconds).
-            In the frequency domain, this means adding a linear
-            term to the phase.
-            Defaults to 0, which by convention means a configuration
-            in which the merger happens at the right edge of the
-            timeseries. This also means that, in the frequency domain,
-            the phase at high frequencies is roughly constant.
+    amp : np.ndarray
+        Shape ``(n_modes, n_freq)``. Amplitude :math:`A_{\ell m}(f)`
+        of each mode, evaluated at each frequency.
+    cosphi : np.ndarray
+        Shape ``(n_modes, n_freq)``. :math:`\cos\phi_{\ell m}(f)`.
+    sinphi : np.ndarray
+        Shape ``(n_modes, n_freq)``. :math:`\sin\phi_{\ell m}(f)`.
+    coeffs : np.ndarray
+        Shape ``(n_modes, 8)``. Spherical-harmonic-derived coefficients
+        per mode, packed as
+        ``[c_cos, c_sin]`` blocks for the four quantities
+        ``h_plus_real, h_plus_imag, h_cross_real, h_cross_imag``
+        (columns 0/1, 2/3, 4/5, 6/7 respectively).
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+        ``(h_plus_real, h_plus_imag, h_cross_real, h_cross_imag)``,
+        each of shape ``(n_freq,)``.
     """
 
-    mass_ratio: float
-    lambda_1: float
-    lambda_2: float
-    chi_1: float
-    chi_2: float
-    distance_mpc: float
-    inclination: float
-    total_mass: float
-    reference_phase: float = 0.0
-    time_shift: float = 0.0
+    n_modes, n_freq = amp.shape
+    h_plus_real = np.zeros(n_freq)
+    h_plus_imag = np.zeros(n_freq)
+    h_cross_real = np.zeros(n_freq)
+    h_cross_imag = np.zeros(n_freq)
 
-    def intrinsic(self, dataset: Dataset) -> WaveformParameters:
-        return WaveformParameters(
-            mass_ratio=self.mass_ratio,
-            lambda_1=self.lambda_1,
-            lambda_2=self.lambda_2,
-            chi_1=self.chi_1,
-            chi_2=self.chi_2,
-            dataset=dataset,
+    for f in prange(n_freq):
+        for m in range(n_modes):
+            h_plus_real[f] += amp[m, f] * (
+                cosphi[m, f] * coeffs[m, 0] + sinphi[m, f] * coeffs[m, 1]
+            )
+            h_plus_imag[f] += amp[m, f] * (
+                cosphi[m, f] * coeffs[m, 2] + sinphi[m, f] * coeffs[m, 3]
+            )
+            h_cross_real[f] += amp[m, f] * (
+                cosphi[m, f] * coeffs[m, 4] + sinphi[m, f] * coeffs[m, 5]
+            )
+            h_cross_imag[f] += amp[m, f] * (
+                cosphi[m, f] * coeffs[m, 6] + sinphi[m, f] * coeffs[m, 7]
+            )
+
+    return h_plus_real, h_plus_imag, h_cross_real, h_cross_imag
+
+
+def _sum_modes_einsum(
+    amp: np.ndarray,
+    cosphi: np.ndarray,
+    sinphi: np.ndarray,
+    coeffs: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Pure-NumPy counterpart of :func:`_sum_modes_numba`.
+
+    Uses :func:`numpy.einsum` to perform the mode summation; this is
+    typically as fast as the Numba kernel for moderate ``n_modes`` and
+    avoids the one-shot JIT compilation cost.
+
+    Parameters
+    ----------
+    amp, cosphi, sinphi, coeffs : np.ndarray
+        See :func:`_sum_modes_numba`.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+        ``(h_plus_real, h_plus_imag, h_cross_real, h_cross_imag)``,
+        each of shape ``(n_freq,)``.
+    """
+
+    h_plus_real = (
+        np.einsum('mf,mf,m->f', amp, cosphi, coeffs[:, 0])
+        + np.einsum('mf,mf,m->f', amp, sinphi, coeffs[:, 1])
+    )
+    h_plus_imag = (
+        np.einsum('mf,mf,m->f', amp, cosphi, coeffs[:, 2])
+        + np.einsum('mf,mf,m->f', amp, sinphi, coeffs[:, 3])
+    )
+    h_cross_real = (
+        np.einsum('mf,mf,m->f', amp, cosphi, coeffs[:, 4])
+        + np.einsum('mf,mf,m->f', amp, sinphi, coeffs[:, 5])
+    )
+    h_cross_imag = (
+        np.einsum('mf,mf,m->f', amp, cosphi, coeffs[:, 6])
+        + np.einsum('mf,mf,m->f', amp, sinphi, coeffs[:, 7])
+    )
+    return h_plus_real, h_plus_imag, h_cross_real, h_cross_imag
+
+
+def _broadcast_time_shifts(
+    time_shifts: Union[float, np.ndarray], n_modes: int
+) -> np.ndarray:
+    """Normalize ``time_shifts`` to one float per mode.
+
+    Parameters
+    ----------
+    time_shifts : np.ndarray or float
+        Either one time shift per mode, or a single one to be used for
+        all of them.
+    n_modes : int
+        Number of modes in the model.
+
+    Returns
+    -------
+    np.ndarray
+        Array of shape ``(n_modes,)``.
+    """
+    return np.broadcast_to(np.asarray(time_shifts, dtype=float), (n_modes,))
+
+
+def _build_mode_coeffs(
+    modes: list[Mode],
+    mode_indices: list[int],
+    Ylm_real: dict[Mode, float],
+    Ylm_imag: dict[Mode, float],
+    Ylm_real_mneg: dict[Mode, float],
+    Ylm_imag_mneg: dict[Mode, float],
+) -> np.ndarray:
+    r"""Build the spherical-harmonic coefficients required by the mode sum.
+
+    For each requested mode :math:`(\ell, m)`, this function combines
+    :math:`{}_{-2}Y_{\ell m}` and :math:`{}_{-2}Y_{\ell,-m}` according to
+    the standard symmetry relation between positive and negative
+    azimuthal modes (whose sign depends on the parity of :math:`\ell`),
+    so that the contribution to :math:`h_+` and :math:`h_\times` can be
+    written as a real linear combination of
+    :math:`\cos\phi_{\ell m}` and :math:`\sin\phi_{\ell m}`.
+
+    Parameters
+    ----------
+    modes : list[Mode]
+        Full list of modes managed by the surrogate.
+    mode_indices : list[int]
+        Indices, into ``modes``, of the modes for which a coefficient row
+        should be produced (``len(mode_indices) == n``).
+    Ylm_real, Ylm_imag : dict[Mode, float]
+        Real and imaginary parts of :math:`{}_{-2}Y_{\ell m}(\iota,\varphi)`
+        for each mode in ``modes``.
+    Ylm_real_mneg, Ylm_imag_mneg : dict[Mode, float]
+        Same, but for :math:`{}_{-2}Y_{\ell,-m}(\iota,\varphi)`, keyed by
+        the mode obtained via :meth:`Mode.opposite`.
+
+    Returns
+    -------
+    np.ndarray
+        Array of shape ``(n, 8)`` to be passed to the summation kernels.
+        See :func:`_sum_modes_numba` for the column ordering.
+    """
+
+    n = len(mode_indices)
+    coeffs = np.zeros((n, 8))
+    for i, mode_idx in enumerate(mode_indices):
+        mode = modes[mode_idx]
+        mode_opp = mode.opposite()
+        yr, yi = Ylm_real[mode], Ylm_imag[mode]
+        yr_m, yi_m = Ylm_real_mneg[mode_opp], Ylm_imag_mneg[mode_opp]
+        if mode.l % 2:
+            # Odd l: Y_{l,-m} = -conj(Y_{l,m}) under the symmetry assumed here.
+            coeffs[i, 0] = yr - yr_m
+            coeffs[i, 1] = -(yi + yi_m)
+            coeffs[i, 2] = yi + yi_m
+            coeffs[i, 3] = yr - yr_m
+            coeffs[i, 4] = -(yi - yi_m)
+            coeffs[i, 5] = -(yr + yr_m)
+            coeffs[i, 6] = yr + yr_m
+            coeffs[i, 7] = -(yi - yi_m)
+        else:
+            # Even l: Y_{l,-m} = +conj(Y_{l,m}).
+            coeffs[i, 0] = yr + yr_m
+            coeffs[i, 1] = -(yi - yi_m)
+            coeffs[i, 2] = yi - yi_m
+            coeffs[i, 3] = yr + yr_m
+            coeffs[i, 4] = -(yi + yi_m)
+            coeffs[i, 5] = -(yr - yr_m)
+            coeffs[i, 6] = yr - yr_m
+            coeffs[i, 7] = -(yi + yi_m)
+    return coeffs
+
+
+class _LazyModeModelsDict(dict):
+    """Dictionary that materializes :class:`ModeModel` instances on demand.
+
+    The per-mode :class:`ModeModel` objects can be expensive to construct
+    (they instantiate a full :class:`Dataset` with its waveform generator),
+    so they are built lazily the first time the user accesses
+    ``model.mode_models[mode]`` and cached for subsequent accesses.
+
+    Parameters
+    ----------
+    model : Model
+        Owning :class:`Model`, used to look up the per-mode filename,
+        generator factory and constructor keyword arguments.
+    """
+
+    def __init__(self, model: "Model"):
+        super().__init__()
+        self._model = model
+
+    def __missing__(self, mode: Mode) -> ModeModel:
+        if mode not in self._model.modes:
+            raise KeyError(f"Mode {mode} not in {self._model.modes}")
+        mode_model = ModeModel(
+            mode=mode,
+            filename=self._model.mode_filename(mode),
+            waveform_generator=self._model._generator_factory(mode),
+            **self._model._mode_model_kwargs,
         )
-
-    @classmethod
-    def gw170817(cls) -> ParametersWithExtrinsic:
-        """Convenience method: an easy-to-access
-        set of parameters, roughly corresponding to the
-        best-fit values for GW170817.
-        """
-        
-        return cls(
-            mass_ratio=1.,
-            lambda_1=400.,
-            lambda_2=400.,
-            chi_1=0.,
-            chi_2=0.,
-            distance_mpc=40.,
-            inclination=5/6*np.pi,
-            total_mass=2.8,
-        )
-
-    @property
-    def mass_sum_seconds(self) -> float:
-        return self.total_mass * SUN_MASS_SECONDS
-
-    def teobresums_dict(
-        self, dataset: Dataset, use_effective_frequencies: bool = True
-    ) -> dict[str, Union[float, int, str]]:
-        """Parameter dictionary in a format compatible with
-        TEOBResumS.
-
-        The parameters are all converted to natural units.
-        """
-        base_dict = self.intrinsic(dataset).teobresums(use_effective_frequencies)
-
-        return {
-            **base_dict,
-            **{
-                "M": self.total_mass,
-                "distance": self.distance_mpc,
-                "inclination": self.inclination,
-            },
-        }
-        # TODO figure out if it is possible to also pass
-        # the phase and the time shift to TEOB.
+        # Every mode uses the one shared predictor; see
+        # `Model._propagate_time_shifts_predictor`. It may still be
+        # None here, if this model has not been trained or loaded yet.
+        mode_model.timeshifts_predictor = self._model.time_shifts_predictor
+        self[mode] = mode_model
+        return mode_model
 
 
 class Model:
-    """``mlgw_bns`` model.
-    This class incorporates all the functionality required to
-    compute the downsampling indices, train a PCA model,
-    train a neural network and predict new waveforms.
+    r"""Higher-order-modes surrogate.
 
+    A :class:`Model` orchestrates one :class:`ModeModel` per spherical
+    harmonic mode :math:`(\ell, m)` and combines their predictions to
+    produce the observer-frame polarizations :math:`h_+, h_\times` via
+
+    .. math::
+        h_+ - i\, h_\times = \sum_{\ell m} A_{\ell m}\, e^{-i\phi_{\ell m}}
+                              \; {}_{-2}Y_{\ell m}(\iota, \varphi).
+
+    Each per-mode model is instantiated lazily on first access through
+    :attr:`mode_models`, which means that constructing a :class:`Model`
+    is cheap until predictions are actually requested.
 
     Parameters
     ----------
-    filename : str
-            Name for the model. Saved data will be saved under this name.
-    initial_frequency_hz : float, optional
-            Initial frequency for the waveforms.
-    srate_hz : float, optional
-            Time-domain signal rate for the waveforms,
-            which is twice the maximum frequency of
-            their frequency-domain version.
-    pca_components_number : int, optional
-            Number of PCA components to use when reducing
-            the dimensionality of the dataset.
-            By default 30, which is high enough to reach extremely good
-            reconstruction accuracy (mismatches smaller than :math:`10^{-8}`).
-    multibanding : bool
-            Whether to use a multibanded frequency array. 
-            See the multibanding module for more details.
-    parameter_ranges : ParameterRanges
-            Ranges for the parameters to pass to the parameter generator.
-    extend_with_post_newtonian: bool
-            Whether to accept frequencies lower than the minimum training frequency,
-            providing a hybrid post-newtonian / EOB surrogate waveform.
-            If this is False, an error will be raised if the frequencies
-            given include ones that are too low.
-    extend_with_zeros_at_high_frequency: bool
-            Whether to accept frequencies higher than the maximum training frequency,
-            padding the returned waveform with zeros.
-            If this is False, an error will be raised if the frequencies
-            given include ones that are too high.
-    waveform_generator : WaveformGenerator, optional
-            Generator for the waveforms to be used in the training;
-            by default None, in which case the system attempts to import
-            the Python wrapper for TEOBResumS, failing which a :class:`BareBarePostNewtonianGenerator`
-            is used, which is unable to generate effective-one-body waveforms.
-    downsampling_training : DownsamplingTraining, optional
-            Training algorithm for the downsampling;
-            by default None, which means the greedy algorithm
-            implemented in :class:`GreedyDownsamplingTraining` is used.
-    nn_kind : Type[NeuralNetwork]
-            Neural network implementation to use,
-            defaults to :class:`SklearnNetwork`.
-    parameter_generator : Optional[ParameterGenerator]
-            Certain parameter generators should not be regenerated each time;
-            if this is the case, then pass the parameter generator here.
-            Defaults to None.
+    modes : list[Mode]
+        Modes to include in the surrogate. Must be non-empty.
+    generator_factory : ModeGeneratorFactory, optional
+        Callable that, given a mode, returns the appropriate
+        :class:`~mlgw_bns.higher_order_modes.ModeGenerator` to use during
+        training. Defaults to :func:`teob_mode_generator_factory`.
+    time_shifts_predictor : TimeshiftsGPR or TimeshiftsNN, optional
+        Predictor for the mode-relative time shifts used to align the
+        mergers of different modes. If ``None``, the constructor tries to
+        load a default :class:`TimeshiftsNN` checkpoint, falling back to a
+        :class:`TimeshiftsGPR` checkpoint, and finally storing ``None`` if
+        neither is available (in which case the user must supply
+        ``time_shifts`` explicitly to :meth:`predict`).
+    **model_kwargs
+        Extra keyword arguments forwarded to each :class:`ModeModel`. The
+        special key ``filename`` is consumed here and used as the *base*
+        filename; each per-mode model file is named
+        ``"{base_filename}_l{l}_m{m}"``.
+
+    Attributes
+    ----------
+    modes : list[Mode]
+        Modes included in this model.
+    mode_models : dict[Mode, ModeModel]
+        Lazy mapping ``mode -> ModeModel``. The :class:`ModeModel` instance is
+        created on first access.
+    time_shifts_predictor : TimeshiftsGPR or TimeshiftsNN or None
+        Predictor used to compute the per-mode time shifts, when not
+        supplied externally.
+
+    Raises
+    ------
+    ValueError
+        If ``modes`` is empty.
+
+    References
+    ----------
+    See Appendix E of `arXiv:2004.06503
+    <https://arxiv.org/pdf/2004.06503.pdf>`_ for the mode decomposition.
     """
-    
 
     def __init__(
         self,
-        filename: Optional[str] = None,
-        initial_frequency_hz: float = 10.0,
-        srate_hz: float = 4096.0,
-        pca_components_number: int = 30,
-        multibanding: bool = True,
-        parameter_ranges: ParameterRanges = ParameterRanges(),
-        extend_with_post_newtonian = True,
-        extend_with_zeros_at_high_frequency = False,
-        waveform_generator: Optional[WaveformGenerator] = None,
-        downsampling_training: Optional[DownsamplingTraining] = None,
-        nn_kind: Type[NeuralNetwork] = SklearnNetwork,
-        parameter_generator : Optional[ParameterGenerator] = None,
+        modes: list[Mode],
+        generator_factory: ModeGeneratorFactory = teob_mode_generator_factory,
+        time_shifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None,
+        **model_kwargs,
     ):
+        if not modes:
+            raise ValueError("At least one mode must be provided")
 
-        self.filename = filename
+        self.modes = modes
+        self._base_filename = model_kwargs.pop("filename", "")
 
-        if waveform_generator is None:
-            try:
-                from EOBRun_module import EOBRunPy  # type: ignore
-
-                self.waveform_generator: WaveformGenerator = TEOBResumSGenerator(
-                    EOBRunPy
-                )
-            except ModuleNotFoundError:
-                self.waveform_generator = BarePostNewtonianGenerator()
+        if time_shifts_predictor is None:
+            self.time_shifts_predictor = self._load_default_time_shifts_predictor()
         else:
-            self.waveform_generator = waveform_generator
+            self.time_shifts_predictor = time_shifts_predictor
 
-        self.parameter_ranges = parameter_ranges
-        self.initial_frequency_hz = initial_frequency_hz
-        self.srate_hz = srate_hz
-        self.multibanding = multibanding
-        self.parameter_generator = parameter_generator
-        self.extend_with_post_newtonian = extend_with_post_newtonian
-        self.extend_with_zeros_at_high_frequency = extend_with_zeros_at_high_frequency
-        
+        # Stored for lazy construction of the per-mode `ModeModel` objects.
+        self._generator_factory = generator_factory
+        self._mode_model_kwargs = model_kwargs
 
-        self.dataset = self._make_dataset()
+        self.mode_models: dict[Mode, ModeModel] = _LazyModeModelsDict(self)
 
-        if downsampling_training is None:
-            self.downsampling_training: DownsamplingTraining = (
-                GreedyDownsamplingTraining(self.dataset)
+    def _load_default_time_shifts_predictor(
+        self,
+    ) -> Optional[Union[TimeshiftsNN, TimeshiftsGPR]]:
+        """Try to load the time-shift predictor saved alongside this model.
+
+        Looks for the checkpoint at :attr:`filename_timeshifts`, i.e.
+        ``"{base_filename}_timeshifts.pkl"``. Returns ``None`` if it is
+        not available (e.g. no ``base_filename`` was set yet, or the
+        model has not been trained/saved).
+        """
+        if not self.base_filename:
+            return None
+        try:
+            return load_timeshifts_predictor_from_file(self.filename_timeshifts)
+        except (FileNotFoundError, ValueError) as e:
+            logging.warning(
+                "Could not load default time-shift predictor (%s). "
+                "`time_shifts` must be provided explicitly to `predict`.",
+                e,
             )
-        else:
-            self.downsampling_training = downsampling_training
+            return None
 
-        self.pca_components_number = pca_components_number
+    @property
+    def filename_timeshifts(self) -> str:
+        """File name in which to save the shared mode time-shifts predictor."""
+        return f"{self.base_filename}_timeshifts.pkl"
 
-        self.nn: Optional[NeuralNetwork] = None
+    def mode_filename(self, mode: Mode) -> str:
+        """Return the on-disk filename for a single mode.
 
-        self.training_dataset: Optional[Residuals] = None
-        self.training_parameters: Optional[ParameterSet] = None
+        Parameters
+        ----------
+        mode : Mode
+            Mode whose filename should be returned.
 
-        self.pca_data: Optional[PrincipalComponentData] = None
-        self.downsampling_indices: Optional[DownsamplingIndices] = None
+        Returns
+        -------
+        str
+            Filename of the form ``"{base_filename}_l{l}_m{m}"``.
+        """
+        return f"{self.base_filename}_l{mode.l}_m{mode.m}"
 
-        self.nn_kind = nn_kind
+    @property
+    def base_filename(self) -> str:
+        """Base filename used to derive each per-mode model filename."""
+        return self._base_filename
 
-    def __str__(self):
+    @base_filename.setter
+    def base_filename(self, value: str) -> None:
+        """Set the base filename and propagate it to already-built mode models."""
+        self._base_filename = value
+        for mode in self.modes:
+            # Only update modes whose ModeModel has already been materialized,
+            # to avoid eagerly building all of them through __missing__.
+            if mode in self.mode_models:
+                self.mode_models[mode].filename = self.mode_filename(mode)
 
-        n_waveforms = (
-            f"waveforms_available = {len(self.training_dataset)}, "
-            if self.training_dataset_available
-            else ""
-        )
+    @property
+    def dataset(self) -> Dataset:
+        """Dataset of the first mode model.
+
+        All per-mode models share the same dataset configuration, so the
+        first one is returned for convenience (e.g. for accessing the
+        frequency grid or the reference total mass).
+
+        Raises
+        ------
+        ValueError
+            If this :class:`Model` was somehow built with no modes.
+        """
+        if not self.modes:
+            raise ValueError("No models available")
+        return self.mode_models[self.modes[0]].dataset
+
+    @property
+    def auxiliary_data_available(self) -> bool:
+        """``True`` iff every per-mode model has PCA + downsampling data loaded."""
+        return all(self.mode_models[mode].auxiliary_data_available for mode in self.modes)
+
+    @property
+    def nn_available(self) -> bool:
+        """``True`` iff every per-mode model has a trained neural network loaded."""
+        return all(self.mode_models[mode].nn_available for mode in self.modes)
+
+    @property
+    def training_dataset_available(self) -> bool:
+        """``True`` iff every per-mode model has its training dataset available."""
+        return all(self.mode_models[mode].training_dataset_available for mode in self.modes)
+
+    def __str__(self) -> str:
+        n_modes = len(self.modes)
+        modes_str = ", ".join(f"({m.l},{m.m})" for m in self.modes)
 
         return (
             "Model("
-            f"filename={self.filename}, "
+            f"modes=[{modes_str}], "
+            f"n_modes={n_modes}, "
+            f"base_filename={self.base_filename}, "
             f"auxiliary_data_available={self.auxiliary_data_available}, "
             f"nn_available={self.nn_available}, "
-            f"training_dataset_available={self.training_dataset_available}, "
-            + n_waveforms
-            + f"parameter_ranges={self.parameter_ranges})"
+            f"training_dataset_available={self.training_dataset_available})"
         )
 
-    @property    
-    def metadata_dict(self) -> dict:
-        return {
-            'initial_frequency_hz': self.initial_frequency_hz,
-            'srate_hz': self.srate_hz,
-            'pca_components_number': self.pca_components_number,
-            'multibanding': self.multibanding,
-            'parameter_ranges': asdict(self.parameter_ranges),
-            'extend_with_post_newtonian': self.extend_with_post_newtonian,
-            'extend_with_zeros_at_high_frequency': self.extend_with_zeros_at_high_frequency,
-        }
-
     @classmethod
-    def default(cls, model_name: Optional[str]=None, **kwargs):
-        
+    def default_for_testing(
+        cls,
+        model_name: Optional[str] = None,
+        **kwargs,
+    ) -> "Model":
+        """Load a pretrained :class:`Model` shipped with the package.
+
+        The metadata/arrays/nn streams of every mode, plus the single
+        shared time-shift predictor, are read from the package resources
+        (:data:`PRETRAINED_MODEL_FOLDER`). This is the quickest way to get
+        a usable model without training one.
+
+        Parameters
+        ----------
+        model_name : str, optional
+            Name of the model to load. Must be one of
+            :data:`MODELS_AVAILABLE`. Defaults to the first entry.
+        **kwargs
+            Extra keyword arguments forwarded to the :class:`Model`
+            constructor. The reserved keys ``filename`` and ``modes`` are
+            consumed here:
+
+            * ``filename`` overrides the base filename after loading, so
+              that subsequent saves write to a user-chosen location.
+            * ``modes`` overrides the list of modes to load, which
+              defaults to :data:`DEFAULT_MODES`.
+
+        Returns
+        -------
+        Model
+            Loaded :class:`Model` instance.
+
+        Raises
+        ------
+        ValueError
+            If ``model_name`` is not in :data:`MODELS_AVAILABLE`.
+        """
         if model_name is None:
             model_name = MODELS_AVAILABLE[0]
 
         if model_name not in MODELS_AVAILABLE:
-            raise(ValueError(f'Model {model_name} not available!'))
-        
-        given_filename = kwargs.pop('filename', None)
-        
-        model = cls(filename=PRETRAINED_MODEL_FOLDER + model_name, **kwargs)
+            raise ValueError(f"Model {model_name} not available!")
 
-        stream_meta = files(__name__).joinpath(model.filename_metadata).open("rb")
-        stream_arrays = files(__name__).joinpath(model.filename_arrays).open("rb")
-        stream_nn = files(__name__).joinpath(model.filename_nn).open("rb")
+        given_filename = kwargs.pop("filename", None)
 
-        model.load(streams=(stream_meta, stream_arrays, stream_nn))
+        modes = kwargs.pop("modes", None)
+        if modes is None:
+            modes = list(DEFAULT_MODES)
 
-        model.filename = given_filename
+        base_filename = PRETRAINED_MODEL_FOLDER + model_name
+
+        # Load the shared predictor up front and hand it to the constructor:
+        # letting the constructor look for it on disk would only find it if
+        # the cwd happened to mirror the package layout.
+        kwargs.setdefault(
+            "time_shifts_predictor",
+            load_timeshifts_predictor_from_file(
+                files(__name__).joinpath(f"{base_filename}_timeshifts.pkl").open("rb")
+            ),
+        )
+
+        model = cls(modes=modes, filename=base_filename, **kwargs)
+
+        for mode in model.modes:
+            mode_model = model.mode_models[mode]
+            # The per-mode timeshift stream is None: every mode shares the
+            # single predictor loaded above.
+            mode_model.load(
+                streams=(
+                    files(__name__).joinpath(mode_model.filename_metadata).open("rb"),
+                    files(__name__).joinpath(mode_model.filename_arrays).open("rb"),
+                    files(__name__).joinpath(mode_model.filename_nn).open("rb"),
+                    None,
+                )
+            )
+
+        if given_filename is not None:
+            model.base_filename = given_filename
 
         return model
-
-    def _make_dataset(self) -> Dataset:
-
-        return Dataset(
-            self.initial_frequency_hz,
-            self.srate_hz,
-            waveform_generator=self.waveform_generator,
-            multibanding=self.multibanding,
-            parameter_ranges=self.parameter_ranges,
-            parameter_generator=self.parameter_generator
-        )
-    
-    @property
-    def parameter_generator(self):
-        return self._parameter_generator
-
-    @parameter_generator.setter
-    def parameter_generator(self, val):
-        self._parameter_generator = val
-        try:
-            self.dataset.parameter_generator = val
-        except AttributeError:
-            pass
-
-    @property
-    def waveform_generator(self):
-        return self._waveform_generator
-
-    @waveform_generator.setter
-    def waveform_generator(self, val):
-        self._waveform_generator = val
-        try:
-            self.dataset.waveform_generator = val
-        except AttributeError:
-            pass
-
-
-    def _handle_missing_filename(self) -> None:
-        raise ValueError('Please set the "filename" attribute of this object')
-
-    @property
-    def auxiliary_data_available(self) -> bool:
-        return self.pca_data is not None and self.downsampling_indices is not None
-
-    @property
-    def nn_available(self) -> bool:
-        return self.nn is not None and self.auxiliary_data_available
-
-    @property
-    def training_dataset_available(self) -> bool:
-        return (
-            self.training_dataset is not None and self.training_parameters is not None
-        )
-
-    @property
-    def filename_arrays(self) -> str:
-        if self.filename is None:
-            self._handle_missing_filename()
-
-        return f"{self.filename}_arrays.h5"
-
-    @property
-    def filename_metadata(self) -> str:
-        if self.filename is None:
-            self._handle_missing_filename()
-
-        return f"{self.filename}.yaml"
-
-    def save_metadata(self):
-        
-        with open(self.filename_metadata, 'w') as f:
-            yaml.dump(self.metadata_dict, f)
-    
-    def load_metadata(self, stream: Optional[IO[bytes]] = None) -> dict:
-        
-        if stream is None:
-            with open(self.filename_metadata, 'r') as f:
-                return yaml.load(f, Loader=yaml.FullLoader)
-        
-        else:
-            return yaml.load(stream, Loader=yaml.FullLoader)
-        
-
-    def set_metadata(self, meta_dict: dict) -> None:
-        
-        for key, value in meta_dict.items():
-            if key == 'parameter_ranges':
-                value = from_dict(data_class=ParameterRanges, data=value)
-            setattr(self, key, value)
-
-    @property
-    def file_arrays(self) -> h5py.File:
-        """File object in which to save datasets.
-
-        Returns
-        -------
-        file : h5py.File
-            To be used as a context manager.
-        """
-        return h5py.File(self.filename_arrays, mode="a")
-
-    @property
-    def filename_nn(self) -> str:
-        """File name in which to save the neural network."""
-
-        if self.filename is None:
-            self._handle_missing_filename()
-
-        return f"{self.filename}_nn.pkl"
-
-    @property
-    def filename_hyper(self) -> str:
-        """File name in which to save the hyperparameters."""
-
-        if self.filename is None:
-            self._handle_missing_filename()
-
-        return f"{self.filename}_hyper.pkl"
 
     def generate(
         self,
@@ -459,693 +571,778 @@ class Model:
         training_pca_dataset_size: Optional[int] = 256,
         training_nn_dataset_size: Optional[int] = 256,
     ) -> None:
-        """Generate a new model from scratch.
+        """Run :meth:`ModeModel.generate` for every mode.
 
-        The parameters are the sizes of the three datasets to be used when training,
-        if they are set to None they are not computed and the pre-existing values are used instead.
+        Builds the downsampling indices, PCA data and training residuals
+        for each per-mode :class:`ModeModel`. The three dataset sizes have the
+        same meaning as in :meth:`ModeModel.generate`; setting one of them to
+        ``None`` reuses pre-existing data for that step.
 
-        Raises
-        ------
-        AssertionError
-                If one of the parameters is set to None but no
-                pre-existing data is availabele for it.
-
+        The (2,2) mode is generated *first*, on its own. Its result is
+        then used to fit the shared cross-mode time-shift predictor (see
+        :meth:`train_time_shifts_predictor`) before any other mode is
+        generated, so that every other mode's PCA/NN training residuals
+        are flattened using this same, shared :math:`\\Delta t(\\theta)`
+        rather than one independently (and more noisily) fit from that
+        mode's own residuals.
 
         Parameters
         ----------
         training_downsampling_dataset_size : int, optional
-                By default 64.
+            Size of the dataset used to fit the downsampling indices.
+            Defaults to 64.
         training_pca_dataset_size : int, optional
-                By default 256.
+            Size of the dataset used to fit the PCA components.
+            Defaults to 256.
         training_nn_dataset_size : int, optional
-                By default 256.
+            Size of the dataset used to train the neural network on the
+            PCA residuals. Defaults to 256.
 
+        Raises
+        ------
+        ValueError
+            If ``Mode(2, 2)`` is not among :attr:`modes`.
         """
-
-        if training_downsampling_dataset_size is not None:
-            self.downsampling_indices = self.downsampling_training.train(
-                training_downsampling_dataset_size
+        reference_mode = Mode(2, 2)
+        if reference_mode not in self.modes:
+            raise ValueError(
+                "Model.generate() requires Mode(2, 2) to be among "
+                "`self.modes`, since the shared time-shift predictor is "
+                "trained from it."
             )
-        else:
-            assert self.downsampling_indices is not None
 
-        if training_pca_dataset_size is not None:
-            self.pca_training = PrincipalComponentTraining(
-                self.dataset, self.downsampling_indices, self.pca_components_number
-            )
-            # ALSO SAVE THE TIMESHIFTS
-
-            self.pca_data = self.pca_training.train(training_pca_dataset_size)
-        else:
-            assert self.pca_data is not None
-
-        # TRAIN GPR TO LEARN Δt(θ)
+        self.mode_models[reference_mode].generate(
+            training_downsampling_dataset_size=training_downsampling_dataset_size,
+            training_pca_dataset_size=training_pca_dataset_size,
+            training_nn_dataset_size=training_nn_dataset_size,
+        )
 
         if training_nn_dataset_size is not None:
-            _, parameters, residuals_timeshifts = self.dataset.generate_residuals(
-                training_nn_dataset_size, flatten_phase=False
+            self.train_time_shifts_predictor()
+
+        for mode in self.modes:
+            if mode == reference_mode:
+                continue
+            self.mode_models[mode].generate(
+                training_downsampling_dataset_size=training_downsampling_dataset_size,
+                training_pca_dataset_size=training_pca_dataset_size,
+                training_nn_dataset_size=training_nn_dataset_size,
+                timeshifts_predictor=self.time_shifts_predictor,
             )
 
-            self.training_timeshifts_data = residuals_timeshifts.flatten_phase(frequencies=self.dataset.frequencies_hz)
-            self.timeshifts_model = TimeshiftsGPR(
-                training_params=parameters.parameter_array,
-                training_timeshifts=self.training_timeshifts_data
-            ).fit()
-            self.training_parameters = parameters
+    def train_time_shifts_predictor(self) -> None:
+        """Adopt the (2,2) mode's predictor as the shared, cross-mode one.
 
-        if training_nn_dataset_size is not None:
-            freq_downsampled, _, residuals = self.dataset.generate_residuals(
-                training_nn_dataset_size, self.downsampling_indices, flatten_phase=False
+        There is exactly one merger-time-shift predictor per
+        :class:`Model`: the one the (2,2) mode's
+        :meth:`ModeModel.generate` fits from its own residuals. This method
+        does not fit a second copy, it takes that object and points every
+        mode at it (:attr:`time_shifts_predictor`), so that the same
+        :math:`\\Delta t(\\theta)` flattens the training residuals of every
+        mode and is added back by every mode's :meth:`ModeModel.predict`.
+
+        Must be called after the (2,2) mode's own :meth:`ModeModel.generate`
+        (this is what :meth:`generate` does automatically) and before any
+        other mode is generated.
+
+        Raises
+        ------
+        ValueError
+            If ``Mode(2, 2)`` is not among :attr:`modes`, or if that
+            mode has not been through :meth:`ModeModel.generate` yet.
+        """
+        reference_mode = Mode(2, 2)
+        if reference_mode not in self.modes:
+            raise ValueError(
+                "The shared time-shift predictor is trained from the (2,2) "
+                "mode, which is not among this Model's modes."
             )
 
-            residuals.phase_residuals = remove_linear_trend(
-                parameters=self.training_parameters.parameter_array,
-                ts_model=self.timeshifts_model,
-                phi_diff=residuals.phase_residuals,
-                frq=self.dataset.natural_units_to_hz(freq_downsampled)
+        reference_model = self.mode_models[reference_mode]
+        if reference_model.timeshifts_predictor is None:
+            raise ValueError(
+                "The (2,2) mode has no time-shift predictor available; "
+                "call `generate()` before training the time-shift predictor."
             )
 
-            self.training_dataset = residuals
-        else:
-            assert self.training_dataset is not None
-            assert self.training_parameters is not None
+        # Adopt the object the (2,2) mode's `generate()` already fitted,
+        # rather than fitting a second one on the same data. The two must
+        # agree exactly: `remove_linear_trend` subtracts this predictor's
+        # output from the training residuals and `ModeModel.predict` adds it
+        # back, so the term cancels only as long as it is literally the
+        # same function on both sides.
+        self.time_shifts_predictor = reference_model.timeshifts_predictor
+        self._propagate_time_shifts_predictor()
 
-    def save_arrays(self, include_training_data: bool = True) -> None:
-        """Save all big arrays contained in this object to the file
-        defined as ``{filename}.h5``.
+    def _propagate_time_shifts_predictor(self) -> None:
+        """Point every already-built per-mode model at the shared predictor.
+
+        The models built later pick it up in
+        :meth:`_LazyModeModelsDict.__missing__`; this covers the ones which
+        already exist by the time the predictor becomes available.
         """
+        for model in self.mode_models.values():
+            model.timeshifts_predictor = self.time_shifts_predictor
 
-        assert self.pca_data is not None
-        assert self.downsampling_indices is not None
-        assert self.training_parameters is not None
-
-        arr_list: list[SavableData] = [
-            self.downsampling_indices,
-            self.pca_data,
-        ]
-
-        if include_training_data:
-            assert self.training_parameters is not None
-            assert self.training_dataset is not None
-
-            arr_list += [
-                self.training_parameters,
-                self.training_dataset,
-            ]
-
-        for arr in arr_list:
-            arr.save_to_file(self.file_arrays)
-
-    def save(self, include_training_data: bool = True) -> None:
-        self.save_metadata()
-        self.save_arrays(include_training_data)
-        if self.nn is not None:
-            self.nn.save(self.filename_nn)
-
-    def save_timeshifts_model(self) -> None:
-        self.timeshifts_model.save_model(f'{self.filename}_timeshifts.pkl')
-
-    def load(self, streams: Optional[tuple[IO[bytes], IO[bytes], IO[bytes]]] = None) -> None:
-        """Load model from the files present in the current folder.
-
-        Parameters
-        ----------
-        streams: tuple[IO[bytes], IO[bytes], IO[bytes]], optional
-                For internal use (specifically, loading the default model).
-                Defaults to None (look in the current folder).
-        """
-
-        if streams is not None:
-            stream_meta: Union[IO[bytes], None]
-            filename_arrays: Union[IO[bytes], str]
-            filename_nn: Union[IO[bytes], str]
-
-            stream_meta, filename_arrays, filename_nn = streams
-            file_arrays = h5py.File(filename_arrays, mode="r")
-            ignore_warnings = True
-        else:
-            stream_meta = None
-            file_arrays = self.file_arrays
-            filename_nn = self.filename_nn
-            ignore_warnings = False
-
-
-        self.set_metadata(self.load_metadata(stream_meta))
-        self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
-        self.pca_data = PrincipalComponentData.from_file(file_arrays)
-        self.training_parameters = ParameterSet.from_file(
-            file_arrays, ignore_warnings=ignore_warnings
-        )
-        if self.downsampling_indices is None or self.pca_data is None:
-            raise FileNotFoundError
-
-        self.dataset = self._make_dataset()
-
-        self.training_dataset = Residuals.from_file(
-            file_arrays, ignore_warnings=ignore_warnings
-        )
-
-        try:
-            self.nn = self.nn_kind.from_file(filename_nn)
-        except FileNotFoundError:
-            logging.warn("No trained network or hyperparameters found.")
-
-    @property
-    def reduced_residuals(self) -> np.ndarray:
-        """Reduced-dimensionality residuals
-        --- in other words, PCA components ---
-        corresponding to the :attr:`training_dataset`.
-
-        This attribute is cached.
-        """
-
-        assert self.training_dataset is not None
-
-        return self._reduced_residuals(self.training_dataset)
-
-    @lru_cache(maxsize=1)
-    def _reduced_residuals(self, residuals: Residuals):
-
-        assert self.pca_data is not None
-
-        return self.pca_model.reduce_data(residuals.combined, self.pca_data)
-
-    @property
-    def pca_model(self) -> PrincipalComponentAnalysisModel:
-        """PCA model to be used for dimensionality reduction.
-
-        Returns
-        -------
-        PrincipalComponentAnalysisModel
-        """
-        return PrincipalComponentAnalysisModel(self.pca_components_number)
-
-    def train_nn(
-        self, hyper: Hyperparameters, indices: Union[list[int], slice] = slice(None)
-    ) -> NeuralNetwork:
-        """Train a
-
-        Parameters
-        ----------
-        hyper : Hyperparameters
-            Hyperparameters to be used in the initialization
-            of the network.
-        indices : Union[list[int], slice], optional
-            Indices used to perform a selection of a subsection
-            of the training data; by default ``slice(None)``
-            which means all available training data is used.
-
-        Returns
-        -------
-        NeuralNetwork
-            Trained network.
-        """
-        assert self.training_parameters is not None
-        assert self.pca_data is not None
-
-        training_residuals = (
-            self.reduced_residuals
-            * (self.pca_data.eigenvalues ** hyper.pc_exponent)[np.newaxis, :]
-        )
-
-        nn = self.nn_kind(hyper)
-        nn.fit(
-            self.training_parameters.parameter_array[indices],
-            training_residuals[indices],
-        )
-        return nn
-
-    def set_hyper_and_train_nn(self, hyper: Optional[Hyperparameters] = None) -> None:
-        """Train the network according to the hyperparameters given,
-        and set it as a class attribute
+    def set_hyper_and_train_nn(
+        self,
+        hyper: Optional[Hyperparameters] = None,
+        idxs: Union[list[int], slice] = slice(None),
+    ) -> None:
+        """Train the neural network of each per-mode model.
 
         Parameters
         ----------
         hyper : Hyperparameters, optional
-            Hyperparameters to use when training the network, by default None.
-            If not given, the default is to fall back to the standard set of hyperparameters
-            provided with the module.
+            Hyperparameters for the neural network. If ``None``, every
+            per-mode model uses its own defaults.
+        idxs : list[int] or slice, optional
+            Selection over the training dataset, forwarded to
+            :meth:`ModeModel.set_hyper_and_train_nn`. Defaults to all data.
         """
+        for mode in self.modes:
+            self.mode_models[mode].set_hyper_and_train_nn(hyper=hyper, idxs=idxs)
 
-        if hyper is None:
-            assert self.training_dataset is not None
-            hyper = Hyperparameters.default(len(self.training_dataset))
+    def save(self, include_training_data: bool = True) -> None:
+        """Save every per-mode model to disk.
 
-        # increase the number of maximum iterations by a lot:
-        # here we do not want to stop the training early.
-        hyper.max_iter *= 100
-
-        self.nn = self.train_nn(hyper)
-
-    def predict_residuals_bulk(
-        self, params: ParameterSet, nn: NeuralNetwork
-    ) -> Residuals:
-        """Make a prediction for a set of different parameters,
-        using a network provided as a parameter.
+        Because the files of different modes are independent, the writes
+        are dispatched to a thread pool when there is more than one mode,
+        which is typically faster on slow filesystems.
 
         Parameters
         ----------
-        params : ParameterSet
-            Parameters of the residuals to reconstruct.
-        nn : NeuralNetwork
-            Neural network to use for the reconstruction
-
-        Returns
-        -------
-        Residuals
-            Prediction through the model plus PCA.
+        include_training_data : bool, optional
+            Whether to also persist the per-mode training residuals and
+            parameters. Defaults to ``True``.
         """
+        # `include_timeshifts_predictor=False`: there is one predictor for
+        # all the modes, written once below under this model's own base
+        # filename, rather than a redundant copy next to every mode.
+        def save_mode(mode: Mode) -> None:
+            self.mode_models[mode].save(
+                include_training_data=include_training_data,
+                include_timeshifts_predictor=False,
+            )
 
-        assert self.pca_data is not None
-        assert self.downsampling_indices is not None
+        if len(self.modes) > 1:
+            with ThreadPoolExecutor(max_workers=len(self.modes)) as executor:
+                # Drain the iterator so that any exceptions are propagated.
+                list(executor.map(save_mode, self.modes))
+        else:
+            for mode in self.modes:
+                save_mode(mode)
 
-        scaled_pca_components = nn.predict(params.parameter_array)
+        if self.time_shifts_predictor is not None:
+            self.time_shifts_predictor.save_model(self.filename_timeshifts)
 
-        combined_residuals = self.pca_model.reconstruct_data(
-            scaled_pca_components / (self.pca_data.eigenvalues ** nn.hyper.pc_exponent),
-            self.pca_data,
-        )
-
-        return Residuals.from_combined_residuals(
-            combined_residuals, self.downsampling_indices.numbers_of_points
-        )
-
-    def predict_waveforms_bulk(
+    def load(
         self,
-        params: ParameterSet,
-        nn: Optional[NeuralNetwork] = None,
-    ) -> FDWaveforms:
-
-        if nn is None:
-            nn = self.nn
-        assert nn is not None
-
-        residuals = self.predict_residuals_bulk(params, nn)
-
-        return self.dataset.recompose_residuals(
-            residuals, params, self.downsampling_indices
-        )
-
-    def _predict_amplitude_phase(
-        self, frequencies: np.ndarray, params: ParametersWithExtrinsic
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Predict the amplitude and phase of a waveform.
-        This function is basically the same as :method:`predict`,
-        with the difference that it does not compute the
-        Cartesian waveform.
-
-        Also, it only gives one polarization
-        and does not account for the distance
+        streams: Optional[tuple[IO[bytes], IO[bytes], IO[bytes]]] = None,
+    ) -> None:
+        """Load every per-mode model from disk.
 
         Parameters
         ----------
+        streams : tuple[IO[bytes], IO[bytes], IO[bytes]], optional
+            Pre-opened streams ``(metadata, arrays, nn)`` to load from,
+            forwarded as-is to every per-mode :meth:`ModeModel.load`. When
+            ``None`` (the default), each model opens its own files from
+            the path implied by :meth:`mode_filename`.
+        """
+        for mode in self.modes:
+            self.mode_models[mode].load(streams=streams)
+
+        # Per-mode checkpoints carry no predictor of their own (older ones
+        # may, in which case this overwrites the redundant copy with the
+        # shared one they were all identical to anyway).
+        self._propagate_time_shifts_predictor()
+
+    def predict_amplitude_phase_mode(
+        self,
+        mode: Mode,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Predict the amplitude and phase of a single mode.
+
+        Parameters
+        ----------
+        mode : Mode
+            Mode to predict. Must be in :attr:`modes`.
         frequencies : np.ndarray
+            Frequencies at which to evaluate the mode, in Hz.
         params : ParametersWithExtrinsic
+            Parameters of the source.
 
         Returns
         -------
         tuple[np.ndarray, np.ndarray]
-            Amplitude and phase.
+            ``(amplitude, phase)`` arrays for the requested mode.
+
+        Raises
+        ------
+        ValueError
+            If ``mode`` is not among :attr:`modes`.
         """
+        if mode not in self.modes:
+            raise ValueError(f"Mode {mode} is not included in this model")
 
-        assert self.downsampling_indices is not None
-        assert self.nn is not None
+        return self.mode_models[mode].predict_amplitude_phase_optimized(frequencies, params)
 
-        rescaled_frequencies = frequencies * (
-            params.total_mass / self.dataset.total_mass
-        )
+    def _resolve_time_shifts(
+        self,
+        params: ParametersWithExtrinsic,
+        time_shifts: Optional[Union[float, np.ndarray]],
+    ) -> Union[float, np.ndarray]:
+        """Return the time shifts to use, predicting them if needed.
 
-        if rescaled_frequencies[0] < self.dataset.effective_initial_frequency_hz:
+        Parameters
+        ----------
+        params : ParametersWithExtrinsic
+            Source parameters, used to query :attr:`time_shifts_predictor`.
+        time_shifts : np.ndarray or float or None
+            Explicitly provided time shifts, returned unchanged if not
+            ``None``.
 
-            if not self.extend_with_post_newtonian:
-                raise FrequencyTooLowError(
-                    "This model is not configured to be extended with a post-newtonian"
-                    "waveform. Set the 'extend_with_post_newtonian' attribute of the model to True"
-                    "if that is what you want."
-                )
-            
-            extend_with_pn = True
-            limit_index = np.searchsorted(rescaled_frequencies, self.dataset.effective_initial_frequency_hz)
-            
-            # if we're extending downwards, then we need to also compute the PN phase 
-            # at the very end of the low-frequency bit (which might not be in the given array)
-            # in order to connect with the high-frequency bit without any discontinuity in phase.
-            
-            low_freqs_hz = np.append(rescaled_frequencies[:limit_index], self.dataset.effective_initial_frequency_hz) # type: ignore
-            rescaled_frequencies = np.append(self.dataset.effective_initial_frequency_hz, rescaled_frequencies[limit_index:]) # type: ignore
-            
-            low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz)
-            connection_f = self.dataset.hz_to_natural_units(self.dataset.effective_initial_frequency_hz)
-            
-        else:
-            extend_with_pn = False
+        Returns
+        -------
+        np.ndarray or float
+            The given ``time_shifts``, or the prediction of
+            :attr:`time_shifts_predictor` for ``params``.
 
-        if len(rescaled_frequencies) < 1:
-            # this should never happen! 
-            raise ValueError('At least one point should be in the model band')
+        Raises
+        ------
+        ValueError
+            If ``time_shifts`` is ``None`` and this model has no
+            time-shift predictor available.
+        """
+        if time_shifts is not None:
+            return time_shifts
 
-        if rescaled_frequencies[-1] > self.dataset.effective_srate_hz / 2.0:
-            if not self.extend_with_zeros_at_high_frequency:
-                raise FrequencyTooHighError(
-                    "This model is not configured to be extended with zeros at high frequency."
-                    "Set the 'extend_with_zeros_at_high_frequency' attribute of the model to True"
-                    "if that is what you want."
-                )
-            else:
-                extend_hf = True
-                high_frequency_index = int(np.searchsorted(rescaled_frequencies, self.dataset.effective_srate_hz / 2.0))
-                hf_segment_length = len(rescaled_frequencies) - high_frequency_index
-                rescaled_frequencies = rescaled_frequencies[:high_frequency_index]
-
-
-        else:
-            extend_hf = False
-
-        self.parameter_ranges.check_parameters_in_ranges(params)
-
-        intrinsic_params = params.intrinsic(self.dataset)
-
-        residuals = self.predict_residuals_bulk(
-            ParameterSet.from_list_of_waveform_parameters([intrinsic_params]), self.nn
-        )
-
-        pn_amplitude = self.dataset.waveform_generator.post_newtonian_amplitude(
-            intrinsic_params,
-            self.dataset.frequencies[self.downsampling_indices.amplitude_indices],
-        )
-        pn_phase = self.dataset.waveform_generator.post_newtonian_phase(
-            intrinsic_params,
-            self.dataset.frequencies[self.downsampling_indices.phase_indices],
-        )
-
-        # downsampled amplitude array
-        amp_ds = combine_residuals_amp(residuals.amplitude_residuals[0], pn_amplitude)
-        phi_ds = combine_residuals_phi(residuals.phase_residuals[0], pn_phase)
-
-        pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
-
-        resampled_amp = self.downsampling_training.resample(
-                self.dataset.frequencies_hz[
-                    self.downsampling_indices.amplitude_indices
-                ],
-                rescaled_frequencies,
-                amp_ds,
+        if self.time_shifts_predictor is None:
+            raise ValueError(
+                "This model has no time-shift predictor available, so the "
+                "`time_shifts` aligning the mode mergers cannot be computed "
+                "automatically: please provide them explicitly."
             )
-        
-        
-        resampled_phi = self.downsampling_training.resample(
-                self.dataset.frequencies_hz[self.downsampling_indices.phase_indices],
-                rescaled_frequencies,
-                phi_ds,
+
+        # One row in, one row out: a scalar if the predictor was trained on
+        # a single shared time shift, one value per mode otherwise.
+        prediction = self.time_shifts_predictor.predict(
+            np.array([params.intrinsic(self.dataset).array])
         )
+        return np.asarray(prediction)[0]
 
-        if extend_with_pn:
-            
-            eob_amplitude_at_connection = resampled_amp[0]
-            f_min_connection = connection_f / 2.0
-            connecting_mask = np.where(
-                low_freqs > f_min_connection,
-            )
-            
-            zero_to_one = (
-                (low_freqs[connecting_mask] - f_min_connection) / 
-                (connection_f - f_min_connection)
-            )
-            
-            low_freq_amp = (
-                self.dataset.waveform_generator.post_newtonian_amplitude(
-                intrinsic_params,
-                low_freqs,
-                )
-            )
-            pn_amplitude_at_connection = low_freq_amp[-1]
-            
-            low_freq_amp[connecting_mask] += (
-                smoothing_func(zero_to_one) 
-                * (eob_amplitude_at_connection - pn_amplitude_at_connection)
-            )
-            
-            resampled_amp = np.concatenate((low_freq_amp[:-1], resampled_amp[1:]))
-            
-            low_f_phi = self.dataset.waveform_generator.post_newtonian_phase(
-                intrinsic_params,
-                low_freqs,
-            )
-            
-            resampled_phi = np.concatenate((
-                low_f_phi[:-1],
-                resampled_phi[1:] + low_f_phi[-1]
-            ))
+    def predict(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        time_shifts: Optional[Union[float, np.ndarray]] = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        r"""Predict the full frequency-domain waveform from all modes.
 
-        if extend_hf:
-            resampled_amp = np.concatenate((resampled_amp, np.zeros(hf_segment_length)))
-            resampled_phi = np.concatenate((resampled_phi, np.zeros(hf_segment_length)))
-
-        amp = (
-            resampled_amp
-            * pre
-            / params.distance_mpc
-        )
-
-        phi = (
-            resampled_phi
-            + params.reference_phase
-            + (2 * np.pi * params.time_shift) * frequencies
-        )
-        
-        return amp, phi
-
-    def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
-        r"""Calculate the waveforms in the plus and cross polarizations,
-        accounting for extrinsic parameters.
-        
-        This function is able to yield a sensible waveform at arbitrarily 
-        low frequencies, by hybridizing the EOB-trained high-frequency part
-        with a Post-Newtonian approximant. 
-        This feature can be turned off with the :attr:`extend_with_post_newtonian`
-        parameter of the :class:`Model` object.
+        Combines the predictions of every per-mode :class:`ModeModel` into the
+        two observer-frame polarizations :math:`h_+, h_\times`, using the
+        provided mode-relative time shifts and the inclination contained
+        in ``params``.
 
         Parameters
         ----------
         frequencies : np.ndarray
-                Frequencies where to compute the waveform, in Hz.
-
-                These should always be within the range in which the
-                model has been trained, and be careful!
-                The model is always trained with a specific initial frequency
-                :math:`f_0`, and a final frequency :math:`f_1`,
-                and it is trained to reconstruct the dependence
-                of the waveform on :math:`M_0 f`, where :math:`M_0` is
-                some standard mass, typically :math:`2.8M_{\odot}`.
-
-                Now, this means that the model can only predict in the range
-                :math:`M_0 f_0 \leq M f \leq M_0 f_1`;
-                when :math:`M` differs significantly from :math:`M_0`
-                this will be quite a different range from :math:`[f_0, f_1]`.
-
-
+            Frequencies at which to evaluate the waveform, in Hz.
         params : ParametersWithExtrinsic
-                Parameters for the waveform, both intrinsic and extrinsic.
-
-        Raises
-        ------
-        FrequencyTooLowError
-                When the frequencies given are too low, below the training range.
-                For speed, this is only checked against the first and last elements
-                of the array, assuming that it is sorted.
-
-                This is raised only if the PN extension of the waveform is
-                disabled by setting :attr:`extend_with_post_newtonian`
-                to False.
-
-        Raises
-        ------
-        FrequencyTooHighError
-                When the frequencies given are too high.
-                For speed, this is only checked against the first and last elements
-                of the array, assuming that it is sorted.
-
-                This is raised only if the extension of the waveform with zeroes is
-                disabled by setting :attr:`extend_with_zeros_at_high_frequency`
-                to False.
-
+            Source parameters (intrinsic + extrinsic).
+        time_shifts : np.ndarray or float, optional
+            Time shifts, one per mode, that align the per-mode mergers
+            in the time domain; a scalar is broadcast to every mode.
+            If ``None`` (the default) they are predicted from ``params``
+            with :attr:`time_shifts_predictor`.
 
         Returns
         -------
-        hp, hc (complex np.ndarray)
-                Cartesian plus and cross-polarized waveforms, computed
-                at the given frequencies, measured in 1/Hz.
+        tuple[np.ndarray, np.ndarray]
+            The complex polarizations ``(h_plus, h_cross)``, in the same
+            convention as :meth:`ModeModel.predict`. The combination
+            appearing in the mode decomposition is ``h_plus - 1j * h_cross``.
 
+        Raises
+        ------
+        ValueError
+            If ``time_shifts`` is ``None`` and no predictor is available.
+
+        References
+        ----------
+        See Appendix E of `arXiv:2004.06503
+        <https://arxiv.org/pdf/2004.06503.pdf>`_.
         """
-
-        amp, phi = self._predict_amplitude_phase(frequencies, params)
-
-        cartesian_waveform_real, cartesian_waveform_imag = combine_amp_phase(amp, phi)
-
-        cosi = np.cos(params.inclination)
-        pre_plus = (1 + cosi ** 2) / 2
-        pre_cross = cosi
-
-        # take Δt (θ) and re-add it to the phase
-
-        return compute_polarizations(
-            cartesian_waveform_real, cartesian_waveform_imag, pre_plus, pre_cross
+        return self._compute_polarizations_from_modes(
+            frequencies=frequencies,
+            params=params,
+            time_shifts=self._resolve_time_shifts(params, time_shifts),
+            inclination=params.inclination,
         )
 
-    def time_until_merger(
+    def _compute_polarizations_from_modes(
         self,
-        frequency: float,
+        frequencies: np.ndarray,
         params: ParametersWithExtrinsic,
-        delta_f: Optional[float] = None,
-    ) -> float:
-        r"""Approximate the time left until merger for a wavorm starting at a given frequency,
-        using the approximate Stationary Phase Approximation expression
-        given in `Marsat and Baker 2018 <https://arxiv.org/abs/1806.10734>`_ (eq. 20):
+        time_shifts: Union[float, np.ndarray],
+        inclination: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        r"""Internal driver for :meth:`predict`.
 
-        :math:`t = - \frac{1}{2 \pi} \frac{\mathrm{d} \phi}{\mathrm{d} f}`
-
-        The derivative is computed with ninth-order central differences,
-        because why not.
+        Computes the four Cartesian components ``(h_+,r), (h_+,i),
+        (h_x,r), (h_x,i)`` via :meth:`_hpc_waveform`, then assembles the
+        complex polarizations and applies the conventional
+        :math:`1/(2\eta)` normalization.
 
         Parameters
         ----------
-        frequency : float
-            frequency for which to compute the time to merger.
+        frequencies : np.ndarray
+            Frequencies at which to evaluate the waveform, in Hz.
         params : ParametersWithExtrinsic
-            Parameters of the CBC.
-        delta_f: float, optional
-            delta_f for the numerical calculation of the derivative.
-            If None (default), it is computed internally as f/1000.
+            Source parameters.
+        time_shifts : np.ndarray or float
+            Per-mode time shifts; a scalar is broadcast to every mode.
+        inclination : float
+            Inclination angle, in radians.
 
         Returns
         -------
-        Union[float, np.ndarray]
-            Time or times left until merger.
+        tuple[np.ndarray, np.ndarray]
+            ``(h_plus, h_cross)``.
         """
+        h_plus_real, h_plus_imag, h_cross_real, h_cross_imag = self._hpc_waveform(
+            frequencies=frequencies,
+            params=params,
+            time_shifts=time_shifts,
+            inclination=inclination,
+            use_pn=False,
+        )
 
-        if delta_f is None:
-            delta_f = frequency / 1000
-        freqs = frequency + delta_f * np.arange(-4, 5)
-        weights = np.array([3, -32, 168, -672, 0, 672, -168, 32, -3]) / 840.0
+        eta = params.intrinsic(self.dataset).eta
 
-        try:
-            _, phis = self._predict_amplitude_phase(freqs, params)
-            logging.info("Derivative coming from mlgw_bns")
-        except FrequencyTooLowError:
-            logging.info("Derivative coming from the PN approximant")
-            phis = self.waveform_generator.post_newtonian_phase(
-                params.intrinsic(self.dataset), freqs * params.mass_sum_seconds
+        hp_pred = (h_plus_real + 1j * h_plus_imag) / eta / 2
+        hc_pred = (h_cross_real + 1j * h_cross_imag) / eta / 2
+
+        return hp_pred, hc_pred
+
+    def predict_modes_dict(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        time_shifts: Optional[Union[float, np.ndarray]] = None,
+    ) -> dict[tuple[int, int], np.ndarray]:
+        r"""Return the per-mode complex Cartesian contributions.
+
+        Each entry is the contribution of the corresponding mode to the
+        observer-frame combination :math:`h_+ - i\, h_\times`, already
+        weighted by :math:`{}_{-2}Y_{\ell m}(\iota, \varphi)`. Summing the
+        returned arrays reproduces the output of :meth:`predict`.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate the waveform, in Hz.
+        params : ParametersWithExtrinsic
+            Source parameters.
+        time_shifts : np.ndarray or float, optional
+            Per-mode time shifts (see :meth:`predict`). Predicted from
+            ``params`` if ``None``.
+
+        Returns
+        -------
+        dict[tuple[int, int], np.ndarray]
+            Mapping ``(l, m) -> h_lm = h_+ - i h_x`` (one complex array
+            per mode).
+        """
+        modes_dict = self._hpc_waveform_per_mode(
+            frequencies=frequencies,
+            params=params,
+            time_shifts=self._resolve_time_shifts(params, time_shifts),
+            inclination=params.inclination,
+            use_pn=False,
+        )
+        eta = params.intrinsic(self.dataset).eta
+        result: dict[tuple[int, int], np.ndarray] = {}
+        for (l, m), (hp_real, hp_imag, hc_real, hc_imag) in modes_dict.items():
+            hp = (hp_real + 1j * hp_imag) / eta / 2
+            hc = (hc_real + 1j * hc_imag) / eta / 2
+            result[(l, m)] = hp - 1j * hc
+        return result
+
+    def _hpc_waveform_per_mode(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        time_shifts: Union[float, np.ndarray],
+        inclination: float,
+        use_pn: bool,
+    ) -> dict[tuple[int, int], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+        r"""Per-mode Cartesian components of :math:`h_+` and :math:`h_\times`.
+
+        Same machinery as :meth:`_hpc_waveform`, but instead of summing
+        over the modes it returns one tuple of components per mode.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate, in Hz.
+        params : ParametersWithExtrinsic
+            Source parameters.
+        time_shifts : np.ndarray or float
+            Per-mode time shifts; a scalar is broadcast to every mode.
+        inclination : float
+            Inclination angle, in radians.
+        use_pn : bool
+            If ``True``, take the per-mode amplitude/phase from the
+            Post-Newtonian (TaylorF2-style) expressions in
+            :mod:`~mlgw_bns.pn_modes` instead of from the trained
+            :class:`ModeModel` instances. Used by :meth:`get_taylorf2_modes_dict`.
+
+        Returns
+        -------
+        dict[tuple[int, int], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]
+            Mapping ``(l, m) -> (h_plus_real, h_plus_imag,
+            h_cross_real, h_cross_imag)`` for every mode in :attr:`modes`.
+        """
+        assert use_pn is not None
+        Ylm_real, Ylm_imag, Ylm_real_mneg, Ylm_imag_mneg = self._compute_Ylm_modes(
+            modes=self.modes,
+            phi=0.0,
+            iota=inclination,
+        )
+
+        time_shifts_per_mode = _broadcast_time_shifts(time_shifts, len(self.modes))
+
+        active_indices: list[int] = []
+        amps_list: list[np.ndarray] = []
+        phases_list: list[np.ndarray] = []
+        dataset = self.dataset
+
+        for idx, mode in enumerate(self.modes):
+            if use_pn:
+                parameters_intrinsic = params.intrinsic(dataset)
+                amp = _post_newtonian_amplitudes_by_mode[mode](
+                    parameters_intrinsic,
+                    frequencies * params.mass_sum_seconds,
+                )
+                phase = _post_newtonian_phases_by_mode[mode](
+                    parameters_intrinsic,
+                    frequencies * params.mass_sum_seconds,
+                )
+            else:
+                amp, phase = self.mode_models[mode].predict_amplitude_phase_optimized(
+                    frequencies, params
+                )
+                ts = time_shifts_per_mode[idx]
+                # Time shifts are stored in units of the reference total mass
+                # of the dataset, so we rescale to the requested total mass.
+                ts_scaled = ts * (params.total_mass / self.dataset.total_mass)
+                phase += 2 * np.pi * frequencies * ts_scaled
+            active_indices.append(idx)
+            amps_list.append(amp)
+            phases_list.append(phase)
+
+        if not active_indices:
+            return {}
+
+        amp_arr = np.stack(amps_list)
+        cosphi_arr = np.cos(np.stack(phases_list))
+        sinphi_arr = np.sin(np.stack(phases_list))
+        coeffs = _build_mode_coeffs(
+            self.modes,
+            active_indices,
+            Ylm_real,
+            Ylm_imag,
+            Ylm_real_mneg,
+            Ylm_imag_mneg,
+        )
+        result: dict[tuple[int, int], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
+        for i, mode in enumerate(self.modes):
+            c = coeffs[i]
+            h_plus_real = amp_arr[i] * (cosphi_arr[i] * c[0] + sinphi_arr[i] * c[1])
+            h_plus_imag = amp_arr[i] * (cosphi_arr[i] * c[2] + sinphi_arr[i] * c[3])
+            h_cross_real = amp_arr[i] * (cosphi_arr[i] * c[4] + sinphi_arr[i] * c[5])
+            h_cross_imag = amp_arr[i] * (cosphi_arr[i] * c[6] + sinphi_arr[i] * c[7])
+            result[(mode.l, mode.m)] = (h_plus_real, h_plus_imag, h_cross_real, h_cross_imag)
+        return result
+
+    def get_taylorf2_modes_dict(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        inclination: Optional[float] = None,
+    ) -> dict[tuple[int, int], np.ndarray]:
+        r"""Per-mode complex contributions using TaylorF2 (post-Newtonian).
+
+        Same output format as :meth:`predict_modes_dict`, but the
+        amplitude and phase of every mode are taken from the
+        Post-Newtonian (TaylorF2-style) expressions in
+        :mod:`~mlgw_bns.pn_modes`. No time shifts are applied
+        (``time_shifts=0``), since the PN expressions are already aligned
+        across modes.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate the waveform, in Hz.
+        params : ParametersWithExtrinsic
+            Source parameters.
+        inclination : float, optional
+            Inclination angle, in radians. Defaults to ``params.inclination``.
+
+        Returns
+        -------
+        dict[tuple[int, int], np.ndarray]
+            Mapping ``(l, m) -> h_lm = h_+ - i h_x``.
+        """
+        if inclination is None:
+            inclination = params.inclination
+
+        dataset = self.dataset
+        modes_dict = self._hpc_waveform_per_mode(
+            frequencies=frequencies,
+            params=params,
+            time_shifts=0.0,
+            inclination=inclination,
+            use_pn=True,
+        )
+        eta = params.intrinsic(dataset).eta
+        result: dict[tuple[int, int], np.ndarray] = {}
+        for (l, m), (hp_real, hp_imag, hc_real, hc_imag) in modes_dict.items():
+            hp = (hp_real + 1j * hp_imag) / eta / 2
+            hc = (hc_real + 1j * hc_imag) / eta / 2
+            result[(l, m)] = hp - 1j * hc
+        return result
+
+    def get_teob_modes_dict(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        inclination: Optional[float] = None,
+    ) -> dict[tuple[int, int], np.ndarray]:
+        r"""Per-mode complex contributions from the underlying EOB code.
+
+        Calls each mode's underlying TEOBResumS-based waveform generator
+        directly (via :meth:`get_amplitude_phase_at_inclination`) rather
+        than going through the surrogate's neural network, then assembles
+        the observer-frame combination :math:`h_+ - i\, h_\times`. Useful
+        as a ground-truth reference when validating the surrogate.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate the waveform, in Hz.
+        params : ParametersWithExtrinsic
+            Source parameters.
+        inclination : float, optional
+            Inclination angle, in radians. Defaults to ``params.inclination``.
+
+        Returns
+        -------
+        dict[tuple[int, int], np.ndarray]
+            Mapping ``(l, m) -> h_lm = h_+ - i h_x``.
+        """
+        if inclination is None:
+            inclination = params.inclination
+
+        dataset = self.dataset
+        # Use a shallow copy of the dataset whose total_mass is set to the
+        # requested total mass, so that the EOB generator interprets the
+        # natural-unit frequencies consistently.
+        dataset_for_teob = copy.copy(dataset)
+        dataset_for_teob.total_mass = params.total_mass
+        params_teob = params.intrinsic(dataset_for_teob)
+
+        f_natural = frequencies * params.mass_sum_seconds
+        Ylm_real, Ylm_imag, Ylm_real_mneg, Ylm_imag_mneg = self._compute_Ylm_modes(
+            modes=self.modes,
+            phi=0.0,
+            iota=inclination,
+        )
+
+        amps_list: list[np.ndarray] = []
+        phases_list: list[np.ndarray] = []
+        for mode in self.modes:
+            _f_spa, amp, phase = self.mode_models[mode].waveform_generator.get_amplitude_phase_at_inclination(
+                params_teob, f_natural, inclination=inclination
+            )
+            amps_list.append(amp)
+            phases_list.append(phase)
+
+        amp_arr = np.stack(amps_list)
+        cosphi_arr = np.cos(np.stack(phases_list))
+        sinphi_arr = np.sin(np.stack(phases_list))
+        coeffs = _build_mode_coeffs(
+            self.modes,
+            list(range(len(self.modes))),
+            Ylm_real,
+            Ylm_imag,
+            Ylm_real_mneg,
+            Ylm_imag_mneg,
+        )
+
+        eta = params.intrinsic(dataset).eta
+        result: dict[tuple[int, int], np.ndarray] = {}
+        for i, mode in enumerate(self.modes):
+            c = coeffs[i]
+            h_plus_real = amp_arr[i] * (cosphi_arr[i] * c[0] + sinphi_arr[i] * c[1])
+            h_plus_imag = amp_arr[i] * (cosphi_arr[i] * c[2] + sinphi_arr[i] * c[3])
+            h_cross_real = amp_arr[i] * (cosphi_arr[i] * c[4] + sinphi_arr[i] * c[5])
+            h_cross_imag = amp_arr[i] * (cosphi_arr[i] * c[6] + sinphi_arr[i] * c[7])
+            hp = (h_plus_real + 1j * h_plus_imag) / eta / 2
+            hc = (h_cross_real + 1j * h_cross_imag) / eta / 2
+            result[(mode.l, mode.m)] = hp - 1j * hc
+        return result
+
+    def _hpc_waveform(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        time_shifts: Union[float, np.ndarray],
+        inclination: float,
+        use_pn: Optional[bool] = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        r"""Cartesian components of :math:`h_+` and :math:`h_\times` summed over modes.
+
+        Collects the amplitude and phase of every mode (either from the
+        trained surrogate or from the PN expressions, depending on
+        ``use_pn``), packs them into ``(n_modes, n_freq)`` arrays,
+        and delegates the actual mode sum to :func:`_sum_modes_einsum`.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate the waveform, in Hz.
+        params : ParametersWithExtrinsic
+            Source parameters.
+        time_shifts : np.ndarray or float
+            Per-mode time shifts, in seconds, in the reference total-mass
+            units. A scalar value is broadcast to every mode. Ignored
+            when ``use_pn`` is ``True``.
+        inclination : float
+            Inclination angle, in radians.
+        use_pn : bool
+            ``True`` for the PN per-mode expressions, ``False`` for the
+            surrogate. Must be explicitly provided; passing ``None``
+            triggers an assertion error.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+            ``(h_plus_real, h_plus_imag, h_cross_real, h_cross_imag)``,
+            each of shape ``(n_freq,)``.
+        """
+        assert use_pn is not None, "use_pn must be provided"
+
+        Ylm_real, Ylm_imag, Ylm_real_mneg, Ylm_imag_mneg = self._compute_Ylm_modes(
+            modes=self.modes,
+            phi=0.0,
+            iota=inclination,
+        )
+
+        time_shifts_per_mode = _broadcast_time_shifts(time_shifts, len(self.modes))
+
+        active_indices: list[int] = []
+        amps_list: list[np.ndarray] = []
+        phases_list: list[np.ndarray] = []
+
+        dataset = self.dataset
+        for idx, mode in enumerate(self.modes):
+            if use_pn:
+                parameters_intrinsic = params.intrinsic(dataset)
+                amp = _post_newtonian_amplitudes_by_mode[mode](
+                    parameters_intrinsic,
+                    frequencies * params.mass_sum_seconds,
+                )
+                phase = _post_newtonian_phases_by_mode[mode](
+                    parameters_intrinsic,
+                    frequencies * params.mass_sum_seconds,
+                )
+            else:
+                amp, phase = self.mode_models[mode].predict_amplitude_phase_optimized(
+                    frequencies, params
+                )
+                ts = time_shifts_per_mode[idx]
+                # Time shifts are stored in units of the reference total mass
+                # of the dataset, so we rescale to the requested total mass.
+                ts_scaled = ts * (params.total_mass / self.dataset.total_mass)
+                phase += 2 * np.pi * frequencies * ts_scaled
+
+            active_indices.append(idx)
+            amps_list.append(amp)
+            phases_list.append(phase)
+
+        if not active_indices:
+            zeros = np.zeros_like(frequencies)
+            return zeros, zeros.copy(), zeros.copy(), zeros.copy()
+
+        amp_arr = np.stack(amps_list)
+        cosphi_arr = np.cos(np.stack(phases_list))
+        sinphi_arr = np.sin(np.stack(phases_list))
+        coeffs = _build_mode_coeffs(
+            self.modes,
+            active_indices,
+            Ylm_real,
+            Ylm_imag,
+            Ylm_real_mneg,
+            Ylm_imag_mneg,
+        )
+        return _sum_modes_einsum(amp_arr, cosphi_arr, sinphi_arr, coeffs)
+
+    def _compute_Ylm_modes(
+        self,
+        modes: list[Mode],
+        phi: float,
+        iota: float,
+    ) -> tuple[
+        dict[Mode, float],
+        dict[Mode, float],
+        dict[Mode, float],
+        dict[Mode, float],
+    ]:
+        r"""Evaluate the spin-weighted spherical harmonics for the given modes.
+
+        For each mode :math:`(\ell, m)`, computes both
+        :math:`{}_{-2}Y_{\ell m}(\iota, \varphi)` and the "opposite"
+        :math:`{}_{-2}Y_{\ell,-m}(\iota, \varphi)`, splitting them into
+        real and imaginary parts. These are the building blocks consumed
+        by :func:`_build_mode_coeffs`.
+
+        Parameters
+        ----------
+        modes : list[Mode]
+            Modes for which to evaluate the harmonics.
+        phi : float
+            Azimuthal angle :math:`\varphi`, in radians.
+        iota : float
+            Polar (inclination) angle :math:`\iota`, in radians.
+
+        Returns
+        -------
+        tuple[dict, dict, dict, dict]
+            Four dictionaries, in order:
+
+            * ``Ylm_real[(l, m)]`` and ``Ylm_imag[(l, m)]`` are the real
+              and imaginary parts of :math:`{}_{-2}Y_{\ell m}`,
+            * ``Ylm_real_mneg[(l, -m)]`` and ``Ylm_imag_mneg[(l, -m)]``
+              are the same quantities for the opposite mode
+              :math:`{}_{-2}Y_{\ell,-m}`, keyed by ``mode.opposite()``.
+        """
+        Ylm_real: dict[Mode, float] = {}
+        Ylm_imag: dict[Mode, float] = {}
+        Ylm_real_mneg: dict[Mode, float] = {}
+        Ylm_imag_mneg: dict[Mode, float] = {}
+
+        for mode in modes:
+            Ylm_real[mode], Ylm_imag[mode] = spinsphericalharm(
+                -2, mode.l, mode.m, phi, iota
+            )
+            mode_opposite = mode.opposite()
+            Ylm_real_mneg[mode_opposite], Ylm_imag_mneg[mode_opposite] = spinsphericalharm(
+                -2, mode.l, -mode.m, phi, iota
             )
 
-        derivative = np.sum(phis * weights) / delta_f
-
-        return derivative / (2 * np.pi)
-
-
-@njit
-def combine_amp_phase(
-    amp: np.ndarray, phase: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    r"""Combine amplitude and phase arrays into a Cartesian waveform,
-    according to
-    :math:`h = A e^{i \phi}`.
-
-    This function is separated out just so that it can be decorated with ``@njit``.
-
-    Parameters
-    ----------
-    amp : np.ndarray
-    phase : np.ndarray
-
-    Returns
-    -------
-    tuple[np.ndarray, np.ndarray]:
-        Real and imaginary parts of the waveform, respectively.
-    """
-    return (amp * np.cos(phase), amp * np.sin(phase))
-
-
-@njit
-def combine_residuals_amp(amp: np.ndarray, amp_pn: np.ndarray) -> np.ndarray:
-    r"""Combine amplitude residuals with their Post-Newtonian counterparts,
-    according to
-    :math:`A = A_{PN} e^{\Delta A}`.
-
-    This function is separated out just so that it can be decorated with ``@njit``.
-
-    Parameters
-    ----------
-    amp : np.ndarray
-    amp_pn : np.ndarray
-
-    Returns
-    -------
-    np.ndarray
-    """
-    return amp_pn * np.exp(amp)
-
-
-@njit
-def combine_residuals_phi(phi: np.ndarray, phi_pn: np.ndarray) -> np.ndarray:
-    r"""Combine amplitude residuals with their Post-Newtonian counterparts,
-    according to
-    :math:`\phi = \phi_{PN} + \Delta \phi`.
-
-    This function is separated out just so that it can be decorated with ``@njit``.
-
-    Parameters
-    ----------
-    phi : np.ndarray
-    phi_pn : np.ndarray
-
-    Returns
-    -------
-    np.ndarray
-    """
-    return phi_pn + phi
-
-
-@njit
-def compute_polarizations(
-    waveform_real: np.ndarray,
-    waveform_imag: np.ndarray,
-    pre_plus: Union[complex, float],
-    pre_cross: Union[complex, float],
-) -> tuple[np.ndarray, np.ndarray]:
-    """Compute the two polarizations of the waveform,
-    assuming they are the same but for a differerent prefactor
-    (which is the case for compact binary coalescences).
-
-    This function is separated out so that it can be decorated with
-    `numba.njit <https://numba.pydata.org/numba-doc/latest/reference/jit-compilation.html>`_
-    which allows it to be compiled --- this can speed up the computation somewhat.
-
-    Parameters
-    ----------
-    waveform_real : np.ndarray
-        Real part of the cartesian complex-valued waveform.
-    waveform_imag : np.ndarray
-        Imaginary part of the cartesian complex-valued waveform.
-    pre_plus : complex
-        Real-valued prefactor for the plus polarization of the waveform.
-    pre_cross : complex
-        Real-valued prefactor for the cross polarization of the waveform.
-
-    Returns
-    -------
-    tuple[np.ndarray, np.ndarray]
-        Plus and cross polarizations: complex-valued arrays.
-    """
-
-    hp = pre_plus * waveform_real + 1j * pre_plus * waveform_imag
-    hc = pre_cross * waveform_imag - 1j * pre_cross * waveform_real
-
-    return hp, hc
-
-def remove_linear_trend(parameters, ts_model, phi_diff, frq):
-
-    time_shifts_pred = ts_model.predict(parameters)
-    for i in range(parameters.shape[1]):
-        phi_diff[i] = phi_diff[i] - 2 * np.pi * frq * time_shifts_pred[i]
-
-    return phi_diff
+        return Ylm_real, Ylm_imag, Ylm_real_mneg, Ylm_imag_mneg
