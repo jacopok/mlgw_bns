@@ -37,7 +37,7 @@ from tqdm import tqdm  # type: ignore
 
 from .data_management import FDWaveforms
 from .dataset_generation import ParameterSet
-from .model import Model
+from .model import FrequencyTooHighError, FrequencyTooLowError, Model
 from .neural_network import NeuralNetwork, TimeshiftsGPR, TimeshiftsNN
 from .resample_residuals import cartesian_waveforms_at_frequencies
 
@@ -78,10 +78,18 @@ class ValidateModel:
 
         all_frequencies = self.psd_data[:, 0]
         if custom_frequencies:
+            # Strictly inside the dataset band: the waveforms are only known
+            # at the downsampling nodes, which span exactly this range, so
+            # resampling outside it means extrapolating (see
+            # :meth:`DownsamplingTraining.resample`). Padding this band by a
+            # few Hz --- as was done here previously --- is harmless for a
+            # model starting at a few tens of Hz, but for one starting at a
+            # few Hz it lets in a sizeable, purely extrapolated chunk of the
+            # PSD grid, which can then dominate the mismatch integral.
             mask = np.where(
                 np.logical_and(
-                    all_frequencies < self.model.dataset.frequencies_hz[-1] + 10,
-                    all_frequencies > self.model.dataset.frequencies_hz[0] - 0.5,
+                    all_frequencies <= self.model.dataset.frequencies_hz[-1],
+                    all_frequencies >= self.model.dataset.frequencies_hz[0],
                 )
             )
         else:
@@ -296,6 +304,8 @@ class ValidateModel:
                 :attr:`frequencies`.
         """
         assert self.model.downsampling_indices is not None
+
+        self._check_frequencies_in_band(self.frequencies)
 
         natural_frequencies = self.model.dataset.hz_to_natural_units(self.frequencies)
 
@@ -864,6 +874,58 @@ class ValidateModel:
         if (current_mode.l, current_mode.m) in ((2, 1), (3, 3)):
             return 1.5
         return 1.0
+
+    def _check_frequencies_in_band(self, frequencies: np.ndarray) -> None:
+        """Check that ``frequencies`` lies within the model's sampled band.
+
+        The counterpart, for the validation code path, of the band check
+        in :meth:`Model.predict_amplitude_phase`: the waveforms compared
+        here are only known at the downsampling nodes, and
+        :meth:`DownsamplingTraining.resample` does not continue them
+        outside that range --- it holds the endpoint value, which is not
+        a waveform. Unlike :meth:`Model.predict_amplitude_phase` there is
+        no post-Newtonian extension to fall back on (the EOB reference
+        waveforms are not available outside the band either), so an
+        out-of-band request is always an error here.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+                Frequencies at which the waveforms are to be compared,
+                in Hz.
+
+        Raises
+        ------
+        FrequencyTooLowError
+                If any frequency lies below the first downsampling node.
+        FrequencyTooHighError
+                If any frequency lies above the last downsampling node.
+        """
+        assert self.model.downsampling_indices is not None
+
+        frequencies_hz = self.model.dataset.frequencies_hz
+        amp_indices = self.model.downsampling_indices.amplitude_indices
+        phi_indices = self.model.downsampling_indices.phase_indices
+
+        f_min = max(frequencies_hz[amp_indices[0]], frequencies_hz[phi_indices[0]])
+        f_max = min(frequencies_hz[amp_indices[-1]], frequencies_hz[phi_indices[-1]])
+
+        if np.min(frequencies) < f_min:
+            raise FrequencyTooLowError(
+                f"Validation frequencies start at {np.min(frequencies)} Hz, below the "
+                f"model's first downsampling node at {f_min} Hz. Waveforms cannot "
+                "be reconstructed there; restrict `self.frequencies` to the "
+                "model's band, or use `Model.predict_amplitude_phase`, which "
+                "extends with a post-Newtonian waveform."
+            )
+
+        if np.max(frequencies) > f_max:
+            raise FrequencyTooHighError(
+                f"Validation frequencies end at {np.max(frequencies)} Hz, above the "
+                f"model's last downsampling node at {f_max} Hz. Waveforms cannot "
+                "be reconstructed there; restrict `self.frequencies` to the "
+                "model's band."
+            )
 
     def _apply_predicted_time_shifts(
         self,
