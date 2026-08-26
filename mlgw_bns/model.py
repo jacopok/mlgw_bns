@@ -873,6 +873,145 @@ class Model:
         mode_model = self.mode_models[Mode(2, 2)]
         return mode_model.merger_reference(params.intrinsic(mode_model.dataset))
 
+    def _mode_amplitudes_and_phases(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        source: str,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        r"""Amplitude and phase of every mode, from the requested source.
+
+        This is the one place where the per-mode
+        :math:`A_{\ell m}(f), \phi_{\ell m}(f)` are gathered; the
+        polarization builders (:meth:`_hpc_waveform`,
+        :meth:`_hpc_waveform_per_mode`, :meth:`get_teob_modes_dict`,
+        :meth:`coprecessing_modes_dict`) all go through it, so that they
+        cannot drift apart in their conventions.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate, in Hz.
+        params : ParametersWithExtrinsic
+            Source parameters.
+        source : str
+            Where the amplitude and phase come from:
+
+            * ``"surrogate"``: the trained :class:`ModeModel` networks,
+              referenced to the merger (see :meth:`merger_reference`);
+            * ``"post_newtonian"``: the TaylorF2-style expressions of
+              :mod:`~mlgw_bns.pn_modes`, in their own reference;
+            * ``"eob"``: TEOBResumS, through :meth:`teob_modes_amp_phase`,
+              referenced to the merger as the surrogate is.
+
+          Note that none of the three depends on the inclination: these
+          are the multipoles, which the caller is expected to weight by
+          the spin-weighted spherical harmonics itself.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            ``(amplitudes, phases)``, each of shape
+            ``(len(self.modes), len(frequencies))`` and ordered like
+            :attr:`modes`.
+
+        Raises
+        ------
+        ValueError
+            If ``source`` is not one of the three accepted values.
+        """
+        if source == "eob":
+            modes_amp_phase = self.teob_modes_amp_phase(frequencies, params)
+            return (
+                np.stack([modes_amp_phase[mode][0] for mode in self.modes]),
+                np.stack([modes_amp_phase[mode][1] for mode in self.modes]),
+            )
+        if source not in ("surrogate", "post_newtonian"):
+            raise ValueError(
+                f"Unknown amplitude/phase source {source!r}: expected one of "
+                "'surrogate', 'post_newtonian', 'eob'."
+            )
+
+        amps_list: list[np.ndarray] = []
+        phases_list: list[np.ndarray] = []
+        if source == "post_newtonian":
+            parameters_intrinsic = params.intrinsic(self.dataset)
+        else:
+            merger_reference = self.merger_reference(params)
+
+        for mode in self.modes:
+            if source == "post_newtonian":
+                amp = _post_newtonian_amplitudes_by_mode[mode](
+                    parameters_intrinsic,
+                    frequencies * params.mass_sum_seconds,
+                )
+                phase = _post_newtonian_phases_by_mode[mode](
+                    parameters_intrinsic,
+                    frequencies * params.mass_sum_seconds,
+                )
+            else:
+                amp, phase = self.mode_models[mode].predict_amplitude_phase(
+                    frequencies, params, merger_reference=merger_reference
+                )
+            amps_list.append(amp)
+            phases_list.append(phase)
+
+        return np.stack(amps_list), np.stack(phases_list)
+
+    def coprecessing_modes_dict(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        source: str = "surrogate",
+    ) -> dict[tuple[int, int], np.ndarray]:
+        r"""Per-mode frequency-domain multipoles, with no sky projection.
+
+        Returns the multipoles :math:`\tilde{h}_{\ell m}(f)` themselves
+        --- what :meth:`predict_modes_dict` returns *before* it is
+        weighted by :math:`{}_{-2}Y_{\ell m}(\iota, \varphi)`:
+
+        .. math::
+            \tilde{h}_{\ell m}(f) = \frac{1}{\eta}
+                A_{\ell m}(f) e^{i \phi_{\ell m}(f)} \,.
+
+        For an aligned-spin binary --- which is all this surrogate models
+        --- these *are* the co-precessing-frame multipoles, which is what
+        makes them the natural input to the precessing twist of
+        :mod:`~mlgw_bns.precessing_model`.
+
+        Only :math:`m > 0` multipoles are returned: with the
+        :math:`\tilde{h}(f) = \int h(t) e^{2 \pi i f t} \mathrm{d}t`
+        convention used throughout, the :math:`m < 0` multipoles of an
+        inspiralling binary have their support at :math:`f < 0` and so
+        vanish on the positive-frequency grid, being recoverable there
+        from :math:`h_{\ell, -m} = (-1)^\ell h_{\ell m}^*`.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate the multipoles, in Hz.
+        params : ParametersWithExtrinsic
+            Source parameters. The inclination it carries is *not* used.
+        source : str
+            ``"surrogate"`` (default), ``"post_newtonian"`` or ``"eob"``;
+            see :meth:`_mode_amplitudes_and_phases`.
+
+        Returns
+        -------
+        dict[tuple[int, int], np.ndarray]
+            Mapping ``(l, m) -> h_lm(f)``, one complex array per mode.
+        """
+        amp_arr, phase_arr = self._mode_amplitudes_and_phases(
+            frequencies=frequencies,
+            params=params,
+            source=source,
+        )
+        eta = params.intrinsic(self.dataset).eta
+        return {
+            (mode.l, mode.m): amp_arr[i] * np.exp(1j * phase_arr[i]) / eta
+            for i, mode in enumerate(self.modes)
+        }
+
     def predict_amplitude_phase_mode(
         self,
         mode: Mode,
@@ -1129,34 +1268,13 @@ class Model:
             iota=inclination,
         )
 
-        amps_list: list[np.ndarray] = []
-        phases_list: list[np.ndarray] = []
-        dataset = self.dataset
-        if use_pn:
-            parameters_intrinsic = params.intrinsic(dataset)
-        else:
-            merger_reference = self.merger_reference(params)
-
-        for mode in self.modes:
-            if use_pn:
-                amp = _post_newtonian_amplitudes_by_mode[mode](
-                    parameters_intrinsic,
-                    frequencies * params.mass_sum_seconds,
-                )
-                phase = _post_newtonian_phases_by_mode[mode](
-                    parameters_intrinsic,
-                    frequencies * params.mass_sum_seconds,
-                )
-            else:
-                amp, phase = self.mode_models[mode].predict_amplitude_phase(
-                    frequencies, params, merger_reference=merger_reference
-                )
-            amps_list.append(amp)
-            phases_list.append(phase)
-
-        amp_arr = np.stack(amps_list)
-        cosphi_arr = np.cos(np.stack(phases_list))
-        sinphi_arr = np.sin(np.stack(phases_list))
+        amp_arr, phase_arr = self._mode_amplitudes_and_phases(
+            frequencies=frequencies,
+            params=params,
+            source="post_newtonian" if use_pn else "surrogate",
+        )
+        cosphi_arr = np.cos(phase_arr)
+        sinphi_arr = np.sin(phase_arr)
         coeffs = _build_mode_coeffs(
             self.modes,
             list(range(len(self.modes))),
@@ -1324,9 +1442,11 @@ class Model:
             phi=0.0,
             iota=inclination,
         )
-        modes_amp_phase = self.teob_modes_amp_phase(frequencies, params)
-        amp_arr = np.stack([modes_amp_phase[mode][0] for mode in self.modes])
-        phase_arr = np.stack([modes_amp_phase[mode][1] for mode in self.modes])
+        amp_arr, phase_arr = self._mode_amplitudes_and_phases(
+            frequencies=frequencies,
+            params=params,
+            source="eob",
+        )
         cosphi_arr = np.cos(phase_arr)
         sinphi_arr = np.sin(phase_arr)
         coeffs = _build_mode_coeffs(
