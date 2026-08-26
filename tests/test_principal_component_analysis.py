@@ -37,7 +37,7 @@ def test_pca_model_reconstruction_inexact(random_array):
     assert np.average(abs(reconstructed_array - random_array)) < 1e-3
 
 
-def test_pca_in_model(generated_model):
-    pca_data = generated_model.pca_data
+def test_pca_in_model(generated_mode_model):
+    pca_data = generated_mode_model.pca_data
 
     assert isinstance(pca_data, PrincipalComponentData)

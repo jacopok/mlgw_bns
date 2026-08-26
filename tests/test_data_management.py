@@ -34,13 +34,13 @@ def test_downsampling_indices_saving_different_name(file):
     assert DownsamplingIndices.from_file(file) is None
 
 
-def test_saving_and_retrieval_of_data_inside_model(generated_model):
+def test_saving_and_retrieval_of_data_inside_model(generated_mode_model):
 
-    di = generated_model.downsampling_indices
+    di = generated_mode_model.downsampling_indices
 
-    generated_model.save_arrays()
+    generated_mode_model.save_arrays()
 
-    di2 = DownsamplingIndices.from_file(generated_model.file_arrays)
+    di2 = DownsamplingIndices.from_file(generated_mode_model.file_arrays)
 
     # Ugly workaround: the default __eq__ implemented by dataclasses
     # does not play well with arrays
@@ -48,9 +48,9 @@ def test_saving_and_retrieval_of_data_inside_model(generated_model):
     assert np.array_equal(di.phase_indices, di2.phase_indices)
 
 
-def test_residuals_are_zero_for_the_initial_frequency(generated_model):
+def test_residuals_are_zero_for_the_initial_frequency(generated_mode_model):
 
-    residuals = generated_model.training_dataset
+    residuals = generated_mode_model.training_dataset
 
     phases = residuals.phase_residuals
 

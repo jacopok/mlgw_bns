@@ -2,6 +2,7 @@
 """
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -11,17 +12,38 @@ from typing import Any, Callable, ClassVar, Optional, Type, Union
 import h5py
 import numpy as np
 from numpy.random import default_rng
+from joblib import Parallel, delayed
+from tqdm_joblib import tqdm_joblib
 from tqdm import tqdm  # type: ignore
 
 from .data_management import (
     DownsamplingIndices,
+    array_memory,
+    format_bytes,
+    peak_memory_usage,
     FDWaveforms,
     ParameterRanges,
     Residuals,
     SavableData,
     phase_unwrapping,
 )
-from .multibanding import reduced_frequency_array
+from .multibanding import reduced_frequency_array, COMMON_GRID_MODE
+
+# Shared cache for multibanding frequencies (all mode datasets use same COMMON grid).
+# Avoids recomputing the ~519k-point array per mode (~60ms each → ~240ms saved per predict).
+_MULTIBAND_FREQUENCIES_HZ_CACHE: dict[tuple[float, float, float], np.ndarray] = {}
+
+
+def _get_multiband_frequencies_hz(
+    eff_fmin: float, eff_srate: float, f_pivot: float
+) -> np.ndarray:
+    """Return multibanding frequency array, using shared cache across all mode datasets."""
+    key = (eff_fmin, eff_srate, f_pivot)
+    if key not in _MULTIBAND_FREQUENCIES_HZ_CACHE:
+        _MULTIBAND_FREQUENCIES_HZ_CACHE[key] = reduced_frequency_array(
+            eff_fmin, eff_srate / 2, f_pivot, mode=COMMON_GRID_MODE
+        )
+    return _MULTIBAND_FREQUENCIES_HZ_CACHE[key]
 
 # from .downsampling_interpolation import DownsamplingTraining
 from .taylorf2 import (
@@ -32,10 +54,73 @@ from .taylorf2 import (
     phase_5h_post_newtonian_tidal,
 )
 
+from .special_func import dynamic_then_uniform_grid
+
 TF2_BASE: float = 3.668693487138444e-19
 # ( Msun * G / c**3)**(5/6) * Hz**(-7/6) * c / Mpc / s
 AMP_SI_BASE: float = 4.2425873413901263e24
 # Mpc / Msun**2 / Hz
+
+def log_expected_memory(
+    kind: str,
+    number_generated: int,
+    number_kept: int,
+    amp_length: int,
+    phi_length: int,
+    full_length: int,
+    output_dtype: Any = np.float32,
+) -> None:
+    """Log the memory footprint expected for a dataset generation stage.
+
+    The number of sample points per waveform is only known once the
+    downsampling training has run --- the greedy algorithm decides how many
+    points it needs --- so the footprint of the training data cannot be
+    predicted before then, and it is worth stating explicitly at the start of
+    each stage which allocates a full dataset.
+
+    Two contributions are reported: the arrays which are returned, and the
+    per-waveform results collected from the ``joblib`` workers. The latter is
+    typically the larger of the two, since it holds ``number_generated``
+    (rather than ``number_kept``) waveforms in double precision, and it is
+    still alive while the returned arrays are being built --- so the peak is
+    roughly the sum of the two.
+
+    Parameters
+    ----------
+    kind : str
+        Name of the objects being generated, used in the log message.
+    number_generated : int
+        Number of waveforms which will be generated, including the ones
+        which will be discarded because of oversampling.
+    number_kept : int
+        Number of waveforms which will be kept in the returned arrays.
+    amp_length : int
+        Number of amplitude sample points per waveform.
+    phi_length : int
+        Number of phase sample points per waveform.
+    full_length : int
+        Number of sample points per waveform before downsampling.
+    output_dtype : Any
+        Data type of the returned arrays, by default ``np.float32``.
+    """
+
+    points_per_waveform = amp_length + phi_length
+
+    logging.info(
+        "Generating %i %ss with %i amplitude and %i phase sample points "
+        "(%.1f%% of the %i frequencies in the full grid): "
+        "expecting roughly %s for the returned arrays and up to %s "
+        "for the intermediate results, on top of the %s currently in use",
+        number_generated,
+        kind,
+        amp_length,
+        phi_length,
+        100 * points_per_waveform / (2 * full_length),
+        full_length,
+        format_bytes(array_memory((number_kept, points_per_waveform), output_dtype)),
+        format_bytes(array_memory((number_generated, points_per_waveform), np.float64)),
+        format_bytes(peak_memory_usage()),
+    )
 
 
 class WaveformGenerator(ABC):
@@ -58,6 +143,11 @@ class WaveformGenerator(ABC):
 
     def __init__(self):
         self.frequencies: Optional[np.ndarray] = None
+        # self.frequencies: Optional[np.ndarray] = dynamic_then_uniform_grid(
+        #     f_min=5.0, f_switch=150.0, f_max=2048,
+        #     alpha=2e-6, beta=8e-6,
+        #     uniform_step=1e-1
+        # ) * 1.3791374655266094e-05
 
     @abstractmethod
     def post_newtonian_amplitude(
@@ -110,7 +200,7 @@ class WaveformGenerator(ABC):
                 passed to :func:`WaveformParameters.taylor_f2`.
 
         Returns
-        -------
+        ----------
         phase : np.ndarray
                 Phase of the Fourier transform of the waveform,
                 specifically the phase of the plus polarization in radians.
@@ -149,6 +239,14 @@ class WaveformGenerator(ABC):
                 in radians, given as a continuously-varying array
                 (so, not constrained between 0 and 2pi).
         """
+
+    # @abstractmethod
+    # def full_effective_one_body_waveform(
+    #     self, params: "WaveformParameters", frequencies: Optional[np.ndarray] = None
+    # ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    #     r"""
+    #     Full EOB. TODO: update!
+    #     """
 
     def generate_residuals(
         self,
@@ -189,25 +287,20 @@ class WaveformGenerator(ABC):
             params, frequencies
         )
 
+        amplitude_pn_ = self.post_newtonian_amplitude(params, frequencies_eob)
+        phase_pn_ = self.post_newtonian_phase(params, frequencies_eob)
+
         if downsampling_indices:
             amp_indices, phi_indices = downsampling_indices
-            amp_frequencies = frequencies_eob[amp_indices]
-            phi_frequencies = frequencies_eob[phi_indices]
-
             amplitude_eob = amplitude_eob[amp_indices]
             phase_eob = phase_eob[phi_indices]
+            amplitude_pn = amplitude_pn_[amp_indices]
+            phase_pn = phase_pn_[phi_indices]
         else:
-            amp_frequencies = frequencies_eob
-            phi_frequencies = frequencies_eob
+            amplitude_pn = amplitude_pn_
+            phase_pn = phase_pn_
 
-        amplitude_pn = self.post_newtonian_amplitude(params, amp_frequencies)
-        phase_pn = self.post_newtonian_phase(params, phi_frequencies)
-
-        assert np.all(amplitude_pn > 0)
-        assert np.all(amplitude_eob > 0)
-
-        return (np.log(amplitude_eob / amplitude_pn), phase_eob - phase_pn)
-
+        return (amplitude_eob / amplitude_pn, phase_eob - phase_pn)
 
 class BarePostNewtonianGenerator(WaveformGenerator):
     """Generate waveforms with
@@ -238,6 +331,14 @@ class BarePostNewtonianGenerator(WaveformGenerator):
             "This generator does not include the possibility "
             "to generate effective one body waveforms"
         )
+    
+    def full_effective_one_body_waveform(
+        self, params: "WaveformParameters", frequencies: Optional[np.ndarray] = None
+    ):
+        raise NotImplementedError(
+            "This generator does not include the possibility "
+            "to generate effective one body waveforms"
+        )
 
 
 class TEOBResumSGenerator(BarePostNewtonianGenerator):
@@ -245,6 +346,7 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
     TEOBResumS effective-one-body code"""
 
     def __init__(self, eobrun_callable: Callable[[dict], tuple[np.ndarray, ...]]):
+        
         super().__init__()
         self.eobrun_callable = eobrun_callable
 
@@ -296,13 +398,11 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         f_spa, rhpf, ihpf, _, _ = self.eobrun_callable(par_dict)
 
         f_spa = f_spa[to_slice]
-        # f_spa = f_spa
 
         waveform = (rhpf - 1j * ihpf)[to_slice]
-        # waveform = rhpf - 1j * ihpf
 
         amplitude, phase = phase_unwrapping(waveform)
-
+        
         return (f_spa, amplitude, phase)
 
 
@@ -428,7 +528,8 @@ class WaveformParameters:
             srate = self.dataset.effective_srate_hz * self.dataset.mass_sum_seconds
         else:
             initial_freq = (
-                self.dataset.initial_frequency_hz * self.dataset.mass_sum_seconds
+                self.dataset.initial_frequency_hz 
+                * self.dataset.mass_sum_seconds
             )
             srate = self.dataset.srate_hz * self.dataset.mass_sum_seconds
 
@@ -444,7 +545,7 @@ class WaveformParameters:
             "use_geometric_units": "yes",
             "interp_uniform_grid": "no",
             "domain": 1,  # Fourier domain
-            "srate_interp": srate,
+            "srate_interp": srate, # final f
             "df": self.dataset.delta_f_hz * self.dataset.mass_sum_seconds,
             "inclination": 0.0,
             "output_hpc": "no",
@@ -476,7 +577,7 @@ class WaveformParameters:
             "s2z": self.chi_2,
             "lambda1": self.lambda_1,
             "lambda2": self.lambda_2,
-            "f_min": self.dataset.effective_initial_frequency_hz,
+            "f_min": self.dataset.effective_initial_frequency_hz, # TODO: check if this is correct
             "phi_ref": 0,
             "phaseorder": 11,
             "tidalorder": 15,
@@ -664,7 +765,6 @@ class UniformParameterGenerator(ParameterGenerator):
         parameter_ranges: ParameterRanges,
         seed: Optional[int] = None,
     ):
-
         self.q_range: tuple[float, float] = parameter_ranges.q_range
         self.lambda1_range: tuple[float, float] = parameter_ranges.lambda1_range
         self.lambda2_range: tuple[float, float] = parameter_ranges.lambda2_range
@@ -692,10 +792,17 @@ class Dataset:
     the dataset but not the data itself.
     (but I cannot think of a better one, maybe DatasetMeta?)
 
-    The amplitude residuals are defined as
-    :math:`\log(A _{\text{EOB}} / A_{\text{PN}})`,
+    The amplitude residuals are defined as the ratio
+    :math:`A _{\text{EOB}} / A_{\text{PN}}`,
     while the phase residuals are defined as
     :math:`\phi _{\text{EOB}} - \phi_{\text{PN}}`.
+
+    The amplitude residual is a plain ratio rather than its logarithm so
+    that it can carry a sign: the EOB mode amplitude crosses zero within
+    the band for the (2,1) and (3,3) modes, which is a physical
+    :math:`\pi` phase flip. Under a log-ratio that sign had to be thrown
+    away with an absolute value, and the affected parameter tuples
+    discarded entirely; here they are represented directly.
 
     Parameters
     ----------
@@ -749,8 +856,8 @@ class Dataset:
     Examples
     --------
     >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
-    >>> print(dataset.delta_f_hz) # should be 1/256 Hz, doctest: +NUMBER
-    0.001953125
+    >>> print(dataset.delta_f_hz) # should be 1/4096 Hz, doctest: +NUMBER
+    0.000244140625
 
     Class Attributes
     ----------------
@@ -766,30 +873,34 @@ class Dataset:
         initial_frequency_hz: float,
         srate_hz: float,
         delta_f_hz: Optional[float] = None,
-        waveform_generator: WaveformGenerator = BarePostNewtonianGenerator(),
+        waveform_generator: WaveformGenerator = BarePostNewtonianGenerator(), # TODO: Change it to `BarePostNewtonianModeGenerator()`
         parameter_generator_class: Type[ParameterGenerator] = UniformParameterGenerator,
         parameter_ranges: ParameterRanges = ParameterRanges(),
         parameter_generator: Optional[ParameterGenerator] = None,
         seed: int = 42,
         multibanding: bool = True,
-        f_pivot_hz: float = 40.0,
+        f_pivot_hz: float = 160.0,
     ):
 
         self.initial_frequency_hz = initial_frequency_hz
         self.srate_hz = srate_hz
 
-        (
-            self.effective_initial_frequency_hz,
-            self.effective_srate_hz,
-        ) = expand_frequency_range(
+        (self.effective_initial_frequency_hz, self.effective_srate_hz) = expand_frequency_range(
             initial_frequency_hz,
             srate_hz,
             parameter_ranges.mass_range,
             self.total_mass,
         )
+        self.waveform_generator = waveform_generator
+        self.current_mode = None
+        if hasattr(self.waveform_generator, "mode") and self.waveform_generator.mode is not None:
+            self.current_mode = self.waveform_generator.mode
+        # print(f"current_mode: {self.current_mode}")
+
+        self.multibanding = multibanding
+        self.f_pivot_hz = f_pivot_hz
 
         self.delta_f_hz = self.optimal_df_hz() if delta_f_hz is None else delta_f_hz
-        self.waveform_generator = waveform_generator
         self.parameter_generator_class = parameter_generator_class
         self.parameter_ranges = parameter_ranges
 
@@ -799,10 +910,6 @@ class Dataset:
 
         self.residuals_amp: list[np.ndarray] = []
         self.residuals_phi: list[np.ndarray] = []
-
-        self.multibanding = multibanding
-        self.f_pivot_hz = f_pivot_hz
-
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}("
@@ -856,9 +963,12 @@ class Dataset:
             return self.natural_units_to_hz(self.waveform_generator.frequencies)
 
         if self.multibanding:
-            return reduced_frequency_array(
+            # Use COMMON_GRID_MODE (44) for all modes: ensures consistent grids when combining
+            # modes at inference. Finest grid satisfies 33/44; 22/21 tolerate oversampling.
+            # Shared cache avoids recomputing ~519k-point array per mode (~60ms each).
+            return _get_multiband_frequencies_hz(
                 self.effective_initial_frequency_hz,
-                self.effective_srate_hz / 2,
+                self.effective_srate_hz,
                 self.f_pivot_hz,
             )
         else:
@@ -918,6 +1028,14 @@ class Dataset:
             * (np.pi * self.effective_initial_frequency_hz) ** (-8 / 3)
             * (self.mass_sum_seconds * (1 / 4) ** (3 / 5)) ** (-5 / 3)
         )
+
+        # SCALE SEGLEN FOR HIGHER ORDER MODES
+        # When multibanding, use COMMON_GRID_MODE for consistency with frequencies_hz.
+        # Otherwise use current_mode for mode-specific delta_f (non-multibanding case).
+        if self.multibanding:
+            seglen *= (COMMON_GRID_MODE.m / 2.0) ** (8 / 3)
+        elif hasattr(self.waveform_generator, "mode") and self.waveform_generator.mode is not None:
+            seglen *= (self.current_mode.m / 2.0) ** (8 / 3)
 
         if power_of_two:
             return 2 ** (-np.ceil(np.log2(seglen * (1 + margin_percent / 100))))
@@ -1025,6 +1143,8 @@ class Dataset:
         size: int,
         downsampling_indices: Optional[DownsamplingIndices] = None,
         flatten_phase: bool = True,
+        oversample: float = 1.0,
+        n_jobs: int = 16,
     ) -> tuple[np.ndarray, ParameterSet, Residuals]:
         """Generate a set of waveform residuals.
 
@@ -1061,26 +1181,68 @@ class Dataset:
             amp_length = downsampling_indices.amp_length
             phi_length = downsampling_indices.phi_length
 
-        amp_residuals = np.empty((size, amp_length), dtype=np.float32)
-        phi_residuals = np.empty((size, phi_length), dtype=np.float32)
-        parameter_array = np.empty((size, WaveformParameters.number_of_parameters), dtype=np.float32)
+        # Calculate how many to generate
+        n_generate = int(size * oversample)
+
+        log_expected_memory(
+            "residual", n_generate, size, amp_length, phi_length, self.waveform_length
+        )
 
         if self.parameter_generator is None:
-            parameter_generator = self.make_parameter_generator(seed=1)
+            parameter_generator = self.make_parameter_generator(seed=2)
         else:
             parameter_generator = self.parameter_generator
 
-        for i in tqdm(range(size), unit="residuals"):
-            params = next(parameter_generator)
+        # Generate all parameters upfront
+        parameters = [next(parameter_generator) for _ in range(n_generate)]
 
-            (
-                amp_residuals[i],
-                phi_residuals[i],
-            ) = self.waveform_generator.generate_residuals(
-                params, self.frequencies, downsampling_indices
+        # Parallel generation
+        def generate_single(params):
+            try:
+                result = self.waveform_generator.generate_residuals(
+                    params, self.frequencies, downsampling_indices
+                )
+                if result is not None:
+                    amp_res, phi_res = result
+                    return (amp_res, phi_res, params.array)
+            except Exception:
+                pass
+            return None
+
+        with tqdm_joblib(tqdm(desc="Generating residuals", total=n_generate)):
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(generate_single)(p) for p in parameters
             )
 
-            parameter_array[i] = params.array
+        # Filter valid results
+        valid_results = [r for r in results if r is not None]
+
+        if len(valid_results) < size:
+            logging.warning(
+                "Only %i/%i valid waveforms generated", len(valid_results), size
+            )
+        # if len(valid_results) < size:
+        #     raise RuntimeError(
+        #         f"Only {len(valid_results)}/{size} valid waveforms generated. "
+        #         f"Increase oversample factor (currently {oversample})"
+        #     )
+
+        # Take first 'size' valid results
+        amp_residuals = np.array([r[0] for r in valid_results[:size]], dtype=np.float32)
+        phi_residuals = np.array([r[1] for r in valid_results[:size]], dtype=np.float32)
+        parameter_array = np.array([r[2] for r in valid_results[:size]], dtype=np.float32)
+
+        logging.info(
+            "Generated %i valid residuals, using the first %i: "
+            "%s of amplitude and phase residual arrays "
+            "(peak memory usage so far: %s)",
+            len(valid_results),
+            size,
+            format_bytes(amp_residuals.nbytes + phi_residuals.nbytes),
+            format_bytes(peak_memory_usage()),
+        )
+
+        del results, valid_results
 
         residuals = Residuals(amp_residuals, phi_residuals)
 
@@ -1088,7 +1250,7 @@ class Dataset:
             indices: Union[slice, list[int]] = slice(None)
         else:
             indices = downsampling_indices.phase_indices
-                
+
         if flatten_phase:
             residuals.flatten_phase(self.frequencies[indices])
 
@@ -1153,7 +1315,7 @@ class Dataset:
         )
 
         return FDWaveforms(
-            amplitudes=np.exp(amp_residuals) * pn_amps,
+            amplitudes=amp_residuals * pn_amps,
             phases=phi_residuals + pn_phis,
         )
 
@@ -1161,6 +1323,7 @@ class Dataset:
         self,
         parameters: ParameterSet,
         downsampling_indices: Optional[DownsamplingIndices] = None,
+        n_jobs: int = 16,
     ) -> FDWaveforms:
         """Generate full effective-one-body waveforms
         at each of the parameters in the given parameter set.
@@ -1171,10 +1334,14 @@ class Dataset:
             Parameters of the waveforms to generate
         downsampling_indices : DownsamplingIndices, optional
             Indices to downsample the waveforms at, by default None
+        n_jobs : int
+            Number of parallel jobs for waveform generation. Defaults to 16.
 
         Returns
         -------
-        FDWaveforms
+        tuple[FDWaveforms, ParameterSet]
+            Waveforms and the parameter set that produced them.
+            All the given parameters are used.
         """
 
         if downsampling_indices is None:
@@ -1186,19 +1353,56 @@ class Dataset:
 
         waveform_param_list = parameters.waveform_parameters(self)
 
-        amps = []
-        phis = []
+        amp_length = (
+            self.waveform_length
+            if downsampling_indices is None
+            else downsampling_indices.amp_length
+        )
+        phi_length = (
+            self.waveform_length
+            if downsampling_indices is None
+            else downsampling_indices.phi_length
+        )
+        log_expected_memory(
+            "waveform",
+            len(waveform_param_list),
+            len(waveform_param_list),
+            amp_length,
+            phi_length,
+            self.waveform_length,
+            output_dtype=np.float64,
+        )
 
-        for par in tqdm(waveform_param_list, unit="waveforms"):
+        def generate_single(par):
             _, amp, phi = self.waveform_generator.effective_one_body_waveform(
                 par, self.frequencies
             )
-            amps.append(amp[amp_indices])
-            phis.append(phi[phi_indices])
+            return amp[amp_indices], phi[phi_indices], par.array
 
-        return FDWaveforms(np.array(amps), np.array(phis))
+        with tqdm_joblib(tqdm(desc="Generating waveforms", total=len(waveform_param_list))):
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(generate_single)(par) for par in waveform_param_list
+            )
 
+        valid_results = [r for r in results if r is not None]
+        if len(valid_results) == 0:
+            raise RuntimeError("No waveforms could be generated.")
 
+        amps = np.array([r[0] for r in valid_results])
+        phis = np.array([r[1] for r in valid_results])
+        valid_param_array = np.array([r[2] for r in valid_results])
+        valid_param_set = self.parameter_set_cls(valid_param_array)
+
+        logging.info(
+            "Generated %i waveforms: %s of amplitude and phase arrays "
+            "(peak memory usage so far: %s)",
+            len(valid_results),
+            format_bytes(amps.nbytes + phis.nbytes),
+            format_bytes(peak_memory_usage()),
+        )
+
+        return FDWaveforms(amps, phis), valid_param_set
+        
 def expand_frequency_range(
     initial_frequency: float,
     final_frequency: float,

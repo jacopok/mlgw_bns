@@ -1,5 +1,0 @@
-# this file is needed only for the purposes 
-# of automatically building the documentation on ReadTheDocs
-
-myst-parser==0.15.2
-readthedocs-sphinx-search==0.1.1

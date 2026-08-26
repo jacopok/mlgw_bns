@@ -9,10 +9,13 @@ as a separate group.
 Each subclass of :class:`SavableData` has a default group name
 which will become the name of the h5 file group in which 
 that data is saved. 
+Reference: https://github.com/jacopok/mlgw_bns/blob/master/mlgw_bns/data_management.py
 """
 from __future__ import annotations
 
 import logging
+import resource
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
 from typing import (
@@ -30,13 +33,95 @@ from typing import (
 
 import h5py
 import numpy as np
-from numpy.polynomial.polynomial import Polynomial
 
 if TYPE_CHECKING:
     from .model import ParametersWithExtrinsic
 
 # make type hinting available for
 TYPE_DATA = TypeVar("TYPE_DATA", bound="SavableData")
+
+
+def format_bytes(number_of_bytes: float) -> str:
+    """Human-readable representation of a number of bytes.
+
+    Parameters
+    ----------
+    number_of_bytes : float
+        Size to format.
+
+    Returns
+    -------
+    str
+        Size expressed in the largest unit for which it is at least one.
+
+    Examples
+    --------
+    >>> format_bytes(512)
+    '512.0 B'
+    >>> format_bytes(2 ** 20)
+    '1.0 MB'
+    >>> format_bytes(1.5 * 2 ** 30)
+    '1.5 GB'
+    """
+
+    units = ("B", "kB", "MB", "GB", "TB")
+
+    scaled = float(number_of_bytes)
+    for unit in units[:-1]:
+        if abs(scaled) < 1024.0:
+            return f"{scaled:.1f} {unit}"
+        scaled /= 1024.0
+
+    return f"{scaled:.1f} {units[-1]}"
+
+
+def array_memory(shape: Iterable[int], dtype: Any = np.float64) -> int:
+    """Number of bytes taken up by an array of the given shape and dtype.
+
+    This is meant to be used to estimate the footprint of arrays which have
+    not been allocated yet; for arrays which already exist, use their
+    ``nbytes`` attribute instead.
+
+    Parameters
+    ----------
+    shape : Iterable[int]
+        Shape of the array.
+    dtype : Any
+        Data type of the array, by default ``np.float64``.
+
+    Returns
+    -------
+    int
+        Size in bytes.
+
+    Examples
+    --------
+    >>> array_memory((100, 200))
+    160000
+    >>> array_memory((100, 200), np.float32)
+    80000
+    """
+
+    return int(np.prod(list(shape), dtype=np.int64)) * np.dtype(dtype).itemsize
+
+
+def peak_memory_usage() -> int:
+    """Peak resident set size of this process since it started, in bytes.
+
+    Only the memory of the current process is accounted for: waveform
+    generation happens in ``joblib`` worker subprocesses, so during that
+    stage this only tracks the results as they are collected back here.
+
+    Returns
+    -------
+    int
+        Peak RSS in bytes.
+    """
+
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+
+    # ru_maxrss is in kilobytes on Linux, but in bytes on macOS
+    return peak if sys.platform == "darwin" else peak * 1024
 
 # mypy does not like abstract dataclasses, see https://github.com/python/mypy/issues/5374
 @dataclass  # type: ignore
@@ -95,21 +180,25 @@ class SavableData:
         for array_name, array in zip(self._arrays_list(), self):
             array_path = f"{self.group_name}/{array_name}"
 
-            # convert to numpy array here in order to be able to get
-            # the shape of lists as well
-            shape = np.array(array).shape
+            # Use asarray to avoid copying when array is already ndarray
+            arr = np.asarray(array)
+            shape = arr.shape
 
             if array_path not in file:
+                # Chunk large arrays for faster I/O (e.g. residuals, PCA eigenvectors)
+                n_elements = arr.size
+                chunks = True if n_elements > 10_000 else None
                 # the purpose of "maxshape=None" is to make the size variable
                 file.create_dataset(
                     array_path,
-                    data=array,
+                    data=arr,
                     maxshape=tuple(None for _ in shape),
+                    chunks=chunks,
                 )
 
             else:
                 file[array_path].resize(shape)
-                file[array_path][:] = array
+                file[array_path][:] = arr
 
     @classmethod
     def from_file(
@@ -141,7 +230,7 @@ class SavableData:
 
 
 @dataclass
-class ParameterRanges:
+class ParameterRanges(SavableData):
     """Parameter ranges for waveform generation.
 
     The parameters should all be numpy arrays,
@@ -172,11 +261,19 @@ class ParameterRanges:
     """
 
     mass_range: Tuple[float, float] = (2.0, 4.0)
-    q_range: Tuple[float, float] = (1.0, 2.85) # changed this!
+    q_range: Tuple[float, float] = (1.0, 3.0)
     lambda1_range: Tuple[float, float] = (5.0, 5000.0)
     lambda2_range: Tuple[float, float] = (5.0, 5000.0)
     chi1_range: Tuple[float, float] = (-0.5, 0.5)
     chi2_range: Tuple[float, float] = (-0.5, 0.5)
+
+    group_name: ClassVar[str] = "parameter_ranges"
+
+    def __iter__(self) -> Iterator[Any]:
+        """Override this method for the purpose of saving
+        as an h5 file, which only works with arrays."""
+        for array_name in self._arrays_list():
+            yield np.array(getattr(self, array_name))
 
     def check_parameters_in_ranges(self, params: ParametersWithExtrinsic) -> None:
         def within(x: float, x_range: tuple[float, float], name: str):
@@ -330,7 +427,7 @@ class Residuals(SavableData):
 
         """
         return cls(
-            np.log(waveforms_1.amplitudes / waveforms_2.amplitudes),
+            waveforms_1.amplitudes / waveforms_2.amplitudes,
             waveforms_1.phases - waveforms_2.phases,
         )
 
@@ -346,11 +443,17 @@ class Residuals(SavableData):
                 Frequencies to which the phase points correspond.
                 Required for the linear term subtraction.
         first_section_flat: float
-                The linear term is chosen so that the first
-                phase residual is zero, and so is the one corresponding
-                to this fraction of the frequencies.
+                Fraction of the sample points, starting from the lowest
+                frequency, over which the linear term is fitted.
                 Defaults to 0.2.
-                
+
+                Note that this is a fraction of the *number of sample
+                points*, not of the frequency range, so the frequency it
+                corresponds to depends on how the phase is sampled. This
+                is by design: the resulting time shift is used to flatten
+                residuals on the same grid it was computed on, so the two
+                stay consistent as long as they use the same sampling.
+
         Returns
         -------
         timeshifts: np.ndarray
@@ -358,63 +461,82 @@ class Residuals(SavableData):
                 
         """
 
-        number_of_points = self.phase_residuals.shape[1]
-
-        index = int(first_section_flat * number_of_points)
-        slopes = np.empty(len(self.phase_residuals))
+        timeshifts = self.phase_timeshifts(frequencies, first_section_flat)
 
         for i, phase_arr in enumerate(self.phase_residuals):
-            slopes[i] = (phase_arr[index] - phase_arr[0]) / (
-                frequencies[index] - frequencies[0]
+            self.phase_residuals[i] = phase_arr - (
+                2 * np.pi * timeshifts[i] * (frequencies - frequencies[0])
             )
-            
-            self.phase_residuals[i] = (
-                phase_arr - slopes[i] * (frequencies - frequencies[0]) - phase_arr[0]
-            )
-        
-        return slopes / (2 * np.pi)
 
-    def flatten_phase_new(
+        return timeshifts
+
+    def phase_timeshifts(
         self, frequencies: np.ndarray, first_section_flat: float = 0.2
     ) -> np.ndarray:
-        """Subtract a linear term from the phase,
-        such that it is often close to 0.
+        r"""Time shifts implied by the linear term :meth:`flatten_phase` removes.
+
+        Unlike :meth:`flatten_phase`, this does not modify the residuals, so
+        it can be used on a set of residuals which still needs to be used in
+        its raw form afterwards.
+
+        The time shift is the least-squares slope, divided by
+        :math:`2\pi`, of the phase residual against frequency over the
+        lowest ``first_section_flat`` fraction of the sample points, with
+        a free intercept.
+
+        Restricting the fit to low frequencies is deliberate: the
+        misalignment this term is meant to capture is a genuine time
+        offset of the inspiral, whereas at high frequency the EOB-PN
+        phase difference departs from linearity for physical reasons
+        that no time shift can absorb. Fitting over the whole band would
+        let that high-frequency structure bias the slope.
+
+        A least-squares slope rather than the chord through two points:
+        the two-point estimate inherits whatever local wiggle happens to
+        sit on those two samples, which makes the regression target
+        noisier than the quantity it is trying to represent.
 
         Parameters
         ----------
         frequencies: np.ndarray
                 Frequencies to which the phase points correspond.
-                Required for the linear term subtraction.
         first_section_flat: float
-                The linear term is chosen so that the first
-                phase residual is zero, and so is the one corresponding
-                to this fraction of the frequencies.
-                Defaults to 0.2.
-                
+                See :meth:`flatten_phase`. Defaults to 0.2.
+
         Returns
         -------
         timeshifts: np.ndarray
-                Timeshifts, in seconds if the frequencies given are in Hz,
-                
+                Timeshifts, in seconds if the frequencies given are in Hz.
+
+        Raises
+        ------
+        ValueError
+                If the low-frequency section holds fewer than two
+                distinct frequencies, so that no slope is defined.
         """
 
-        number_of_points = self.phase_residuals.shape[1]
+        index = max(int(first_section_flat * self.phase_residuals.shape[1]), 2)
 
-        index = int(first_section_flat * number_of_points)
-        slopes = np.empty(len(self.phase_residuals))
+        low_frequencies = np.asarray(frequencies[:index], dtype=np.float64)
+        low_residuals = np.asarray(
+            self.phase_residuals[:, :index], dtype=np.float64
+        )
 
-        for i, phase_arr in enumerate(self.phase_residuals):
-            # Fit a quadratic polynomial to the initial section
-            p = Polynomial.fit(frequencies[:index], phase_arr[:index], 2)
-            
-            # Calculate the linear component at the endpoints
-            slope = p.convert().coef[1]
-            intercept = p.convert().coef[0]
-            
-            # Adjust phase residuals
-            self.phase_residuals[i] = phase_arr - (slope * (frequencies - frequencies[0]) + intercept)
-            slopes[i] = slope
-        
+        centered_frequencies = low_frequencies - np.mean(low_frequencies)
+        frequency_spread = centered_frequencies @ centered_frequencies
+
+        if frequency_spread == 0.0:
+            raise ValueError(
+                "Cannot fit a time shift: the lowest "
+                f"{index} sample points are all at the same frequency."
+            )
+
+        centered_residuals = low_residuals - np.mean(
+            low_residuals, axis=1, keepdims=True
+        )
+
+        slopes = centered_residuals @ centered_frequencies / frequency_spread
+
         return slopes / (2 * np.pi)
 
 @dataclass
@@ -489,7 +611,7 @@ class FDWaveforms(SavableData):
 
 
 def phase_unwrapping(
-    waveform_cartesian: np.ndarray, eps: float = 1e-3, set_zero_at_start: bool = True
+    waveform_cartesian: np.ndarray, eps: float = 1e-1, set_zero_at_start: bool = True
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Starting from an array of cartesian-form complex numbers,

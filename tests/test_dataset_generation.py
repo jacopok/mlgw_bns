@@ -43,7 +43,9 @@ def test_waveform_parameters_teobresums_output(parameters):
         "interp_uniform_grid": "no",
         "domain": 1,
         "srate_interp": 0.056489470607359996,
-        "df": 5.3872557265624996e-08,
+        # multibanding scales the segment length by (COMMON_GRID_MODE.m / 2)**(8/3)
+        # to keep a common frequency grid across higher-order modes
+        "df": 6.734069655891648e-09,
         # "interp_FD_waveform": 1,  # change this to "yes" as well? is it ignored?
         "inclination": 0.0,
         "output_hpc": "no",
@@ -187,7 +189,7 @@ def test_parameter_generator_changes_seed(dataset):
 def test_true_waveforms_in_validation(dataset, parameters):
 
     param_set = ParameterSet.from_list_of_waveform_parameters([parameters])
-    waveforms = dataset.generate_waveforms_from_params(param_set)
+    waveforms, _ = dataset.generate_waveforms_from_params(param_set)
     cartesian_wf_from_polar = waveforms.amplitudes[0] * np.exp(1j * waveforms.phases[0])
 
     f, amp_direct, phi_direct = dataset.waveform_generator.effective_one_body_waveform(

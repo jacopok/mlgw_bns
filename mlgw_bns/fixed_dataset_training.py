@@ -123,6 +123,18 @@ class FixedParameterGenerator(ParameterGenerator):
             for index, params in enumerate(self.parameter_set.parameter_array)
         )
 
+    def __getstate__(self):
+        # `waveform_parameters` is a live generator, which cannot be
+        # pickled (needed when this object is sent to worker processes
+        # by joblib during parallel waveform generation).
+        state = self.__dict__.copy()
+        state.pop("waveform_parameters", None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.reset()
+
     def __next__(self):
         if not self.loop:
             return next(self.waveform_parameters)

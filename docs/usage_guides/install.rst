@@ -15,8 +15,16 @@ the functionality of the package is currently severely hampered without it ---
 no new models can be generated, and the only possibility is to use the 
 one which is provided by default.
 
-To install it, follow the instructions to install the Python wrapper 
-`here <https://bitbucket.org/eob_ihes/teobresums/src/master/>`_.  
+It is available on PyPI, so it can be installed with 
+
+.. code-block:: bash
+
+    pip install teobresums
+
+It is distributed as a source package which links against the 
+`GNU Scientific Library <https://www.gnu.org/software/gsl/>`_, so its 
+development headers need to be available at install time 
+(``sudo apt-get install libgsl-dev`` on Debian and derivatives).
 To check whether it is correctly installed, try to 
 
 .. code-block:: python
@@ -30,29 +38,16 @@ From the repo
 -------------
 
 Once you have cloned the `repo <https://github.com/jacopok/mlgw_bns>`_, 
-install `poetry <https://python-poetry.org/docs/#installation>`_, 
+install `uv <https://docs.astral.sh/uv/getting-started/installation/>`_, 
 and then run
 
 .. code-block:: bash
     
-    poetry install
+    uv sync
 
 in the project directory.
-In this case, the `TEOBResumS` repository must be installed in the same folder 
-as `mlgw_bns`:
-
-.. code-block:: bash
-
-    some_folder/
-    |--- mlgw_bns/
-        |--- mlgw_bns/
-        |--- docs/
-        |--- tests/
-        |--- ...
-    |--- teobresums/
-        |--- Python/
-        |--- C/ 
-        |--- ...
+This creates a virtual environment in ``.venv/`` with all the dependencies, 
+``TEOBResumS`` included.
 
 
 Testing and dev functionality
@@ -62,41 +57,37 @@ To see whether everything is working properly, run
 
 .. code-block:: bash
     
-    poetry run tox -e python3.9
+    uv run tox
     
-where you can swap the python version to another one you have available
-on your system (between the supported ones --- 3.7 to 3.9).
-
-This will install all missing dependencies, 
-run tests and also build the documentation locally, in the folder `docs/html/`;
-one can access it starting from `index.html`.
+This will run the tests and also build the documentation locally, 
+in the folder `docs/html/`; one can access it starting from `index.html`.
 
 To only run the tests, do 
 
 .. code-block:: bash
     
-    poetry run pytest
+    uv run pytest
 
 
 To only build the documentation, do
 
 .. code-block:: bash
     
-    poetry run sphinx-build docs docs/html
+    uv run --extra docs sphinx-build docs docs/html
 
 
 Make a pretty dependency graph with 
 
 .. code-block:: bash
     
-    poetry run pydeps mlgw_bns/
+    uv run pydeps mlgw_bns/
 
 
 To make an html page showing the test coverage of the code, do
 
 .. code-block:: bash
     
-    poetry run coverage html
+    uv run coverage html
 
 
 There are pre-commit hooks which will clean up the code, 

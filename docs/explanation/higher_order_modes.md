@@ -163,7 +163,7 @@ $$ \widetilde{h}_\times (f) = \text{FT}[\Im h(t)] = \frac{i}{2} \left( \widetild
 $$
 
 where we used the facts that $\Re h = (h + h^*) / 2$, $\Im h = (h - h^*) / 2$, 
-and $\text{FT}[h(t)^*](f) = \text{FT}[h(t)]^* (-f)$.
+and $\text{FT}[h(t)^*]\,(f) = \text{FT}[h(t)]^* (-f)$.
 
 The aforementioned relation $\widetilde{h}_{\ell m} =(-1)^\ell \widetilde{h}^* _{\ell -m} (-f)$ 
 allows us to simplify the summation we get when substuting $h(f)$ and $h^*(-f)$ with their 
