@@ -266,6 +266,10 @@ class _LazyModelsDict(dict):
             waveform_generator=self._modes_model._generator_factory(mode),
             **self._modes_model._model_kwargs,
         )
+        # Every mode uses the one shared predictor; see
+        # `ModesModel._propagate_time_shifts_predictor`. It may still be
+        # None here, if this model has not been trained or loaded yet.
+        model.timeshifts_predictor = self._modes_model.time_shifts_predictor
         self[mode] = model
         return model
 
@@ -610,15 +614,15 @@ class ModesModel:
             )
 
     def train_time_shifts_predictor(self) -> None:
-        """Train the shared, cross-mode merger-time-shift predictor.
+        """Adopt the (2,2) mode's predictor as the shared, cross-mode one.
 
-        Trained once, from the (2,2) mode's own time-shift training data
-        (the parameters and linear-in-frequency trends computed by that
-        mode's :meth:`Model.generate`): the same :math:`\\Delta t(\\theta)`
-        correction is then reused to flatten the training residuals of
-        every other mode (see :meth:`generate`), rather than fitting a
-        separate, individually noisier regressor per mode. Sets
-        :attr:`time_shifts_predictor`.
+        There is exactly one merger-time-shift predictor per
+        :class:`ModesModel`: the one the (2,2) mode's
+        :meth:`Model.generate` fits from its own residuals. This method
+        does not fit a second copy, it takes that object and points every
+        mode at it (:attr:`time_shifts_predictor`), so that the same
+        :math:`\\Delta t(\\theta)` flattens the training residuals of every
+        mode and is added back by every mode's :meth:`Model.predict`.
 
         Must be called after the (2,2) mode's own :meth:`Model.generate`
         (this is what :meth:`generate` does automatically) and before any
@@ -638,18 +642,30 @@ class ModesModel:
             )
 
         reference_model = self.models[reference_mode]
-        training_parameters = reference_model.training_parameters
-        training_timeshifts = getattr(reference_model, "training_timeshifts_data", None)
-        if training_parameters is None or training_timeshifts is None:
+        if reference_model.timeshifts_predictor is None:
             raise ValueError(
-                "The (2,2) mode has no time-shift training data available; "
+                "The (2,2) mode has no time-shift predictor available; "
                 "call `generate()` before training the time-shift predictor."
             )
 
-        self.time_shifts_predictor = TimeshiftsNN(
-            training_params=training_parameters.parameter_array,
-            training_timeshifts=training_timeshifts,
-        ).fit()
+        # Adopt the object the (2,2) mode's `generate()` already fitted,
+        # rather than fitting a second one on the same data. The two must
+        # agree exactly: `remove_linear_trend` subtracts this predictor's
+        # output from the training residuals and `Model.predict` adds it
+        # back, so the term cancels only as long as it is literally the
+        # same function on both sides.
+        self.time_shifts_predictor = reference_model.timeshifts_predictor
+        self._propagate_time_shifts_predictor()
+
+    def _propagate_time_shifts_predictor(self) -> None:
+        """Point every already-built per-mode model at the shared predictor.
+
+        The models built later pick it up in
+        :meth:`_LazyModelsDict.__missing__`; this covers the ones which
+        already exist by the time the predictor becomes available.
+        """
+        for model in self.models.values():
+            model.timeshifts_predictor = self.time_shifts_predictor
 
     def set_hyper_and_train_nn(
         self,
@@ -683,20 +699,22 @@ class ModesModel:
             Whether to also persist the per-mode training residuals and
             parameters. Defaults to ``True``.
         """
+        # `include_timeshifts_predictor=False`: there is one predictor for
+        # all the modes, written once below under this model's own base
+        # filename, rather than a redundant copy next to every mode.
+        def save_mode(mode: Mode) -> None:
+            self.models[mode].save(
+                include_training_data=include_training_data,
+                include_timeshifts_predictor=False,
+            )
+
         if len(self.modes) > 1:
             with ThreadPoolExecutor(max_workers=len(self.modes)) as executor:
                 # Drain the iterator so that any exceptions are propagated.
-                list(
-                    executor.map(
-                        lambda m: self.models[m].save(
-                            include_training_data=include_training_data
-                        ),
-                        self.modes,
-                    )
-                )
+                list(executor.map(save_mode, self.modes))
         else:
             for mode in self.modes:
-                self.models[mode].save(include_training_data=include_training_data)
+                save_mode(mode)
 
         if self.time_shifts_predictor is not None:
             self.time_shifts_predictor.save_model(self.filename_timeshifts)
@@ -717,6 +735,11 @@ class ModesModel:
         """
         for mode in self.modes:
             self.models[mode].load(streams=streams)
+
+        # Per-mode checkpoints carry no predictor of their own (older ones
+        # may, in which case this overwrites the redundant copy with the
+        # shared one they were all identical to anyway).
+        self._propagate_time_shifts_predictor()
 
     def predict_amplitude_phase_mode(
         self,
