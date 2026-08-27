@@ -4,16 +4,28 @@ to build the training dataset for a new model, and plot the amplitude and
 phase residuals for all of them.
 
 These are exactly the quantities a per-mode `ModeModel` is trained to
-reproduce: `amplitude_residual = log(|A_eob| / |A_pn|)` and
+reproduce: `amplitude_residual = A_eob / A_pn` and
 `phase_residual = phi_eob - phi_pn`, as computed by
-`WaveformGenerator.generate_residuals`.
+`WaveformGenerator.generate_residuals`. The ratio is signed, not a log:
+the EOB mode amplitude crosses zero within the band for a few per cent
+of the (2,1) waveforms.
 
-The third row shows the phase residual with the linear-in-frequency term
+The first two rows contrast the two amplitude parametrizations. The
+first divides each waveform by its own PN amplitude, which is what the
+originally shipped models were trained on; the second divides every
+waveform by the PN amplitude of one fixed reference --- the centre of
+the parameter ranges, zero spins --- which is what `reference_amplitude`
+does. The (2,1) and (3,3) PN amplitudes have a deep minimum at a
+parameter-dependent frequency, and dividing by it there throws the ratio
+to twenty or sixty; those are the spikes the first row shows and the
+second does not.
+
+The fourth row shows the phase residual with the linear-in-frequency term
 `2 pi (f - f_0) Delta_t(theta)` removed, using the shared time-shift
 predictor trained for the `default_hom` model in the top-level folder.
 This is the same subtraction `ModeModel.generate` applies (via
 `mlgw_bns.mode_model.remove_linear_trend`) before the PCA and the network see
-the residuals, so the third row --- not the second --- is what a model
+the residuals, so the fourth row --- not the third --- is what a model
 actually has to learn.
 
 Run with: python visualization/plot_teob_pn_residuals.py
@@ -37,9 +49,22 @@ N_WAVEFORMS = 100
 #: by `Model.save` next to the per-mode checkpoints in the repository
 #: root. It maps [q, lambda_1, lambda_2, chi_1, chi_2] to a time shift in
 #: seconds, at the reference total mass `Dataset.total_mass`.
-TIMESHIFTS_FILE = Path(__file__).resolve().parent.parent / "default_hom_timeshifts.pkl"
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+TIMESHIFTS_FILE = REPOSITORY_ROOT / "default_hom_timeshifts.pkl"
+if not TIMESHIFTS_FILE.exists():
+    # Fall back to the copy shipped inside the package, so that the plot can
+    # be made without having trained a model locally first.
+    TIMESHIFTS_FILE = REPOSITORY_ROOT / "mlgw_bns" / "data" / "default_hom_timeshifts.pkl"
 
 dataset = Dataset(initial_frequency_hz=20.0, srate_hz=4096.0)
+
+#: Same dataset, but flagged so that it can hand over the fixed reference
+#: parameters whose PN amplitude divides the EOB one when
+#: `reference_amplitude` is on.
+reference_dataset = Dataset(
+    initial_frequency_hz=20.0, srate_hz=4096.0, reference_amplitude=True
+)
+reference_parameters = reference_dataset.amplitude_reference_parameters
 
 if not TIMESHIFTS_FILE.exists():
     raise FileNotFoundError(
@@ -63,7 +88,7 @@ time_shifts = timeshifts_predictor.predict(
     np.array([params.array for params in params_list])
 )
 
-fig, axes = plt.subplots(3, len(MODES), figsize=(16, 9), sharex=True)
+fig, axes = plt.subplots(4, len(MODES), figsize=(16, 12), sharex=True)
 
 cmap = matplotlib.colormaps["viridis"]
 q_min, q_max = dataset.parameter_ranges.q_range
@@ -71,14 +96,28 @@ colors = [cmap((p.mass_ratio - q_min) / (q_max - q_min)) for p in params_list]
 
 for i, mode in enumerate(MODES):
     generator = teob_mode_generator_factory(mode)
+    reference_pn_amplitude = generator.post_newtonian_amplitude(
+        reference_parameters, f_natural
+    )
 
     for params, color, time_shift in tqdm(zip(params_list, colors, time_shifts)):
-        # `generate_residuals` returns None when the EOB amplitude is
-        # discarded (e.g. amp <= 0 somewhere, for the (2,1)/(3,3) modes).
+        # The signature is Optional, so the guard stays; in practice the EOB
+        # amplitude is kept even where it is negative, which is why the
+        # (2,1) curves below cross zero rather than stopping.
         residuals = generator.generate_residuals(params, f_natural)
         if residuals is None:
             continue
         amplitude_residual, phase_residual = residuals
+
+        # What `reference_amplitude` would model instead. Calling
+        # `generate_residuals` again with `amplitude_reference` would give the
+        # same thing but regenerate the EOB waveform; since only the divisor
+        # differs, it is cheaper to swap it here.
+        reference_amplitude_residual = (
+            amplitude_residual
+            * generator.post_newtonian_amplitude(params, f_natural)
+            / reference_pn_amplitude
+        )
 
         # Same subtraction as `mlgw_bns.mode_model.remove_linear_trend`: take out
         # the time-shift term and re-anchor the residual to zero at the first
@@ -90,15 +129,25 @@ for i, mode in enumerate(MODES):
         )
 
         axes[0, i].plot(f_natural, amplitude_residual, color=color, alpha=0.5, linewidth=0.8)
-        axes[1, i].plot(f_natural, phase_residual, color=color, alpha=0.5, linewidth=0.8)
-        axes[2, i].plot(f_natural, phase_residual_flattened, color=color, alpha=0.5, linewidth=0.8)
+        axes[1, i].plot(
+            f_natural, reference_amplitude_residual, color=color, alpha=0.5, linewidth=0.8
+        )
+        axes[2, i].plot(f_natural, phase_residual, color=color, alpha=0.5, linewidth=0.8)
+        axes[3, i].plot(f_natural, phase_residual_flattened, color=color, alpha=0.5, linewidth=0.8)
 
     axes[0, i].set_title(rf"$(\ell, m) = ({mode.l}, {mode.m})$")
-    axes[2, i].set_xlabel(r"$Mf$")
+    axes[3, i].set_xlabel(r"$Mf$")
 
-axes[0, 0].set_ylabel(r"$A_{\rm EOB} / A_{\rm PN}$")
-axes[1, 0].set_ylabel(r"$\phi_{\rm EOB} - \phi_{\rm PN}$ [rad]")
-axes[2, 0].set_ylabel(
+    # The reference ratio falls by orders of magnitude across the band and
+    # still changes sign, so it needs a symmetric log scale; the threshold is
+    # set from the data so that the linear region is the noise near zero.
+    largest = max(abs(line.get_ydata()).max() for line in axes[1, i].lines)
+    axes[1, i].set_yscale("symlog", linthresh=largest * 1e-4)
+
+axes[0, 0].set_ylabel(r"$A_{\rm EOB}(\theta) / A_{\rm PN}(\theta)$")
+axes[1, 0].set_ylabel(r"$A_{\rm EOB}(\theta) / A_{\rm PN}(\theta_{\rm ref})$")
+axes[2, 0].set_ylabel(r"$\phi_{\rm EOB} - \phi_{\rm PN}$ [rad]")
+axes[3, 0].set_ylabel(
     r"$\phi_{\rm EOB} - \phi_{\rm PN} - 2 \pi (f - f_0) \Delta t$ [rad]"
 )
 

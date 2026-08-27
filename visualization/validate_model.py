@@ -33,6 +33,7 @@ Run with: python visualization/validate_model.py
 """
 
 import logging
+import os
 from typing import Optional
 
 import matplotlib
@@ -47,7 +48,12 @@ from mlgw_bns.model import Model
 
 logging.basicConfig(level=logging.WARNING)
 
+#: Default model to validate, relative to this directory. Override with
+#: ``--model``; the figures are then named after it, so that several
+#: models can be validated side by side without overwriting each other.
 MODEL_FILENAME = "../default_hom"
+OUTPUT_PREFIX = "validation"
+
 MODES = [Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
 
 N_RESIDUAL_WAVEFORMS = 40
@@ -94,11 +100,11 @@ class SharedTimeshiftValidateModel(ValidateModel):
         return self._shared_predictor
 
 
-def load_model() -> Model:
+def load_model(filename: str = None) -> Model:
     """Load the trained :class:`Model` from disk."""
     model = Model(
         modes=MODES,
-        filename=MODEL_FILENAME,
+        filename=MODEL_FILENAME if filename is None else filename,
     )
     model.load()
     if not model.nn_available:
@@ -221,7 +227,7 @@ def plot_residuals(model: Model) -> dict:
         "from the training distribution"
     )
 
-    outfile = "validation_residuals.png"
+    outfile = f"{OUTPUT_PREFIX}_residuals.png"
     fig.savefig(outfile, dpi=150)
     print(f"Saved plot to {outfile}")
 
@@ -419,13 +425,48 @@ def plot_mismatches(
     fig.suptitle("Per-mode and full-waveform mismatch distributions (KDE)")
     fig.tight_layout()
 
-    outfile = "validation_mismatches.png"
+    outfile = f"{OUTPUT_PREFIX}_mismatches.png"
     fig.savefig(outfile, dpi=150)
     print(f"Saved plot to {outfile}")
 
 
 if __name__ == "__main__":
-    model = load_model()
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--model",
+        default=MODEL_FILENAME,
+        help="base filename of the model to validate",
+    )
+    parser.add_argument(
+        "--prefix",
+        default=None,
+        help="prefix for the output figures; defaults to the model's name",
+    )
+    parser.add_argument(
+        "--n-mismatches",
+        type=int,
+        default=None,
+        help=(
+            "waveforms per mismatch distribution; the default of "
+            f"{N_MISMATCH_WAVEFORMS} gives smooth tails but is slow, and a "
+            "couple of hundred is enough to compare two models' medians"
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.n_mismatches is not None:
+        N_MISMATCH_WAVEFORMS = args.n_mismatches
+        N_FULL_WAVEFORM_MISMATCHES = args.n_mismatches
+
+    OUTPUT_PREFIX = (
+        args.prefix
+        if args.prefix is not None
+        else os.path.basename(args.model.rstrip("/")) or OUTPUT_PREFIX
+    )
+
+    model = load_model(args.model)
 
     print("Computing mlgw-EOB residuals...")
     plot_residuals(model)

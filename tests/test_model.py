@@ -127,11 +127,18 @@ def test_default_for_testing_rejects_unknown_name():
         Model.default_for_testing("not_a_model")
 
 
-# The packaged model currently sits at a median full-waveform mismatch of
-# ~1.5e-4 with a worst case of ~3e-3; these are those numbers with an order
-# of magnitude of headroom, and should be tightened as the model improves.
-DEFAULT_MODEL_MAX_MISMATCH = 1e-2
-DEFAULT_MODEL_MEDIAN_MISMATCH = 1e-3
+# Measured on the packaged model over the sixteen binaries this test draws
+# (seed 7, inclination 1.0): median 3.0e-4, worst 1.8e-3. Over 64 binaries
+# the median is 8.4e-5 and the worst 3.0e-3, so the sixteen drawn here are a
+# slightly unlucky sample rather than a lucky one.
+#
+# Both bounds carry a factor of two, which is headroom for library changes
+# rather than for the model: nothing here is random, since the model is
+# loaded from disk and the parameters come from a fixed seed. They cannot
+# be tightened much further without retraining the packaged model --- the
+# limit is what that model achieves, not the test.
+DEFAULT_MODEL_MAX_MISMATCH = 4e-3
+DEFAULT_MODEL_MEDIAN_MISMATCH = 6e-4
 
 
 def test_default_model_full_waveform_mismatch(default_model):
