@@ -57,7 +57,7 @@ if __name__ == "__main__":
 
     def sizes_from_values(values: np.ndarray) -> np.ndarray:
         # values are log10(loss); lower is better, so flip before scaling.
-        normalized = (worst - values) / (worst - best)
+        normalized = ((worst - values) / (worst - best))**5
         return MIN_MARKER_SIZE + normalized * (MAX_MARKER_SIZE - MIN_MARKER_SIZE)
 
     fig, ax = plt.subplots(figsize=(7, 6))
