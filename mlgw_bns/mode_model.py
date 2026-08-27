@@ -901,8 +901,12 @@ class ModeModel:
 
         if hyper is None:
             assert self.training_dataset is not None
-            hyper = Hyperparameters.default(len(self.training_dataset))
-            # hyper = Hyperparameters.from_trial(n_train_max = 50)
+            if self.nn_kind is KernelRidgeNetwork:
+                hyper = Hyperparameters.default_kernel_ridge(
+                    len(self.training_dataset), mode=self.mode
+                )
+            else:
+                hyper = Hyperparameters.default(len(self.training_dataset))
 
         logging.info("Training the network with hyperparameters %s", hyper)
 

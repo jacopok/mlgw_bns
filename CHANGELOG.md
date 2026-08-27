@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     a factor of two and a half; on the (2,2), whose PN amplitude has no such
     minimum, it is a 3% improvement, and on (4,4) an 8% degradation, since it
     is applied per-dataset rather than per-mode. Off by default.
+- Per-mode defaults for `KernelRidgeNetwork`, in
+    `mlgw_bns/data/kernel_ridge_defaults.json`, read by
+    `Hyperparameters.default_kernel_ridge` and written by
+    `HyperparameterOptimization.save_best_as_default`. `hyperparameter_optimization.py`
+    and `optimize_n_hours.py` are now specific to `KernelRidgeNetwork`: the
+    search is over its two hyperparameters (`kernel_gamma`, `kernel_alpha`)
+    only, at a fixed 8192 training waveforms, and single-objective ---
+    reconstruction accuracy in residual space, not the PSD-weighted mismatch
+    used for the MLP search, since kernel ridge has no architecture to trade
+    against training time.
 - `visualization/train_comparison_models.py`, which trains matched models for
     the legacy and improved pipelines, sharing the waveform generation between
     the two so that the comparison isolates the regressor.
