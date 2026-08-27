@@ -141,8 +141,8 @@ for i, mode in enumerate(MODES):
     # The reference ratio falls by orders of magnitude across the band and
     # still changes sign, so it needs a symmetric log scale; the threshold is
     # set from the data so that the linear region is the noise near zero.
-    largest = max(abs(line.get_ydata()).max() for line in axes[1, i].lines)
-    axes[1, i].set_yscale("symlog", linthresh=largest * 1e-4)
+    # largest = max(abs(line.get_ydata()).max() for line in axes[1, i].lines)
+    # axes[1, i].set_yscale("symlog", linthresh=largest * 1e-4)
 
 axes[0, 0].set_ylabel(r"$A_{\rm EOB}(\theta) / A_{\rm PN}(\theta)$")
 axes[1, 0].set_ylabel(r"$A_{\rm EOB}(\theta) / A_{\rm PN}(\theta_{\rm ref})$")
