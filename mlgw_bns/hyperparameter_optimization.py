@@ -236,7 +236,8 @@ class HyperparameterOptimization:
         )
         logging.info(
             "Starting to train at %s, will end at %s",
-            (datetime.datetime.now(), expected_datetime_end.isoformat()),
+            datetime.datetime.now(),
+            expected_datetime_end.isoformat(),
         )
 
         for n in range(iterations):

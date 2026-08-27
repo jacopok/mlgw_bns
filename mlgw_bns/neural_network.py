@@ -40,6 +40,7 @@ removed; only the scikit-learn backend is now supported.
 from __future__ import annotations
 
 import json
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +48,7 @@ from typing import IO, TYPE_CHECKING, Optional, Union
 
 import joblib  # type: ignore
 import numpy as np
+import scipy.linalg  # type: ignore
 from importlib.resources import files
 from sklearn.gaussian_process import GaussianProcessRegressor  # type: ignore
 from sklearn.kernel_approximation import RBFSampler  # type: ignore
@@ -360,8 +362,8 @@ class Hyperparameters:
 
         return cls.default_kernel_ridge(
             n_train=n_train,
-            kernel_gamma=trial.suggest_loguniform("kernel_gamma", 1e-3, 30.0),
-            kernel_alpha=trial.suggest_loguniform("kernel_alpha", 1e-14, 1e-2),
+            kernel_gamma=trial.suggest_float("kernel_gamma", 1e-3, 30.0, log=True),
+            kernel_alpha=trial.suggest_float("kernel_alpha", 1e-14, 1e-2, log=True),
         )
 
     @classmethod
@@ -687,14 +689,35 @@ class KernelRidgeNetwork(NeuralNetwork):
             self.target_scaler: StandardScaler = target_scaler
 
     def fit(self, x_data: np.ndarray, y_data: np.ndarray) -> None:
-        """Fit the two scalers and solve the kernel system."""
+        """Fit the two scalers and solve the kernel system.
+
+        For small ``kernel_gamma`` the RBF Gram matrix is close to
+        low-rank --- broad kernels make training points look alike to
+        each other --- so its Cholesky solve routinely reports a
+        singular matrix regardless of ``kernel_alpha``. scikit-learn
+        already falls back to an exact least-squares solve (slower, but
+        not wrong) and warns every time it does; that warning is
+        expected here rather than a sign of a bad fit, so it is
+        silenced.
+        """
         self.param_scaler = StandardScaler().fit(x_data)
         self.target_scaler = StandardScaler().fit(y_data)
 
-        self.regressor.fit(
-            self.param_scaler.transform(x_data),
-            self.target_scaler.transform(y_data),
-        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="Singular matrix in solving dual problem.*",
+                category=UserWarning,
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message="Ill-conditioned matrix.*",
+                category=scipy.linalg.LinAlgWarning,
+            )
+            self.regressor.fit(
+                self.param_scaler.transform(x_data),
+                self.target_scaler.transform(y_data),
+            )
 
     def predict(self, x_data: np.ndarray) -> np.ndarray:
         scaled_x = self.param_scaler.transform(x_data)

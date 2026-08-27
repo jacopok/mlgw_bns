@@ -59,7 +59,7 @@ if __name__ == "__main__":
         try:
             m.load()
         except FileNotFoundError:
-            m.generate(512, 1 << 14, N_WAVEFORMS)
+            m.generate(512, 1 << 13, N_WAVEFORMS)
             m.save()
 
         if args.generate:
