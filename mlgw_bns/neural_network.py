@@ -28,14 +28,21 @@ relies on at training and prediction time:
   --- helpers for fetching the pretrained Pareto front of best
   hyperparameter trials shipped with the package.
 
+* :func:`load_kernel_ridge_defaults` and :func:`save_kernel_ridge_default`
+  --- the per-mode ``(kernel_gamma, kernel_alpha)`` counterpart for
+  :class:`KernelRidgeNetwork`, written by
+  :meth:`~mlgw_bns.hyperparameter_optimization.HyperparameterOptimization.save_best_as_default`.
+
 The optional PyTorch backend that used to live in this module has been
 removed; only the scikit-learn backend is now supported.
 """
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import IO, TYPE_CHECKING, Optional, Union
 
 import joblib  # type: ignore
@@ -52,9 +59,58 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler  # type: ignore
 if TYPE_CHECKING:
     import optuna
 
+    from .pn_modes import Mode
+
 #: Location, relative to the package, of the joblib-pickled Pareto front
 #: produced by the hyperparameter-optimization pipeline.
 TRIALS_FILE = "data/best_trials.pkl"
+
+#: Where the per-mode :class:`KernelRidgeNetwork` defaults, tuned by
+#: :class:`~mlgw_bns.hyperparameter_optimization.HyperparameterOptimization`,
+#: are read from and written to. Kept as plain JSON, rather than joblib
+#: like :data:`TRIALS_FILE`, since it is meant to be hand-edited and
+#: diffed as easily as the code that produces it.
+KERNEL_DEFAULTS_PATH = Path(__file__).parent / "data" / "kernel_ridge_defaults.json"
+
+
+def mode_key(mode: "Optional[Mode]") -> str:
+    """Turn a :class:`~mlgw_bns.pn_modes.Mode` into the string key used to
+    index the per-mode kernel-ridge defaults. ``None`` is the (2,2) mode,
+    the convention used throughout :class:`~mlgw_bns.mode_model.ModeModel`.
+    """
+    l, m = (2, 2) if mode is None else mode
+    return f"{l}{m}"
+
+
+def load_kernel_ridge_defaults() -> "dict[str, tuple[float, float]]":
+    """Read the per-mode ``(kernel_gamma, kernel_alpha)`` defaults.
+
+    Returns an empty mapping if the file does not exist yet, i.e. before
+    any mode has been optimized.
+    """
+    try:
+        with open(KERNEL_DEFAULTS_PATH) as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        return {}
+    return {key: (v["kernel_gamma"], v["kernel_alpha"]) for key, v in raw.items()}
+
+
+def save_kernel_ridge_default(mode: "Optional[Mode]", kernel_gamma: float, kernel_alpha: float) -> None:
+    """Persist ``(kernel_gamma, kernel_alpha)`` as the default for ``mode``,
+    merging into whatever is already on disk for the other modes.
+    """
+    try:
+        with open(KERNEL_DEFAULTS_PATH) as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        raw = {}
+
+    raw[mode_key(mode)] = {"kernel_gamma": kernel_gamma, "kernel_alpha": kernel_alpha}
+
+    KERNEL_DEFAULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(KERNEL_DEFAULTS_PATH, "w") as f:
+        json.dump(raw, f, indent=2, sort_keys=True)
 
 
 @dataclass
@@ -241,27 +297,125 @@ class Hyperparameters:
     ) -> "Hyperparameters":
         """Reconstruct a :class:`Hyperparameters` from a frozen Optuna trial.
 
-        This is the inverse of :meth:`from_trial` for already-completed
-        trials, used when reading the pretrained Pareto front shipped
-        with the package.
+        This is the inverse of :meth:`from_trial` (or, for a trial
+        produced by :meth:`from_trial_kernel_ridge`, of that instead) for
+        already-completed trials, used when reading the pretrained
+        Pareto front shipped with the package.
 
         Parameters
         ----------
         frozen_trial : optuna.trial.FrozenTrial
                 Completed trial whose params dictionary contains the
-                values produced by :meth:`from_trial`.
+                values produced by :meth:`from_trial` or
+                :meth:`from_trial_kernel_ridge`.
 
         Returns
         -------
         Hyperparameters
                 Hyperparameter set corresponding to the trial.
         """
-        params = frozen_trial.params
+        params = dict(frozen_trial.params)
+
+        if "n_layers" not in params:
+            # A trial from from_trial_kernel_ridge: only n_train,
+            # kernel_gamma and kernel_alpha were ever sampled.
+            return cls.default_kernel_ridge(
+                n_train=params["n_train"],
+                kernel_gamma=params["kernel_gamma"],
+                kernel_alpha=params["kernel_alpha"],
+            )
+
         n_layers = params.pop("n_layers")
         layers = [params.pop(f"size_layer_{i}") for i in range(n_layers)]
         params["hidden_layer_sizes"] = tuple(layers)
 
         return cls(**params)
+
+    @classmethod
+    def from_trial_kernel_ridge(
+        cls, trial: "optuna.Trial", n_train: int
+    ) -> "Hyperparameters":
+        """Sample a :class:`Hyperparameters` for :class:`KernelRidgeNetwork`
+        from an :class:`optuna.Trial`.
+
+        Unlike :meth:`from_trial`, this only samples the two parameters
+        :class:`KernelRidgeNetwork` actually reads, :attr:`kernel_gamma`
+        and :attr:`kernel_alpha`; ``n_train`` is fixed rather than
+        sampled, since the accuracy comparison across trials is only
+        fair at a fixed training-set size, and the MLP-specific fields
+        are filled with placeholders :class:`KernelRidgeNetwork` ignores.
+
+        Parameters
+        ----------
+        trial : optuna.Trial
+                Trial object used to draw ``kernel_gamma`` and ``kernel_alpha``.
+        n_train : int
+                Fixed number of training waveforms.
+
+        Returns
+        -------
+        Hyperparameters
+        """
+        trial.suggest_int("n_train", n_train, n_train)
+
+        return cls.default_kernel_ridge(
+            n_train=n_train,
+            kernel_gamma=trial.suggest_loguniform("kernel_gamma", 1e-3, 30.0),
+            kernel_alpha=trial.suggest_loguniform("kernel_alpha", 1e-14, 1e-2),
+        )
+
+    @classmethod
+    def default_kernel_ridge(
+        cls,
+        n_train: int,
+        mode: "Optional[Mode]" = None,
+        kernel_gamma: Optional[float] = None,
+        kernel_alpha: Optional[float] = None,
+    ) -> "Hyperparameters":
+        """Build a :class:`Hyperparameters` for :class:`KernelRidgeNetwork`.
+
+        The MLP-specific fields are filled with placeholders, since
+        :class:`KernelRidgeNetwork` never reads them. If ``kernel_gamma``
+        or ``kernel_alpha`` are not given explicitly, they are looked up
+        in :func:`load_kernel_ridge_defaults` for ``mode``, falling back
+        to the class-level defaults if that mode has not been optimized
+        yet.
+
+        Parameters
+        ----------
+        n_train : int
+                Number of training waveforms.
+        mode : Mode, optional
+                Mode whose tuned defaults to use, when ``kernel_gamma``
+                or ``kernel_alpha`` are not given explicitly. Defaults to
+                the (2,2) mode.
+        kernel_gamma : float, optional
+        kernel_alpha : float, optional
+
+        Returns
+        -------
+        Hyperparameters
+        """
+        if kernel_gamma is None or kernel_alpha is None:
+            tuned = load_kernel_ridge_defaults().get(mode_key(mode))
+            if tuned is not None:
+                kernel_gamma = kernel_gamma if kernel_gamma is not None else tuned[0]
+                kernel_alpha = kernel_alpha if kernel_alpha is not None else tuned[1]
+
+        return cls(
+            pc_exponent=1.0,
+            n_train=n_train,
+            hidden_layer_sizes=(1,),
+            activation="relu",
+            alpha=0.0,
+            batch_size=1,
+            learning_rate_init=0.0,
+            tol=0.0,
+            validation_fraction=0.1,
+            n_iter_no_change=1,
+            kernel_gamma=kernel_gamma if kernel_gamma is not None else cls.kernel_gamma,
+            kernel_alpha=kernel_alpha if kernel_alpha is not None else cls.kernel_alpha,
+        )
 
     @classmethod
     def default(cls, training_waveform_number: Optional[int] = None) -> "Hyperparameters":
