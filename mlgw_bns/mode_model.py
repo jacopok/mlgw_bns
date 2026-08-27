@@ -49,6 +49,7 @@ from .downsampling_interpolation import (
 )
 from .neural_network import (
     Hyperparameters,
+    KernelRidgeNetwork,
     NeuralNetwork,
     SklearnNetwork,
     TimeshiftsGPR,
@@ -61,6 +62,16 @@ from .principal_component_analysis import (
 )
 from .taylorf2 import SUN_MASS_SECONDS, smoothing_func
 from .higher_order_modes import mode_to_k
+
+
+#: The regressor backends a saved model may name in its metadata. The
+#: network is the historical default; the kernel is far more accurate on
+#: the same training data, at the cost of a prediction time that grows
+#: with the training set. See :class:`~mlgw_bns.neural_network.KernelRidgeNetwork`.
+NN_KINDS: dict[str, Type[NeuralNetwork]] = {
+    "SklearnNetwork": SklearnNetwork,
+    "KernelRidgeNetwork": KernelRidgeNetwork,
+}
 
 
 class FrequencyTooLowError(ValueError):
@@ -256,9 +267,11 @@ class ModeModel:
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
         parameter_ranges: ParameterRanges = ParameterRanges(),
         parameter_generator : Optional[ParameterGenerator] = None,
-        mode: Optional[Mode] = None
+        mode: Optional[Mode] = None,
+        reference_amplitude: bool = False,
     ):
 
+        self.reference_amplitude = reference_amplitude
         self.filename = filename
 
         if waveform_generator is None:
@@ -341,6 +354,8 @@ class ModeModel:
             'parameter_ranges': asdict(self.parameter_ranges),
             'extend_with_post_newtonian': self.extend_with_post_newtonian,
             'extend_with_zeros_at_high_frequency': self.extend_with_zeros_at_high_frequency,
+            'nn_kind': self.nn_kind.__name__,
+            'reference_amplitude': self.reference_amplitude,
         }
 
     def _make_dataset(self) -> Dataset:
@@ -352,6 +367,7 @@ class ModeModel:
             multibanding=self.multibanding,
             parameter_ranges=self.parameter_ranges,
             parameter_generator=self.parameter_generator,
+            reference_amplitude=self.reference_amplitude,
         )
     
     @property
@@ -425,10 +441,22 @@ class ModeModel:
         
 
     def set_metadata(self, meta_dict: dict) -> None:
-        
+        """Apply a metadata dictionary read back from the YAML sidecar.
+
+        Two keys need decoding rather than a plain ``setattr``: the
+        parameter ranges, which are a nested dataclass, and the regressor
+        backend, which is stored by name so that the YAML stays readable
+        and free of Python references. A file written before ``nn_kind``
+        was recorded simply does not carry the key, which leaves the
+        constructor default in place --- and that default is the network,
+        which is what those models were trained with.
+        """
+
         for key, value in meta_dict.items():
             if key == 'parameter_ranges':
                 value = from_dict(data_class=ParameterRanges, data=value)
+            elif key == 'nn_kind':
+                value = NN_KINDS[value]
             setattr(self, key, value)
 
     @property
@@ -1037,8 +1065,12 @@ class ModeModel:
             ParameterSet.from_list_of_waveform_parameters([intrinsic_params]), self.nn
         )
 
+        # None unless this model was trained against a fixed reference
+        # amplitude, in which case the same divisor has to be put back
+        # here; see `WaveformGenerator.generate_residuals`.
+        reference = self.dataset.amplitude_reference_parameters
         pn_amplitude = self.dataset.waveform_generator.post_newtonian_amplitude(
-            intrinsic_params,
+            intrinsic_params if reference is None else reference,
             self.dataset.frequencies[self.downsampling_indices.amplitude_indices],
         )
         pn_phase = self.dataset.waveform_generator.post_newtonian_phase(
@@ -1197,8 +1229,11 @@ class ModeModel:
         ds = self.downsampling_indices
         freqs_hz = self.dataset.frequencies_hz
 
+        # See the note in `predict`: mirrors `generate_residuals`.
+        reference = self.dataset.amplitude_reference_parameters
         pn_amp = self.dataset.waveform_generator.post_newtonian_amplitude(
-            intrinsic_params, self.dataset.frequencies[ds.amplitude_indices]
+            intrinsic_params if reference is None else reference,
+            self.dataset.frequencies[ds.amplitude_indices],
         )
         pn_phi = self.dataset.waveform_generator.post_newtonian_phase(
             intrinsic_params, self.dataset.frequencies[ds.phase_indices]

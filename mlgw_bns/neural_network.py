@@ -43,6 +43,7 @@ import numpy as np
 from importlib.resources import files
 from sklearn.gaussian_process import GaussianProcessRegressor  # type: ignore
 from sklearn.kernel_approximation import RBFSampler  # type: ignore
+from sklearn.kernel_ridge import KernelRidge  # type: ignore
 from sklearn.linear_model import Ridge  # type: ignore
 from sklearn.neural_network import MLPRegressor  # type: ignore
 from sklearn.pipeline import Pipeline  # type: ignore
@@ -104,6 +105,18 @@ class Hyperparameters:
     max_iter : int, optional
             Hard upper bound on the number of training iterations.
             Defaults to 1000.
+    legacy_batch_size_clip : bool, optional
+            Reproduce the mini-batch clipping of models packaged before
+            this flag existed, which clipped ``batch_size`` to the number
+            of input features (five) rather than the number of training
+            samples. Defaults to ``False``. See :meth:`SklearnNetwork.fit`.
+    kernel_gamma : float, optional
+            Width of the RBF kernel used by :class:`KernelRidgeNetwork`,
+            on standardized inputs. Ignored by :class:`SklearnNetwork`.
+    kernel_alpha : float, optional
+            Ridge regularization used by :class:`KernelRidgeNetwork`.
+            Small values give the best median accuracy; larger ones trade
+            that against the worst case. Ignored by :class:`SklearnNetwork`.
     """
 
     pc_exponent: float
@@ -119,6 +132,17 @@ class Hyperparameters:
     n_iter_no_change: float
 
     max_iter: int = field(default=1000)
+
+    #: Kept so that the packaged models, all of which were trained with the
+    #: mini-batch clipped to the feature count, can be reproduced exactly.
+    legacy_batch_size_clip: bool = field(default=False)
+
+    #: Defaults for :class:`KernelRidgeNetwork`, from a scan over gamma and
+    #: alpha on the (2,2) mode with 8192 training waveforms. Unused by the
+    #: network backend, which is why they carry defaults rather than being
+    #: required like the rest.
+    kernel_gamma: float = field(default=0.1)
+    kernel_alpha: float = field(default=1e-10)
 
     @property
     def n_layers(self) -> int:
@@ -383,14 +407,32 @@ class SklearnNetwork(NeuralNetwork):
     def fit(self, x_data: np.ndarray, y_data: np.ndarray) -> None:
         """Fit the scaler and the underlying :class:`MLPRegressor`.
 
-        The mini-batch size is temporarily clipped to the input feature
-        count to avoid scikit-learn's "batch_size larger than data" warning;
-        it is restored to the configured value once training completes.
+        The mini-batch size is temporarily clipped to the number of
+        training samples, to avoid scikit-learn's "batch_size larger than
+        data" warning, and restored once training completes.
+
+        Every model packaged before this was written was trained with
+        :attr:`Hyperparameters.legacy_batch_size_clip` behaviour, in which
+        the clip used ``x_data.shape[1]`` --- the number of *features*,
+        which is five --- so the configured ``batch_size`` never survived
+        at any training-set size. That is preserved here as an option, for
+        reproducing those models exactly; it is not the default, because
+        it makes any tuning of ``batch_size`` meaningless.
         """
         self.param_scaler = StandardScaler().fit(x_data)
 
         old_batch_size = self.nn.batch_size
-        self.nn.batch_size = min(self.nn.batch_size, x_data.shape[1])
+        # A dataclass default is a class attribute, so this resolves even
+        # on a `Hyperparameters` unpickled from before the field existed
+        # --- such an instance picks up the new default, i.e. the repaired
+        # clip. That is harmless for the packaged models: the flag is only
+        # read here, and loading one of them to predict never fits. It
+        # only means that *re-fitting* with old hyperparameters uses the
+        # corrected mini-batch, which is what one would want anyway.
+        clip_to = (
+            x_data.shape[1] if self.hyper.legacy_batch_size_clip else x_data.shape[0]
+        )
+        self.nn.batch_size = min(self.nn.batch_size, clip_to)
 
         scaled_x = self.param_scaler.transform(x_data)
         self.nn.fit(scaled_x, y_data)
@@ -418,6 +460,101 @@ class SklearnNetwork(NeuralNetwork):
 
     @classmethod
     def from_file(cls, filename: Union[IO[bytes], str]) -> "SklearnNetwork":
+        """Inverse of :meth:`save`. The tuple is unpacked into the constructor."""
+        return cls(*joblib.load(filename))
+
+
+class KernelRidgeNetwork(NeuralNetwork):
+    r"""Kernel ridge regression from parameters to component coefficients.
+
+    A drop-in alternative to :class:`SklearnNetwork`, selected by passing
+    it as ``nn_kind`` to :class:`~mlgw_bns.mode_model.ModeModel`. On the
+    (2,2) mode with 8192 training waveforms it reaches a median mismatch
+    of :math:`3.4 \times 10^{-9}` against the network's
+    :math:`7 \times 10^{-6}`, and fits in twenty seconds rather than ten
+    minutes.
+
+    Two things make the difference. The first is that this map is smooth
+    and low-dimensional --- five parameters to a few tens of coefficients
+    --- which is the regime kernel methods are good at, and there is no
+    stochastic optimizer to converge. The second is subtler: the network
+    minimizes an unweighted mean squared error over targets that have
+    been divided by :math:`\max_j |x_{ji}|` per component, which weights
+    component :math:`i`'s contribution to the *residual* by
+    :math:`s_i^{-2}`, running some nine orders of magnitude in favour of
+    the least important component. Kernel ridge solves
+    :math:`(K + \alpha I)^{-1} y` separately for each output, which is
+    equivariant under rescaling each output, so that weighting --- and
+    hence :attr:`Hyperparameters.pc_exponent` --- cannot affect it at all.
+
+    Inputs are standardized, as for the network. Outputs are standardized
+    too, which is what makes a single :attr:`Hyperparameters.kernel_alpha`
+    meaningful across components that span ten orders of magnitude.
+
+    The cost of a prediction grows with the training set, since it
+    evaluates one kernel per training point: about 260 microseconds per
+    waveform per mode at 8192 training waveforms, against 35 for the
+    network. Set against the ~25 ms a full four-mode waveform takes end
+    to end, that is a few per cent.
+
+    Parameters
+    ----------
+    hyper : Hyperparameters
+            Only :attr:`~Hyperparameters.kernel_gamma` and
+            :attr:`~Hyperparameters.kernel_alpha` are read; the network
+            attributes are ignored, but the object is kept whole so that
+            the rest of the codebase can treat the two backends alike.
+    regressor : KernelRidge, optional
+            Pre-built regressor to wrap.
+    param_scaler : StandardScaler, optional
+            Pre-fitted scaler for the inputs.
+    target_scaler : StandardScaler, optional
+            Pre-fitted scaler for the outputs.
+    """
+
+    def __init__(
+        self,
+        hyper: Hyperparameters,
+        regressor: "Optional[KernelRidge]" = None,
+        param_scaler: Optional[StandardScaler] = None,
+        target_scaler: Optional[StandardScaler] = None,
+    ):
+        super().__init__(hyper=hyper)
+        if regressor is None:
+            regressor = KernelRidge(
+                kernel="rbf",
+                gamma=getattr(hyper, "kernel_gamma", 0.1),
+                alpha=getattr(hyper, "kernel_alpha", 1e-10),
+            )
+        self.regressor: KernelRidge = regressor
+        if param_scaler is not None:
+            self.param_scaler: StandardScaler = param_scaler
+        if target_scaler is not None:
+            self.target_scaler: StandardScaler = target_scaler
+
+    def fit(self, x_data: np.ndarray, y_data: np.ndarray) -> None:
+        """Fit the two scalers and solve the kernel system."""
+        self.param_scaler = StandardScaler().fit(x_data)
+        self.target_scaler = StandardScaler().fit(y_data)
+
+        self.regressor.fit(
+            self.param_scaler.transform(x_data),
+            self.target_scaler.transform(y_data),
+        )
+
+    def predict(self, x_data: np.ndarray) -> np.ndarray:
+        scaled_x = self.param_scaler.transform(x_data)
+        return self.target_scaler.inverse_transform(self.regressor.predict(scaled_x))
+
+    def save(self, filename: str) -> None:
+        """Pickle ``(hyper, regressor, param_scaler, target_scaler)`` via joblib."""
+        joblib.dump(
+            (self.hyper, self.regressor, self.param_scaler, self.target_scaler),
+            filename,
+        )
+
+    @classmethod
+    def from_file(cls, filename: Union[IO[bytes], str]) -> "KernelRidgeNetwork":
         """Inverse of :meth:`save`. The tuple is unpacked into the constructor."""
         return cls(*joblib.load(filename))
 

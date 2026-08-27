@@ -7,14 +7,23 @@ from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.mode_model import ModeModel, ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 
-TRAINED_MODEL_MAX_MISMATCH = 1.5e-2
+# Measured over three independent trainings of this 100-waveform model:
+# the worst single mismatch was 3.4e-3 and the worst run's geometric mean
+# 6.2e-4. The bound below leaves a factor of three on the first.
+#
+# It cannot be tightened much further, and the reason is worth recording:
+# the network's run-to-run scatter is itself a factor of two here (the
+# three runs gave 1.9e-3, 1.7e-3 and 3.4e-3). Training the same model with
+# `KernelRidgeNetwork` instead gives 1.06e-3 on all three runs --- three
+# times better and bit-identical between runs, since there is no
+# stochastic optimizer. A model trained that way could carry a far tighter
+# bound; this one is testing the network, so it cannot.
+TRAINED_MODEL_MAX_MISMATCH = 1e-2
 
-# if the maximum mismatch is 1.5e-2,
-# the average mismatch should be this many times
-# smaller than the maximum mismatch;
-# so, if this is 30 then the average
-# mismatch will need to be smaller than 3e-3
-AVERAGE_MISMATCH_REDUCTION_FACTOR = 10
+# The average mismatch should be this many times smaller than the maximum;
+# with the two numbers above that puts the bound on the geometric mean at
+# 1.25e-3, against the 6.2e-4 measured.
+AVERAGE_MISMATCH_REDUCTION_FACTOR = 8
 
 
 def waveforms_are_close(

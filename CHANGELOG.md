@@ -8,6 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mlgw_bns.neural_network.KernelRidgeNetwork`, a kernel-ridge alternative to
+    the multi-layer perceptron, selected by passing it as `nn_kind` to `Model`
+    or `ModeModel`. On the (2,2) mode with 8192 training waveforms it reaches a
+    median mismatch of 3.4e-9 against the network's 7.2e-6 --- a factor of two
+    thousand --- and fits in twenty seconds rather than ten minutes.
+
+    The accuracy of the surrogate under a fixed training budget is limited by
+    the map from parameters to principal-component coefficients, not by the
+    basis: the truncation floor at thirty components sits at 1.8e-10, four
+    orders of magnitude below what the network reaches, and the network stops
+    improving altogether beyond about 2048 training waveforms while the kernel
+    keeps improving as `n**-2`. Part of the difference is that the network
+    minimizes an unweighted mean squared error over targets divided by
+    `max|x_i|` per component, which weights component `i`'s contribution to the
+    residual by `s_i**-2` --- some nine orders of magnitude in favour of the
+    *least* important component. Kernel ridge solves `(K + alpha I)^-1 y`
+    separately per output and is therefore equivariant under rescaling each
+    output, so that weighting, and `pc_exponent` with it, cannot affect it.
+
+    Which backend a saved model used is recorded in its metadata, so loading
+    picks the right one without being told.
+- `reference_amplitude`, an option on `Model`, `ModeModel` and `Dataset`, which
+    divides the EOB amplitude by the Post-Newtonian amplitude of one fixed
+    parameter set --- the centre of the parameter ranges --- rather than each
+    waveform's own. The (2,1) and (3,3) PN amplitudes have a deep minimum at a
+    parameter-dependent frequency, and dividing by it there sends the ratio to
+    twenty or sixty while the waveform does nothing remarkable, so a handful of
+    training waveforms end up setting the normalization for all of them. On the
+    (3,3) mode this is worth a factor of eighteen in mismatch and on the (2,1)
+    a factor of two and a half; on the (2,2), whose PN amplitude has no such
+    minimum, it is a 3% improvement, and on (4,4) an 8% degradation, since it
+    is applied per-dataset rather than per-mode. Off by default.
+- `visualization/train_comparison_models.py`, which trains matched models for
+    the legacy and improved pipelines, sharing the waveform generation between
+    the two so that the comparison isolates the regressor.
+- `experiments/`, the study behind the two changes above: cached residuals, a
+    surrogate whose every stage is a knob, and the sweeps that measured them.
+    Nothing there is imported by the package.
+
 - Higher-order-mode support: the model shipped with the package now reconstructs
     the (2,2), (2,1), (3,3) and (4,4) modes and sums them into the observer-frame
     polarizations.
@@ -60,6 +99,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     L-BFGS-B refinement reports an abnormal termination, which happens
     routinely when the optimum sits at a bound of the periodic `phi_c`:
     the better of the refined and grid-search estimates is used instead.
+- `SklearnNetwork.fit` clipped the mini-batch size to `x_data.shape[1]` --- the
+    number of *features*, which is five --- rather than `shape[0]`, the number
+    of samples, so the configured `batch_size` never survived at any
+    training-set size and every packaged model was trained with a batch of five.
+    The constructor already clipped correctly, to the sample count, so the
+    second clip was pure slip. Set `Hyperparameters.legacy_batch_size_clip` to
+    reproduce the old behaviour exactly.
+
+    Repairing it does not by itself improve accuracy --- at 8192 waveforms the
+    network scores 9.7e-6 against the slip's 7.2e-6, which is inside its own
+    run-to-run scatter, and it now needs more iterations to converge because
+    larger batches mean fewer gradient steps per iteration. It is fixed because
+    until it was, no tuning of `batch_size` meant anything.
+- `tests/test_downsampling_interpolation.py` asserted a generator expression,
+    `assert (err < 1e-5 for err in errs_amp)`, which is a truthy object whatever
+    it would yield --- so the reconstruction error was never checked. The errors
+    are in fact of order 5e-4 and would have failed that bound; the test now
+    compares them against the downsampling tolerances they are actually set by.
 
 ### Removed
 

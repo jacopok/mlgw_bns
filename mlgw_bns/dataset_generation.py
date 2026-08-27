@@ -253,8 +253,9 @@ class WaveformGenerator(ABC):
         params: "WaveformParameters",
         frequencies: Optional[np.ndarray] = None,
         downsampling_indices: Optional[DownsamplingIndices] = None,
+        amplitude_reference: Optional["WaveformParameters"] = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Compute the residuals of the :func:`effective_one_body_waveform`
+        r"""Compute the residuals of the :func:`effective_one_body_waveform`
         from the Post-Newtonian one computed with
         :func:`post_newtonian_amplitude` and
         :func:`post_newtonian_phase`.
@@ -277,6 +278,26 @@ class WaveformGenerator(ABC):
                 Indices at which to compute the residuals.
                 If not provided (default) the waveform is given at
                 all indices corresponding to the default FFT grid.
+        amplitude_reference : Optional[WaveformParameters]
+                If given, divide the EOB amplitude by the PN amplitude of
+                *these* parameters rather than each waveform's own, so
+                that the modelled quantity is
+                :math:`A_{\rm EOB}(\theta) / A_{\rm PN}(\theta_{\rm ref})`.
+
+                This matters for the (2,1) and (3,3) modes. Their PN
+                amplitude has a deep minimum at a frequency that moves
+                with the parameters --- over a training set of 8192 it
+                dips to 5e-6 of its typical size on the (3,3) and 3e-5 on
+                the (2,1) --- and dividing by it there sends the ratio to
+                twenty or sixty while the waveform itself does nothing
+                remarkable. A handful of such waveforms then set the
+                normalisation for the whole training set. A fixed
+                reference has no such dip, so the modelled quantity stays
+                smooth; on the (3,3) mode this is worth a factor of
+                eighteen in mismatch.
+
+                Defaults to None, which reproduces the original
+                :math:`A_{\rm EOB} / A_{\rm PN}` definition.
         Returns
         -------
         tuple[np.ndarray, np.ndarray]
@@ -287,7 +308,10 @@ class WaveformGenerator(ABC):
             params, frequencies
         )
 
-        amplitude_pn_ = self.post_newtonian_amplitude(params, frequencies_eob)
+        amplitude_pn_ = self.post_newtonian_amplitude(
+            params if amplitude_reference is None else amplitude_reference,
+            frequencies_eob,
+        )
         phase_pn_ = self.post_newtonian_phase(params, frequencies_eob)
 
         if downsampling_indices:
@@ -880,8 +904,10 @@ class Dataset:
         seed: int = 42,
         multibanding: bool = True,
         f_pivot_hz: float = 160.0,
+        reference_amplitude: bool = False,
     ):
 
+        self.reference_amplitude = reference_amplitude
         self.initial_frequency_hz = initial_frequency_hz
         self.srate_hz = srate_hz
 
@@ -910,6 +936,39 @@ class Dataset:
 
         self.residuals_amp: list[np.ndarray] = []
         self.residuals_phi: list[np.ndarray] = []
+
+    @property
+    def amplitude_reference_parameters(self) -> "Optional[WaveformParameters]":
+        r"""Parameters whose PN amplitude divides the EOB one, or ``None``.
+
+        ``None`` --- the default --- means each waveform is divided by its
+        own PN amplitude, which is the original definition of the
+        amplitude residual. When :attr:`reference_amplitude` is set, this
+        is instead the centre of :attr:`parameter_ranges`, with zero
+        spins.
+
+        The centre is an arbitrary but reproducible choice: what matters
+        is only that the divisor is the same for every waveform and has no
+        deep minimum in the band, so that the (2,1) and (3,3) amplitude
+        ratios stay bounded. Zero spins and central masses put it in the
+        smooth part of the box --- its own PN amplitude falls
+        monotonically across the band for every mode --- and it is
+        derived from the parameter ranges rather than stored, so a saved
+        model reconstructs it exactly from metadata it already carries.
+        """
+        if not self.reference_amplitude:
+            return None
+
+        ranges = self.parameter_ranges
+        return WaveformParameters(
+            mass_ratio=float(np.mean(ranges.q_range)),
+            lambda_1=float(np.mean(ranges.lambda1_range)),
+            lambda_2=float(np.mean(ranges.lambda2_range)),
+            chi_1=0.0,
+            chi_2=0.0,
+            dataset=self,
+        )
+
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}("
@@ -1197,10 +1256,17 @@ class Dataset:
         parameters = [next(parameter_generator) for _ in range(n_generate)]
 
         # Parallel generation
+        # Resolved once: building it per waveform would rebuild the same
+        # `WaveformParameters` for every one of them, inside the workers.
+        reference = self.amplitude_reference_parameters
+
         def generate_single(params):
             try:
                 result = self.waveform_generator.generate_residuals(
-                    params, self.frequencies, downsampling_indices
+                    params,
+                    self.frequencies,
+                    downsampling_indices,
+                    amplitude_reference=reference,
                 )
                 if result is not None:
                     amp_res, phi_res = result
@@ -1297,10 +1363,14 @@ class Dataset:
             amp_indices = downsampling_indices.amplitude_indices
             phi_indices = downsampling_indices.phase_indices
 
+        # Must mirror `generate_residuals`: whatever divided the EOB
+        # amplitude there has to multiply it back here.
+        reference = self.amplitude_reference_parameters
         pn_amps = np.array(
             [
                 self.waveform_generator.post_newtonian_amplitude(
-                    par, self.frequencies[amp_indices]
+                    par if reference is None else reference,
+                    self.frequencies[amp_indices],
                 )
                 for par in waveform_param_list
             ]
