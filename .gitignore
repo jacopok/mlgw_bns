@@ -29,3 +29,12 @@ frequency_downsampling_histograms.py
 !mlgw_bns/data/*.yaml
 .claude/settings.json
 visualization/*.png
+default_hom_l2_m1.yaml
+default_hom_l2_m2.yaml
+default_hom_l3_m3.yaml
+default_hom_l4_m4.yaml
+make_default_dataset.py
+optimization_dataset_21.yaml
+optimization_dataset_22.yaml
+optimization_dataset_33.yaml
+optimization_dataset_44.yaml
