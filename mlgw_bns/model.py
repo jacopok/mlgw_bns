@@ -731,65 +731,145 @@ class Model:
         params_list = [next(parameter_generator) for _ in range(reference_dataset_size)]
         parameter_array = np.array([p.array for p in params_list], dtype=float)
 
-        n_points = len(f_ref_natural)
+        parameter_array, _, phase_residuals = self._multimode_mode_residuals(
+            params_list, f_ref_natural
+        )
 
-        def _reference_phase_residual(generator, params):
-            """One EOB residual draw; None on any failure or bad shape."""
-            try:
-                result = generator.generate_residuals(params, f_ref_natural)
-            except Exception:  # pragma: no cover - EOB blowups
-                return None
-            if result is None or len(result[1]) != n_points:
-                return None
-            phase = np.asarray(result[1], dtype=float)
-            return phase if np.all(np.isfinite(phase)) else None
-
-        keep = np.ones(reference_dataset_size, dtype=bool)
-        phase_residuals: dict = {}
-        for mode in self.modes:
-            generator = self.mode_models[mode].waveform_generator
-            rows_list = Parallel(n_jobs=16)(
-                delayed(_reference_phase_residual)(generator, params)
-                for params in params_list
-            )
-            rows = np.full((reference_dataset_size, n_points), np.nan)
-            for i, phase in enumerate(rows_list):
-                if phase is None:
-                    keep[i] = False
-                else:
-                    rows[i] = phase
-            phase_residuals[mode] = rows
-
-        if keep.sum() < 2:
+        if len(parameter_array) < 2:
             raise RuntimeError(
                 "The reference pre-pass produced fewer than 2 valid waveforms."
             )
         logging.info(
             "Reference pre-pass: %d/%d valid waveforms on a %d-point grid "
             "[%.1f, %.1f] Hz",
-            keep.sum(), reference_dataset_size, len(grid_hz), grid_hz[0], grid_hz[-1],
+            len(parameter_array), reference_dataset_size, len(grid_hz),
+            grid_hz[0], grid_hz[-1],
         )
 
-        reference_phase_residuals = phase_residuals[reference_mode][keep]
+        reference_phase_residuals = phase_residuals[reference_mode]
         timeshifts = Residuals(
             np.zeros_like(reference_phase_residuals), reference_phase_residuals
         ).phase_timeshifts(frequencies=grid_hz)
         self.time_shifts_predictor = TimeshiftsNN(
-            training_params=parameter_array[keep],
+            training_params=parameter_array,
             training_timeshifts=timeshifts,
         ).fit()
         self._propagate_time_shifts_predictor()
 
         reference_phases = np.stack(
-            [phase_residuals[mode][keep][:, 0] for mode in self.modes], axis=1
+            [phase_residuals[mode][:, 0] for mode in self.modes], axis=1
         )
         self.mode_phases_predictor = ModePhasesNN(
             modes=[(m.l, m.m) for m in self.modes],
             f0_natural=f0_natural,
-            training_params=parameter_array[keep],
+            training_params=parameter_array,
             training_mode_phases=reference_phases,
         ).fit()
         self._propagate_mode_phases_predictor()
+
+    def _multimode_mode_residuals(
+        self,
+        params_list: list,
+        frequencies_natural: np.ndarray,
+        downsampling_indices_by_mode: Optional[dict] = None,
+        amplitude_reference_by_mode: Optional[dict] = None,
+    ):
+        r"""One EOB call per parameter point, residuals for every mode.
+
+        For each :class:`~mlgw_bns.dataset_generation.WaveformParameters` in
+        ``params_list`` a single
+        :meth:`~mlgw_bns.higher_order_modes.TEOBResumSModeGenerator.all_modes_amplitude_phase`
+        call produces all of :attr:`modes`; the per-mode Post-Newtonian
+        amplitude/phase are then divided/subtracted and the result optionally
+        cropped to that mode's downsampling indices. This replaces the
+        one-EOB-call-per-(mode, parameter) pattern in the training path.
+
+        Parameters
+        ----------
+        params_list
+            Shared parameter sample; every mode is evaluated at the same points.
+        frequencies_natural
+            Grid (natural units) handed to the EOB call.
+        downsampling_indices_by_mode
+            Optional ``mode -> DownsamplingIndices``; when given the returned
+            residuals are already restricted to those indices (per mode).
+        amplitude_reference_by_mode
+            Optional ``mode -> WaveformParameters`` for the fixed-reference
+            amplitude normalisation (see
+            :meth:`WaveformGenerator.generate_residuals`).
+
+        Returns
+        -------
+        tuple
+            ``(parameter_array, amp_residuals, phase_residuals)`` where the
+            two dicts map ``mode -> np.ndarray`` of shape
+            ``(n_valid, n_points_for_that_mode)``; a parameter is dropped from
+            *all* modes if the EOB call fails or returns non-finite / wrong-shape
+            output for any of them. ``parameter_array`` has shape
+            ``(n_valid, 5)``.
+        """
+        modes = list(self.modes)
+        generator = self.mode_models[modes[0]].waveform_generator
+        frequencies_natural = np.asarray(frequencies_natural, dtype=float)
+        n_points = len(frequencies_natural)
+
+        pn_generators = {m: self.mode_models[m].waveform_generator for m in modes}
+        ds_idx = downsampling_indices_by_mode or {}
+        amp_ref = amplitude_reference_by_mode or {}
+
+        def _one(params):
+            try:
+                waveforms = generator.all_modes_amplitude_phase(
+                    params, modes, frequencies_natural
+                )
+            except Exception:  # pragma: no cover - EOB blowups
+                return None
+            out = {}
+            for mode in modes:
+                f_eob, amp_eob, phi_eob = waveforms[mode]
+                if (
+                    len(amp_eob) != n_points
+                    or not np.all(np.isfinite(amp_eob))
+                    or not np.all(np.isfinite(phi_eob))
+                ):
+                    return None
+                pn_gen = pn_generators[mode]
+                reference = amp_ref.get(mode)
+                amp_pn = pn_gen.post_newtonian_amplitude(
+                    params if reference is None else reference, f_eob
+                )
+                phi_pn = pn_gen.post_newtonian_phase(params, f_eob)
+                amp_res = amp_eob / amp_pn
+                phi_res = phi_eob - phi_pn
+                if mode in ds_idx:
+                    amp_indices, phi_indices = ds_idx[mode]
+                    amp_res = amp_res[amp_indices]
+                    phi_res = phi_res[phi_indices]
+                out[mode] = (
+                    np.asarray(amp_res, dtype=float),
+                    np.asarray(phi_res, dtype=float),
+                )
+            return out
+
+        results = Parallel(n_jobs=16)(delayed(_one)(p) for p in params_list)
+
+        keep = [i for i, r in enumerate(results) if r is not None]
+        parameter_array = np.array(
+            [params_list[i].array for i in keep], dtype=float
+        )
+        amp_residuals = {
+            mode: np.stack([results[i][mode][0] for i in keep])
+            if keep
+            else np.empty((0, 0))
+            for mode in modes
+        }
+        phase_residuals = {
+            mode: np.stack([results[i][mode][1] for i in keep])
+            if keep
+            else np.empty((0, 0))
+            for mode in modes
+        }
+        return parameter_array, amp_residuals, phase_residuals
 
     def _propagate_mode_phases_predictor(self) -> None:
         """Point every already-built per-mode model at the shared
