@@ -48,36 +48,20 @@ def main() -> None:
 
     ds_idx = {m: model.mode_models[m].downsampling_indices for m in MODES}
 
-    # Generate per mode, exactly as ModeModel.generate does (each mode at
-    # its own initial_frequency scaling) so the result matches whatever
-    # convention this model was trained on -- do NOT use the batched
-    # all-modes call here, which forces the (4,4) scaling on every mode.
-    def one(mode, params):
-        mm = model.mode_models[mode]
-        try:
-            res = mm.waveform_generator.generate_residuals(
-                params,
-                mm.dataset.frequencies,
-                mm.downsampling_indices,
-                amplitude_reference=mm.dataset.amplitude_reference_parameters,
-            )
-        except Exception:
-            return None
-        if res is None or not np.all(np.isfinite(res[1])):
-            return None
-        return np.asarray(res[0], float), np.asarray(res[1], float)
-
-    amp_res, phi_res = {}, {}
-    keep = np.ones(len(params_list), bool)
-    for mode in MODES:
-        rows = Parallel(n_jobs=16)(delayed(one)(mode, p) for p in params_list)
-        keep &= np.array([r is not None for r in rows])
-        amp_res[mode] = rows
-        phi_res[mode] = rows
-    idx = np.where(keep)[0]
-    param_array = np.array([params_list[j].array for j in idx], dtype=float)
-    amp_res = {m: np.array([amp_res[m][j][0] for j in idx]) for m in MODES}
-    phi_res = {m: np.array([phi_res[m][j][1] for j in idx]) for m in MODES}
+    # One batched EOB call per parameter point for all four modes at once
+    # (all at initial_frequency factor 0.5) -- exactly the convention the
+    # batched Model.generate trains on, so row 4 is the real training target.
+    parameter_array_full, amp_res_full, phi_res_full = model._multimode_mode_residuals(
+        params_list,
+        dataset.frequencies,
+        downsampling_indices_by_mode=ds_idx,
+        amplitude_reference_by_mode={
+            m: model.mode_models[m].dataset.amplitude_reference_parameters for m in MODES
+        },
+    )
+    param_array = np.asarray(parameter_array_full, dtype=float)
+    amp_res = {m: np.asarray(amp_res_full[m], float) for m in MODES}
+    phi_res = {m: np.asarray(phi_res_full[m], float) for m in MODES}
     param_set = dataset.parameter_set_cls(param_array)
     print(f"{len(param_array)}/{args.n} valid")
 
