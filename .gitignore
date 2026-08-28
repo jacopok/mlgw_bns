@@ -38,3 +38,21 @@ optimization_dataset_21.yaml
 optimization_dataset_22.yaml
 optimization_dataset_33.yaml
 optimization_dataset_44.yaml
+unanchored_residual_diagnostic.png
+visualization/precessing_mismatches.npz
+retrain_systemd.log
+pathology_systemd.log
+pathology2.log
+
+# scratch diagnostics / exploratory plots
+*.png
+visualization/phase_residual_dataset*.npz
+visualization/hom_33_44_residual_pathologies.py
+visualization/hom_phase_anchor_investigation.py
+visualization/hom_phase_node_gaps.py
+visualization/hom_reference_phase_analytic_model.py
+visualization/hom_reference_phase_learnability.py
+visualization/plot_phase_residual_dataset.py
+visualization/teob_44_amplitude_spike.py
+visualization/validate_genuine.py
+visualization/validate_mode_phases_predictor.py
