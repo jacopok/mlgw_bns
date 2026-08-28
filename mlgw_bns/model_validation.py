@@ -660,13 +660,10 @@ class ValidateModel:
 
         waveform_1_summed = sum(modes_1.values())
         waveform_2_summed = sum(modes_2.values())
-        norm = np.sqrt(
-            product(waveform_1_summed, waveform_1_summed)
-            * product(waveform_2_summed, waveform_2_summed)
-        )
+        norm_1 = np.sqrt(product(waveform_1_summed, waveform_1_summed))
 
         def to_minimize(params: np.ndarray) -> float:
-            """Negative overlap, as a function of ``[time_shift, phase_shift]``."""
+            """Negative normalised match, as a function of ``[time_shift, phase_shift]``."""
             t_c, phi_c = params
             assert frequencies is not None
 
@@ -678,15 +675,21 @@ class ValidateModel:
                 * np.exp(2j * np.pi * frequencies * t_c + 1j * m * phi_c)
                 for (l, m) in modes_2
             )
+            # The per-mode phase rotation changes the cross terms in
+            # ``(w2|w2)``, so the normalisation has to be recomputed for
+            # every ``phi_c`` rather than taken from the unshifted
+            # waveform --- otherwise the "match" can exceed one and the
+            # mismatch come out negative once the two waveforms are close.
+            norm_2 = np.sqrt(product(waveform_2_shifted, waveform_2_shifted))
             overlap = product_complex(waveform_1_summed, waveform_2_shifted)
-            return -abs(overlap)
-
-        bounds = [(-max_delta_t, max_delta_t), (-max_delta_phi, max_delta_phi)]
+            if norm_1 <= 0 or norm_2 <= 0:
+                return 0.0
+            return -abs(overlap) / (norm_1 * norm_2)
 
         try:
-            # Two-stage: coarse grid search followed by L-BFGS-B refinement.
-            t_grid = np.linspace(-max_delta_t, max_delta_t, 20)
-            phi_grid = np.linspace(-max_delta_phi, max_delta_phi, 12)
+            # Two-stage: coarse grid search followed by local refinement.
+            t_grid = np.linspace(-max_delta_t, max_delta_t, 40)
+            phi_grid = np.linspace(-max_delta_phi, max_delta_phi, 25)
             best_val = np.inf
             best_params = np.array([0.0, 0.0])
 
@@ -700,13 +703,12 @@ class ValidateModel:
             res = minimize(
                 to_minimize,
                 best_params,
-                method="L-BFGS-B",
-                bounds=bounds,
-                options={"maxiter": 1000, "ftol": 1e-8},
+                method="Nelder-Mead",
+                options={"xatol": 1e-10, "fatol": 1e-16, "maxiter": 2000},
             )
 
             if not res.success:
-                # L-BFGS-B occasionally reports an uninformative "ABNORMAL"
+                # The refinement occasionally reports a non-clean
                 # termination when the optimum sits at (or very near) a
                 # bound of the periodic phi_c parameter, even though res.x
                 # is typically still a good, sometimes near-optimal, point.
@@ -721,7 +723,8 @@ class ValidateModel:
             else:
                 best_val = res.fun
 
-            return 1 - (-best_val) / norm
+            # `to_minimize` already returns the negative normalised match.
+            return 1 + best_val
 
         except Exception as e:
             logging.warning(
