@@ -126,17 +126,38 @@ class PrincipalComponentTraining:
             flatten_phase=False
         )
 
-        residuals.phase_residuals = remove_linear_trend(
+        return self.train_on(
+            parameters,
+            residuals,
+            self.dataset.natural_units_to_hz(freq_downsampled),
+        )
+
+    def train_on(
+        self,
+        parameters,
+        residuals,
+        frequencies_hz: np.ndarray,
+    ) -> PrincipalComponentData:
+        """Fit the PCA on residuals generated elsewhere.
+
+        Used by :meth:`~mlgw_bns.model.Model.generate`, which produces the
+        residuals for every mode from one shared EOB sweep. Does not mutate
+        ``residuals`` (unlike the in-place ``phase_residuals`` assignment in
+        :meth:`train`).
+        """
+        flattened_phase = remove_linear_trend(
             parameters=parameters,
             phi_diff=residuals.phase_residuals,
-            frq=self.dataset.natural_units_to_hz(freq_downsampled),
+            frq=frequencies_hz,
             timeshifts_predictor=self.timeshifts_predictor,
             subtract_mode_phase_anchor=self.subtract_mode_phase_anchor,
             mode_phases_predictor=self.mode_phases_predictor,
             mode_index=self.mode_index,
         )
-
-        return self.pca_model.fit(residuals.combined)
+        combined = np.concatenate(
+            (np.asarray(residuals.amplitude_residuals), flattened_phase), axis=1
+        )
+        return self.pca_model.fit(combined)
 
 
 class PrincipalComponentAnalysisModel:

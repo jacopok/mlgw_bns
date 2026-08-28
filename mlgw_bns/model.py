@@ -673,13 +673,90 @@ class Model:
                 seed,
             )
 
+        # Per-mode downsampling indices first: each still trains on its own
+        # (small) EOB waveform sweep -- see the plan's Step C.
+        if training_downsampling_dataset_size is not None:
+            for mode in self.modes:
+                mode_model = self.mode_models[mode]
+                logging.info("Training the downsampling for mode %s", mode)
+                mode_model.downsampling_indices = mode_model.downsampling_training.train(
+                    training_downsampling_dataset_size
+                )
+
+        # One shared multi-mode EOB sweep feeds the PCA and NN training of
+        # every mode, instead of one sweep per (mode, stage).
+        precomputed_by_mode: Optional[dict] = None
+        if training_pca_dataset_size is not None or training_nn_dataset_size is not None:
+            precomputed_by_mode = self._multimode_training_residuals(
+                training_pca_dataset_size, training_nn_dataset_size
+            )
+
         for mode in self.modes:
             self.mode_models[mode].generate(
-                training_downsampling_dataset_size=training_downsampling_dataset_size,
+                training_downsampling_dataset_size=None,
                 training_pca_dataset_size=training_pca_dataset_size,
                 training_nn_dataset_size=training_nn_dataset_size,
                 timeshifts_predictor=self.time_shifts_predictor,
+                precomputed_residuals=(
+                    None if precomputed_by_mode is None
+                    else precomputed_by_mode[mode]
+                ),
             )
+
+    def _multimode_training_residuals(
+        self,
+        training_pca_dataset_size: Optional[int],
+        training_nn_dataset_size: Optional[int],
+    ) -> dict:
+        """One multi-mode EOB sweep for the PCA + NN training sets.
+
+        Draws ``max(pca_size, nn_size)`` parameters from the same
+        ``seed=2`` generator that ``Dataset.generate_residuals`` uses, runs
+        one EOB call per point via :meth:`_multimode_mode_residuals`, and
+        returns ``mode -> (freq_downsampled_natural, ParameterSet,
+        Residuals)`` shaped exactly like ``Dataset.generate_residuals``'s
+        return so :meth:`ModeModel.generate` can consume it directly.
+        """
+        size = max(
+            s for s in (training_pca_dataset_size, training_nn_dataset_size)
+            if s is not None
+        )
+        dataset = self.mode_models[Mode(2, 2)].dataset
+        parameter_generator = dataset.make_parameter_generator(seed=2)
+        params_list = [next(parameter_generator) for _ in range(size)]
+
+        downsampling_indices_by_mode = {
+            mode: self.mode_models[mode].downsampling_indices for mode in self.modes
+        }
+        amplitude_reference_by_mode = {
+            mode: self.mode_models[mode].dataset.amplitude_reference_parameters
+            for mode in self.modes
+        }
+
+        parameter_array, amp_residuals, phase_residuals = self._multimode_mode_residuals(
+            params_list,
+            dataset.frequencies,
+            downsampling_indices_by_mode,
+            amplitude_reference_by_mode,
+        )
+        if len(parameter_array) < size:
+            logging.warning(
+                "Multi-mode training sweep: only %d/%d valid waveforms",
+                len(parameter_array), size,
+            )
+
+        precomputed = {}
+        for mode in self.modes:
+            phase_indices = self.mode_models[mode].downsampling_indices.phase_indices
+            precomputed[mode] = (
+                dataset.frequencies[phase_indices],
+                dataset.parameter_set_cls(parameter_array.astype(np.float32)),
+                Residuals(
+                    amp_residuals[mode].astype(np.float32),
+                    phase_residuals[mode].astype(np.float32),
+                ),
+            )
+        return precomputed
 
     def _train_reference_predictors(
         self,
