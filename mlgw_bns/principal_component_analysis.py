@@ -360,16 +360,24 @@ def remove_linear_trend(
 
     The prediction calls are vectorised over the whole batch.
     """
-    param_array = np.asarray(parameters.parameter_array)
-    # f0 phase now carries the full ~1e4-1e5 rad reference constant; do the
-    # subtraction in float64 (the batch residuals arrive as float32).
+    # float64 throughout: the mode-phase predictor returns the full
+    # ~1e4-1e6 rad arg H_lm(f0) constant, and scikit-learn propagates the
+    # input dtype, so a float32 ``parameter_array`` (which is what
+    # ``Dataset.generate_residuals`` stores) would quantise that prediction
+    # to ~0.06 rad -- and it would then no longer cancel the float64
+    # prediction that ``ModeModel._predicted_mode_phase0`` adds back at
+    # predict time. The phase residual carries the same constant until it is
+    # subtracted just below.
+    param_array = np.asarray(parameters.parameter_array, dtype=np.float64)
     phi_diff = np.asarray(phi_diff, dtype=np.float64)
 
     slopes = np.asarray(timeshifts_predictor.predict(param_array)).reshape(-1)
     trend = 2 * np.pi * np.outer(slopes, np.asarray(frq) - frq[0])
 
     if subtract_mode_phase_anchor and mode_phases_predictor is not None and mode_index is not None:
-        anchors = np.asarray(mode_phases_predictor.predict(param_array))[:, mode_index]
+        anchors = np.asarray(
+            mode_phases_predictor.predict(param_array), dtype=np.float64
+        )[:, mode_index]
     else:
         # non-HOM model, or a standalone HOM ModeModel with no predictor:
         # subtract the exact per-waveform value at f0.
