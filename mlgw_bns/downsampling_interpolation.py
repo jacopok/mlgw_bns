@@ -85,7 +85,7 @@ class DownsamplingTraining(ABC):
         dataset: Dataset,
         tol: float = 1e-4,
         tol_amp: Optional[float] = 8e-4, # 8e-4
-        tol_phi: Optional[float] = 5e-4, # 5e-4
+        tol_phi: Optional[float] = 3e-4, # was 5e-4; tightened for denser HOM phase nodes at the top edge
         n_jobs: int = 16,
     ):
         self.dataset = dataset
