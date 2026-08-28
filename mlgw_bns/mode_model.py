@@ -534,6 +534,7 @@ class ModeModel:
         training_pca_dataset_size: Optional[int] = 256,
         training_nn_dataset_size: Optional[int] = 256,
         timeshifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None,
+        precomputed_residuals: Optional[tuple] = None,
     ) -> None:
         """Generate a new model from scratch.
 
@@ -560,6 +561,15 @@ class ModeModel:
                 fitting a new one from this model's own residuals. Used by
                 :class:`~mlgw_bns.model.Model` to share a single
                 predictor, trained on the (2,2) mode, across every mode.
+        precomputed_residuals : tuple, optional
+                ``(freq_downsampled_natural, ParameterSet, Residuals)`` for
+                this mode, already downsampled to
+                :attr:`downsampling_indices`, sized
+                ``max(training_pca_dataset_size, training_nn_dataset_size)``.
+                Supplied by :meth:`~mlgw_bns.model.Model.generate` from one
+                shared multi-mode EOB sweep; when given, the per-mode
+                ``Dataset.generate_residuals`` calls for the PCA and NN
+                training sets are skipped.
 
         """
 
@@ -594,14 +604,21 @@ class ModeModel:
             # full-resolution grid buys nothing here while costing a factor
             # `waveform_length / (amp_length + phi_length)` --- of order a
             # thousand --- in memory.
-            logging.info("Generating the training dataset")
-            freq_downsampled, parameters, residuals = (
-                self.dataset.generate_residuals(
-                    training_nn_dataset_size,
-                    self.downsampling_indices,
-                    flatten_phase=False,
+            if precomputed_residuals is not None:
+                freq_downsampled, all_parameters, all_residuals = precomputed_residuals
+                parameters = self.dataset.parameter_set_cls(
+                    all_parameters.parameter_array[:training_nn_dataset_size]
                 )
-            )
+                residuals = all_residuals[:training_nn_dataset_size]
+            else:
+                logging.info("Generating the training dataset")
+                freq_downsampled, parameters, residuals = (
+                    self.dataset.generate_residuals(
+                        training_nn_dataset_size,
+                        self.downsampling_indices,
+                        flatten_phase=False,
+                    )
+                )
             frequencies_hz = self.dataset.natural_units_to_hz(freq_downsampled)
 
         # LEARN Δt(θ), needed below to remove the linear trend
@@ -640,7 +657,17 @@ class ModeModel:
                 mode_index=self.mode_phases_index,
             )
 
-            self.pca_data = self.pca_training.train(training_pca_dataset_size)
+            if precomputed_residuals is not None:
+                freq_ds_pca, all_parameters, all_residuals = precomputed_residuals
+                self.pca_data = self.pca_training.train_on(
+                    self.dataset.parameter_set_cls(
+                        all_parameters.parameter_array[:training_pca_dataset_size]
+                    ),
+                    all_residuals[:training_pca_dataset_size],
+                    self.dataset.natural_units_to_hz(freq_ds_pca),
+                )
+            else:
+                self.pca_data = self.pca_training.train(training_pca_dataset_size)
         else:
             assert self.pca_data is not None
 
