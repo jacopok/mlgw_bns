@@ -59,6 +59,7 @@ from .neural_network import (
 from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
     PrincipalComponentTraining,
+    remove_linear_trend,
 )
 from .taylorf2 import SUN_MASS_SECONDS, smoothing_func
 from .higher_order_modes import mode_to_k
@@ -317,6 +318,12 @@ class ModeModel:
         self.nn: Optional[NeuralNetwork] = None
         self.timeshifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None
 
+        # Shared per-mode reference-phase predictor and this mode's column
+        # in its output. Set by `Model` for HOM models; when None the
+        # phase reconstruction adds no per-mode constant.
+        self.mode_phases_predictor = None
+        self.mode_phases_index: Optional[int] = None
+
         self.training_dataset: Optional[Residuals] = None
         self.training_parameters: Optional[ParameterSet] = None
 
@@ -497,6 +504,23 @@ class ModeModel:
 
         return f"{self.filename}_timeshifts.pkl"
 
+    def _predicted_mode_phase0(self, intrinsic_params) -> float:
+        """Per-mode reference phase to restore at the anchor node.
+
+        Non-zero only for HOM models, where ``remove_linear_trend``
+        subtracted the shared
+        :class:`~mlgw_bns.neural_network.ModePhasesNN` prediction of
+        :math:`\\phi_{\\ell m}(f_0)` from the training residuals; this
+        returns the very same prediction so it cancels.
+        """
+        if self.mode_phases_predictor is None or self.mode_phases_index is None:
+            return 0.0
+        return float(
+            self.mode_phases_predictor.predict([intrinsic_params.array])[0][
+                self.mode_phases_index
+            ]
+        )
+
     def generate(
         self,
         training_downsampling_dataset_size: Optional[int] = 64,
@@ -604,6 +628,9 @@ class ModeModel:
                 self.downsampling_indices,
                 self.pca_components_number,
                 self.timeshifts_predictor,
+                subtract_mode_phase_anchor=self.mode is not None,
+                mode_phases_predictor=self.mode_phases_predictor,
+                mode_index=self.mode_phases_index,
             )
 
             self.pca_data = self.pca_training.train(training_pca_dataset_size)
@@ -617,6 +644,9 @@ class ModeModel:
                 phi_diff=residuals.phase_residuals,
                 frq=frequencies_hz,
                 timeshifts_predictor=self.timeshifts_predictor,
+                subtract_mode_phase_anchor=self.mode is not None,
+                mode_phases_predictor=self.mode_phases_predictor,
+                mode_index=self.mode_phases_index,
             )
 
             self.training_dataset = residuals
@@ -727,14 +757,6 @@ class ModeModel:
         if self.nn is not None:
             self.nn.save(self.filename_nn)
         if include_timeshifts_predictor and self.timeshifts_predictor is not None:
-            self.timeshifts_predictor.save_model(self.filename_timeshifts)
-
-    def save_new(self, include_training_data: bool = True) -> None:
-        self.save_metadata()
-        self.save_arrays(include_training_data)
-        if self.nn is not None:
-            self.nn.save(self.filename_nn)
-        if self.timeshifts_predictor is not None:
             self.timeshifts_predictor.save_model(self.filename_timeshifts)
 
     def load(
@@ -982,9 +1004,11 @@ class ModeModel:
 
         residuals = self.predict_residuals_bulk(params, nn)
 
-        return self.dataset.recompose_residuals(
+        waveforms = self.dataset.recompose_residuals(
             residuals, params, self.downsampling_indices
         )
+
+        return waveforms
 
     def predict_amplitude_phase(
         self, frequencies: np.ndarray, params: ParametersWithExtrinsic
@@ -1097,6 +1121,8 @@ class ModeModel:
             )[0]
             phi_ds = phi_ds + 2 * np.pi * (phase_freqs_hz - phase_freqs_hz[0]) * time_shift
 
+        phi_ds = phi_ds + self._predicted_mode_phase0(intrinsic_params)
+
         pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
 
         resampled_amp = self.downsampling_training.resample(
@@ -1165,7 +1191,7 @@ class ModeModel:
         phi = (
             resampled_phi
             + params.reference_phase
-            + (2 * np.pi * params.time_shift) * frequencies # TODO: changed `+` to `-` 
+            + (2 * np.pi * params.time_shift) * frequencies # TODO: changed `+` to `-`
         )
         
         return amp, phi
@@ -1255,6 +1281,8 @@ class ModeModel:
             )[0]
             phi_ds = phi_ds + 2 * np.pi * (phase_freqs_hz - phase_freqs_hz[0]) * time_shift
 
+        phi_ds = phi_ds + self._predicted_mode_phase0(intrinsic_params)
+
         # t6 = perf_counter()
 
         # ----------------------------
@@ -1300,6 +1328,7 @@ class ModeModel:
         # ----------------------------
         pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
         amp = resampled_amp * pre / params.distance_mpc
+
         phi = (
             resampled_phi
             + params.reference_phase
@@ -1595,13 +1624,3 @@ def compute_polarizations(
     hc = pre_cross * waveform_imag - 1j * pre_cross * waveform_real
 
     return hp, hc
-
-def remove_linear_trend(parameters, phi_diff, frq, timeshifts_predictor):
-    for i in range(parameters.parameter_array.shape[0]):
-        phi_diff[i] = (
-            phi_diff[i]
-            - 2 * np.pi * (frq - frq[0]) * timeshifts_predictor.predict([parameters.parameter_array[i]])
-            - phi_diff[i,0]
-        )
-
-    return phi_diff

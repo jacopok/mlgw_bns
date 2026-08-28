@@ -87,12 +87,18 @@ class PrincipalComponentTraining:
         downsampling_indices: DownsamplingIndices,
         number_of_components: int,
         timeshifts_predictor: Union[TimeshiftsGPR, TimeshiftsNN],
+        subtract_mode_phase_anchor: bool = False,
+        mode_phases_predictor=None,
+        mode_index=None,
     ):
 
         self.dataset = dataset
         self.downsampling_indices = downsampling_indices
         self.pca_model = PrincipalComponentAnalysisModel(number_of_components)
         self.timeshifts_predictor = timeshifts_predictor
+        self.subtract_mode_phase_anchor = subtract_mode_phase_anchor
+        self.mode_phases_predictor = mode_phases_predictor
+        self.mode_index = mode_index
 
     def train(self, number_of_training_waveforms: int) -> PrincipalComponentData:
 
@@ -125,6 +131,9 @@ class PrincipalComponentTraining:
             phi_diff=residuals.phase_residuals,
             frq=self.dataset.natural_units_to_hz(freq_downsampled),
             timeshifts_predictor=self.timeshifts_predictor,
+            subtract_mode_phase_anchor=self.subtract_mode_phase_anchor,
+            mode_phases_predictor=self.mode_phases_predictor,
+            mode_index=self.mode_index,
         )
 
         return self.pca_model.fit(residuals.combined)
@@ -299,13 +308,50 @@ class PrincipalComponentAnalysisModel:
         total_variance = PrincipalComponentAnalysisModel.calculate_total_variance(pca_data)
         return np.cumsum(pca_data.eigenvalues) / total_variance
     
-def remove_linear_trend(parameters, phi_diff, frq, timeshifts_predictor):
+def remove_linear_trend(
+    parameters,
+    phi_diff,
+    frq,
+    timeshifts_predictor,
+    subtract_mode_phase_anchor=False,
+    mode_phases_predictor=None,
+    mode_index=None,
+):
+    """Strip the linear-in-frequency phase trend handled by the shared
+    time-shift predictor from every phase residual.
 
-    for i in range(parameters.parameter_array.shape[0]):
-        phi_diff[i] = (
-            phi_diff[i]
-            - 2 * np.pi * (frq - frq[0]) * timeshifts_predictor.predict([parameters.parameter_array[i]])
-            - phi_diff[i,0]
-        )
+    ``subtract_mode_phase_anchor`` controls what happens to the residual's
+    value at the lowest-frequency node:
 
-    return phi_diff
+    * ``False`` (default, used by the non-HOM (2,2) model): the exact
+      per-waveform ``phi_diff[i, 0]`` is subtracted, so the training
+      residuals are identically zero at ``f0``. A single-mode model's
+      absolute phase constant is unobservable (the mismatch marginalises a
+      global phase), so nothing is restored at predict time.
+    * ``True`` (used by the HOM :class:`~mlgw_bns.model.Model`): the shared
+      :class:`~mlgw_bns.neural_network.ModePhasesNN` *prediction* of the
+      per-mode reference phase :math:`\\phi_{\\ell m}(f_0)`
+      (``mode_phases_predictor.predict(...)[:, mode_index]``) is subtracted,
+      so the PCA/NN only see the smooth generalisation-error leftover; the
+      same prediction is added back at predict time. If no predictor is
+      supplied (standalone :meth:`ModeModel.generate`), the exact
+      per-waveform ``phi_diff[i, 0]`` is subtracted instead.
+
+    The prediction calls are vectorised over the whole batch.
+    """
+    param_array = np.asarray(parameters.parameter_array)
+    # f0 phase now carries the full ~1e4-1e5 rad reference constant; do the
+    # subtraction in float64 (the batch residuals arrive as float32).
+    phi_diff = np.asarray(phi_diff, dtype=np.float64)
+
+    slopes = np.asarray(timeshifts_predictor.predict(param_array)).reshape(-1)
+    trend = 2 * np.pi * np.outer(slopes, np.asarray(frq) - frq[0])
+
+    if subtract_mode_phase_anchor and mode_phases_predictor is not None and mode_index is not None:
+        anchors = np.asarray(mode_phases_predictor.predict(param_array))[:, mode_index]
+    else:
+        # non-HOM model, or a standalone HOM ModeModel with no predictor:
+        # subtract the exact per-waveform value at f0.
+        anchors = phi_diff[:, 0].copy()
+
+    return phi_diff - trend - anchors[:, None]

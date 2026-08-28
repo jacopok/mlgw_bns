@@ -798,3 +798,73 @@ _post_newtonian_phases_by_mode: dict[Mode, Callable_Waveform] = {
     Mode(4, 3): psi_lm(H_43, Mode(4, 3)),
     Mode(4, 4): psi_lm(H_44, Mode(4, 4)),
 }
+
+
+#: Lazily-built dataset used only to satisfy :class:`WaveformParameters`
+#: when evaluating the Taylor-F2 mode phase in :func:`reference_phase_backbone`.
+#: The total mass is irrelevant there (see the function's docstring), so a
+#: single shared instance is fine.
+_BACKBONE_DATASET = None
+
+
+def _backbone_dataset():
+    global _BACKBONE_DATASET
+    if _BACKBONE_DATASET is None:
+        from .dataset_generation import Dataset
+
+        _BACKBONE_DATASET = Dataset(initial_frequency_hz=20.0, srate_hz=4096.0)
+    return _BACKBONE_DATASET
+
+
+def reference_phase_backbone(
+    param_array: np.ndarray,
+    f0_natural: float,
+    mode: Mode,
+    rel_step: float = 1e-4,
+) -> np.ndarray:
+    r"""Analytic backbone of the per-mode reference phase at ``f0``.
+
+    Returns, for each row ``[q, lambda_1, lambda_2, chi_1, chi_2]`` of
+    ``param_array``, the scalar
+
+    .. math::
+        M_{\ell m} = f_0 \, \frac{\mathrm{d}\Psi_{\ell m}}{\mathrm{d}f}
+        \bigg|_{f_0},
+        \qquad
+        \Psi_{\ell m}(f) = \frac{m}{2}\, \Psi_{22}\!\left(\frac{2f}{m}\right),
+
+    with :math:`\Psi_{22}` the 3.5PN Taylor-F2 point-mass + tidal + QM
+    phase (:func:`~mlgw_bns.taylorf2.phase_5h_post_newtonian_tidal`). By
+    the stationary-phase identity :math:`\mathrm{d}\Psi/\mathrm{d}f = 2\pi
+    t(f)` this is :math:`2\pi f_0\, t_{\ell m}(f_0)`, and because the
+    inspiral phase is a near power law :math:`\Psi \sim f^{-5/3}` near
+    :math:`f_0` it captures the full :math:`10^4`--:math:`10^5` rad
+    dynamic range of the reference phase to a fixed linear calibration.
+
+    ``f0_natural`` and the internal grid are in **natural units**
+    (:math:`Mf`); in these units the Taylor-F2 phase depends on the
+    parameters only through :math:`(\eta, \chi_1, \chi_2, \Lambda_1,
+    \Lambda_2)` and not the total mass, because :math:`v = (\pi M f_{\rm
+    Hz} T_\odot)^{1/3} = (\pi f_{\rm natural})^{1/3}`. The central
+    difference makes the result independent of the ``- phase[0]`` anchor
+    inside ``phase_5h_post_newtonian_tidal``.
+    """
+    param_array = np.asarray(param_array, dtype=float)
+    if param_array.ndim != 2 or param_array.shape[1] != 5:
+        raise ValueError("param_array must have shape (n_samples, 5)")
+    if not f0_natural > 0:
+        raise ValueError("f0_natural must be positive")
+
+    h = f0_natural * rel_step
+    factor = mode.m / 2
+    dataset = _backbone_dataset()
+    mode_freq = 2 * np.array([f0_natural - h, f0_natural + h]) / mode.m
+
+    out = np.empty(len(param_array))
+    for i, (q, lambda_1, lambda_2, chi_1, chi_2) in enumerate(param_array):
+        params = WaveformParameters(
+            q, lambda_1, lambda_2, chi_1, chi_2, dataset=dataset
+        )
+        psi = phase_5h_post_newtonian_tidal(params, mode_freq) * factor
+        out[i] = f0_natural * (psi[1] - psi[0]) / (2 * h)
+    return out

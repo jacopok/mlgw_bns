@@ -384,7 +384,10 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         phase = self._align_mode_phase_to_merger(
             phase, f_spa, self._merger_time(dyn, htlm)
         )
-        phase = - (phase - phase[0])
+        # No per-mode node-0 anchor: the additive phase constant
+        # `arg H_lm` (aligned to merger) is kept, to be learned by the
+        # shared `ModePhasesNN` reference-phase regressor instead.
+        phase = -phase
 
         return (f_spa, amplitude, phase)
 
@@ -420,7 +423,9 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         phase = self._align_mode_phase_to_merger(
             phase, f_spa, self._merger_time(dyn, htlm)
         )
-        phase = - (phase - phase[0])
+        # No per-mode node-0 anchor: keep the additive `arg H_lm` constant
+        # in the residual, for the shared `ModePhasesNN` to learn.
+        phase = -phase
 
         return (f_spa, amplitude, phase)
 

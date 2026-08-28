@@ -1037,6 +1037,180 @@ class TimeshiftsNN:
         return model
 
 
+class ModePhasesNN:
+    """RFF + Ridge surrogate for per-mode reference phases.
+
+    Analogous to :class:`TimeshiftsNN`, but a *multi-output* regressor:
+    for a given set of intrinsic parameters it predicts the vector
+    ``[phi_lm[f0] for lm in modes]`` --- the phase of each spherical
+    harmonic mode at the lowest frequency node of the training grid.
+
+    The relative phases between modes are hard for the per-mode PCA +
+    network to learn from the residuals directly; pulling the node-0
+    per-mode phase constant out into this dedicated regressor gives the
+    per-mode networks cleaner training data while still allowing the
+    mode phases (and hence their relative phases) to be reconstructed at
+    predict time.
+
+    Same construction contract as :class:`TimeshiftsNN`: pass
+    ``training_params`` and ``training_mode_phases`` to fit from data, or
+    a fitted ``regressor`` and ``scaler`` to wrap an existing pipeline.
+
+    Parameters
+    ----------
+    regressor : object, optional
+            Fitted scikit-learn regressor or pipeline with ``predict``.
+    scaler : MinMaxScaler, optional
+            Fitted input scaler. Defaults to a fresh :class:`MinMaxScaler`.
+    modes : list[tuple[int, int]], optional
+            The ``(l, m)`` modes, in the column order of the targets.
+    training_params : np.ndarray, optional
+            Training feature matrix, shape ``(n_samples, n_features)``.
+    training_mode_phases : np.ndarray, optional
+            Training targets, shape ``(n_samples, n_modes)``.
+    n_components, gamma, ridge_alpha, random_state
+            As in :class:`TimeshiftsNN`.
+
+    Attributes
+    ----------
+    is_fitted : bool
+            ``True`` once the model is ready for :meth:`predict`.
+    """
+
+    DEFAULT_N_COMPONENTS = TimeshiftsNN.DEFAULT_N_COMPONENTS
+    DEFAULT_GAMMA = TimeshiftsNN.DEFAULT_GAMMA
+    DEFAULT_RIDGE_ALPHA = TimeshiftsNN.DEFAULT_RIDGE_ALPHA
+    DEFAULT_RANDOM_STATE = TimeshiftsNN.DEFAULT_RANDOM_STATE
+
+    def __init__(
+        self,
+        regressor=None,
+        scaler: Optional[MinMaxScaler] = None,
+        *,
+        modes: Optional[list] = None,
+        training_params: Optional[np.ndarray] = None,
+        training_mode_phases: Optional[np.ndarray] = None,
+        f0_natural: Optional[float] = None,
+        n_components: int = DEFAULT_N_COMPONENTS,
+        gamma: float = DEFAULT_GAMMA,
+        ridge_alpha: float = DEFAULT_RIDGE_ALPHA,
+        random_state: int = DEFAULT_RANDOM_STATE,
+    ):
+        self.regressor = regressor
+        self.scaler = scaler if scaler is not None else MinMaxScaler()
+        self.modes = modes
+        self.training_params = training_params
+        self.training_mode_phases = training_mode_phases
+        #: Frequency (natural units) at which the reference phase is
+        #: anchored. When set, the huge stationary-phase backbone
+        #: ``a * M_lm + b`` is subtracted analytically per mode and only
+        #: the smooth leftover is regressed. ``None`` -> plain regressor
+        #: on the raw targets (legacy behaviour / old pickles).
+        self.f0_natural = f0_natural
+        #: ``(l, m) -> (a, b, f0_natural)`` calibration of the analytic
+        #: backbone, populated by :meth:`fit` when ``f0_natural`` is set.
+        self.analytic_coeffs: dict = {}
+        self.n_components = n_components
+        self.gamma = gamma
+        self.ridge_alpha = ridge_alpha
+        self.random_state = random_state
+        self.is_fitted = regressor is not None
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.__dict__.setdefault("f0_natural", None)
+        self.__dict__.setdefault("analytic_coeffs", {})
+
+    def _analytic_prediction(self, params: np.ndarray) -> np.ndarray:
+        """``a * M_lm(params) + b`` per mode, shape ``(n_samples, n_modes)``."""
+        from .pn_modes import Mode, reference_phase_backbone
+
+        params = np.asarray(params, dtype=float)
+        columns = []
+        for lm in self.modes:
+            a, b, f0 = self.analytic_coeffs[lm]
+            m = reference_phase_backbone(params, f0, Mode(*lm))
+            columns.append(a * m + b)
+        return np.stack(columns, axis=1)
+
+    def fit(self) -> "ModePhasesNN":
+        """Fit the RFF + Ridge model on stored training data.
+
+        When ``f0_natural`` was given, each mode's target is first
+        reduced by an analytically-calibrated stationary-phase backbone
+        (``a * M_lm + b``, see
+        :func:`~mlgw_bns.pn_modes.reference_phase_backbone`) and the
+        regressor only learns the smooth ``O(10-100 rad)`` leftover.
+
+        Raises
+        ------
+        ValueError
+                If either ``training_params`` or ``training_mode_phases``
+                was not provided at construction time.
+        """
+        if self.training_params is None or self.training_mode_phases is None:
+            raise ValueError("Training data not provided.")
+
+        targets = np.asarray(self.training_mode_phases, dtype=float)
+
+        if self.f0_natural is not None:
+            from .pn_modes import Mode, reference_phase_backbone
+
+            params = np.asarray(self.training_params, dtype=float)
+            self.analytic_coeffs = {}
+            leftover = np.empty_like(targets)
+            for j, lm in enumerate(self.modes):
+                m = reference_phase_backbone(params, self.f0_natural, Mode(*lm))
+                a, b = np.polyfit(m, targets[:, j], 1)
+                self.analytic_coeffs[lm] = (float(a), float(b), float(self.f0_natural))
+                leftover[:, j] = targets[:, j] - (a * m + b)
+            targets = leftover
+
+        scaled_params = self.scaler.fit_transform(self.training_params)
+        self.regressor = TimeshiftsNN.make_rff_ridge_pipeline(
+            n_components=self.n_components,
+            gamma=self.gamma,
+            ridge_alpha=self.ridge_alpha,
+            random_state=self.random_state,
+        )
+        self.regressor.fit(scaled_params, targets)
+        self.is_fitted = True
+        return self
+
+    def predict(self, params: np.ndarray) -> np.ndarray:
+        """Predict per-mode reference phases, shape ``(n_samples, n_modes)``."""
+        if not self.is_fitted:
+            raise ValueError("Model is not fitted yet. Call 'fit' first.")
+
+        scaled_params = self.scaler.transform(params)
+        prediction = self.regressor.predict(scaled_params)
+        if self.analytic_coeffs:
+            prediction = prediction + self._analytic_prediction(params)
+        return prediction
+
+    def save_model(self, filename: str) -> None:
+        """Persist the entire object to ``filename`` via joblib."""
+        joblib.dump(self, filename)
+
+    @classmethod
+    def load_model(cls, filename: str) -> "ModePhasesNN":
+        """Load a previously saved :class:`ModePhasesNN`."""
+        model = joblib.load(filename)
+        if not isinstance(model, cls):
+            raise ValueError("Loaded model is not of the correct type.")
+        return model
+
+
+def load_mode_phases_predictor_from_file(
+    filename: Union[IO[bytes], str]
+) -> ModePhasesNN:
+    """Load a :class:`ModePhasesNN` checkpoint."""
+    model = joblib.load(filename)
+    if not isinstance(model, ModePhasesNN):
+        raise ValueError("Loaded object is not a ModePhasesNN.")
+    return model
+
+
 def load_timeshifts_predictor(
     nn_path: str,
     gpr_path: str,
