@@ -1344,15 +1344,19 @@ class Dataset:
         #     )
 
         # Take first 'size' valid results.
-        # The phase residual is kept in float64: with the per-mode
-        # `phase = -phase` convention it carries the full
-        # ``arg H_lm(f0)`` constant (~1e4-1e5 rad for the HOM), and a
-        # float32 cast here would stamp a ~5e-3 rad quantisation floor onto
-        # the training data before ``remove_linear_trend`` subtracts that
-        # constant back off.
+        #
+        # The phase residual and the parameter array are kept in float64.
+        # With the per-mode ``phase = -phase`` convention the phase residual
+        # carries the full ``arg H_lm(f0)`` constant (~1e4-1e6 rad for the
+        # HOM) until ``remove_linear_trend`` subtracts it, and the mode-phase
+        # predictor reproduces that constant from the parameters; a float32
+        # cast of either stamps a ~1e-3 rad floor onto the training data,
+        # and a float32 parameter array additionally makes the training-time
+        # anchor subtraction disagree with the float64 prediction added back
+        # at predict time. The amplitude residual is O(1), so float32.
         amp_residuals = np.array([r[0] for r in valid_results[:size]], dtype=np.float32)
         phi_residuals = np.array([r[1] for r in valid_results[:size]], dtype=np.float64)
-        parameter_array = np.array([r[2] for r in valid_results[:size]], dtype=np.float32)
+        parameter_array = np.array([r[2] for r in valid_results[:size]], dtype=np.float64)
 
         logging.info(
             "Generated %i valid residuals, using the first %i: "

@@ -750,11 +750,11 @@ class Model:
             phase_indices = self.mode_models[mode].downsampling_indices.phase_indices
             precomputed[mode] = (
                 dataset.frequencies[phase_indices],
-                dataset.parameter_set_cls(parameter_array.astype(np.float32)),
+                # float64 params + phase residual: see the dtype note in
+                # Dataset.generate_residuals. Amplitude residual is O(1).
+                dataset.parameter_set_cls(np.asarray(parameter_array, dtype=np.float64)),
                 Residuals(
                     amp_residuals[mode].astype(np.float32),
-                    # float64: still carries the ~1e5 rad arg H_lm constant
-                    # until remove_linear_trend subtracts it.
                     np.asarray(phase_residuals[mode], dtype=np.float64),
                 ),
             )
