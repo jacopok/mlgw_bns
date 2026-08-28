@@ -808,6 +808,56 @@ class UniformParameterGenerator(ParameterGenerator):
         )
 
 
+class SobolParameterGenerator(UniformParameterGenerator):
+    r"""Low-discrepancy analogue of :class:`UniformParameterGenerator`.
+
+    Draws :math:`(q, \Lambda_1, \Lambda_2, \chi_1, \chi_2)` from a Sobol
+    sequence scaled to the parameter ranges, so that the five-dimensional
+    box is covered far more evenly than by independent uniform draws --
+    the sample never leaves large empty pockets or tight clumps, which is
+    what limits a smooth regressor trained on the resulting dataset.
+
+    Same construction contract as :class:`UniformParameterGenerator`; the
+    ``seed`` is passed straight to :class:`scipy.stats.qmc.Sobol`.  Points
+    are produced in internally-buffered power-of-two blocks so the
+    sequence keeps its balance however many are requested.
+    """
+
+    _BLOCK_LOG2 = 10  # 1024 points per Sobol block
+
+    def __init__(
+        self,
+        dataset: Dataset,
+        parameter_ranges: ParameterRanges,
+        seed: Optional[int] = None,
+    ):
+        super().__init__(
+            dataset=dataset, parameter_ranges=parameter_ranges, seed=seed
+        )
+        from scipy.stats import qmc
+
+        self._lows = np.array(
+            [self.q_range[0], self.lambda1_range[0], self.lambda2_range[0],
+             self.chi1_range[0], self.chi2_range[0]]
+        )
+        self._highs = np.array(
+            [self.q_range[1], self.lambda1_range[1], self.lambda2_range[1],
+             self.chi1_range[1], self.chi2_range[1]]
+        )
+        self._sobol = qmc.Sobol(d=5, scramble=True, seed=seed)
+        self._buffer: np.ndarray = np.empty((0, 5))
+        self._cursor = 0
+
+    def __next__(self) -> WaveformParameters:
+        if self._cursor >= len(self._buffer):
+            unit = self._sobol.random_base2(self._BLOCK_LOG2)
+            self._buffer = self._lows + unit * (self._highs - self._lows)
+            self._cursor = 0
+        q, l1, l2, c1, c2 = self._buffer[self._cursor]
+        self._cursor += 1
+        return WaveformParameters(q, l1, l2, c1, c2, self.dataset)
+
+
 class Dataset:
     r"""Metadata for a dataset.
 
