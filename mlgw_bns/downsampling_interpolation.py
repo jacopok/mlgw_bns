@@ -87,12 +87,41 @@ class DownsamplingTraining(ABC):
         tol_amp: Optional[float] = 8e-4, # 8e-4
         tol_phi: Optional[float] = 3e-4, # was 5e-4; tightened for denser HOM phase nodes at the top edge
         n_jobs: int = 16,
+        max_phi_gap_ratio: Optional[float] = None,
     ):
         self.dataset = dataset
         self.tol = tol
         self.tol_amp = tol_amp if tol_amp is not None else tol
         self.tol_phi = tol_phi if tol_phi is not None else tol
         self.n_jobs = n_jobs
+        # If set, no two adjacent phase nodes are allowed to span more than
+        # this ratio in frequency: extra nodes are inserted geometrically
+        # to fill any wider gap. The greedy pass judges reconstruction of
+        # the *waveform* phase, which is locally linear at high frequency
+        # for the higher-order modes and so leaves 20-100 Hz holes there;
+        # the *residual* (which the PCA/network see) has a steep slope
+        # across such a hole. Capping the gap keeps the high-frequency band
+        # populated without switching the whole objective to residuals.
+        self.max_phi_gap_ratio = max_phi_gap_ratio
+
+    def fill_phi_gaps(
+        self, frequencies: np.ndarray, indices: list[int]
+    ) -> list[int]:
+        """Insert nodes so no adjacent pair spans > ``max_phi_gap_ratio``."""
+        if self.max_phi_gap_ratio is None or self.max_phi_gap_ratio <= 1.0:
+            return indices
+
+        ratio = self.max_phi_gap_ratio
+        ordered = sorted(set(indices))
+        filled = [ordered[0]]
+        for left, right in zip(ordered[:-1], ordered[1:]):
+            f_left, f_right = frequencies[left], frequencies[right]
+            if f_left > 0 and f_right / f_left > ratio:
+                n_extra = int(np.ceil(np.log(f_right / f_left) / np.log(ratio))) - 1
+                for target in np.geomspace(f_left, f_right, n_extra + 2)[1:-1]:
+                    filled.append(int(np.argmin(np.abs(frequencies - target))))
+            filled.append(right)
+        return sorted(set(filled))
 
     @abstractmethod
     def train(self, training_dataset_size: int) -> DownsamplingIndices:
@@ -432,6 +461,7 @@ class GreedyDownsamplingTraining(DownsamplingTraining):
         phi_indices = self.find_indices(
             frequencies, list(waveforms.phases), tol=self.tol_phi
         )
+        phi_indices = self.fill_phi_gaps(frequencies, phi_indices)
 
         return self.log_downsampling(
             DownsamplingIndices(amp_indices, phi_indices), len(frequencies)
