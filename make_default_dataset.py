@@ -41,7 +41,7 @@ def train(legacy: bool = False) -> None:
         nn_kind=SklearnNetwork if legacy else KernelRidgeNetwork,
         reference_amplitude=not legacy,
     )
-    model.generate(2**9, 2**13, 2**13)
+    model.generate(2**9, 2**13, 2**13, reference_dataset_size=2**13)
     model.set_hyper_and_train_nn()
     model.save(include_training_data=True)
 
