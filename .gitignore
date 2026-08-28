@@ -43,6 +43,7 @@ visualization/precessing_mismatches.npz
 retrain_systemd.log
 pathology_systemd.log
 pathology2.log
+retrain_default_hom.log
 
 # scratch diagnostics / exploratory plots
 *.png
