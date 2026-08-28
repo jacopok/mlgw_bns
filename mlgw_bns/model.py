@@ -753,7 +753,9 @@ class Model:
                 dataset.parameter_set_cls(parameter_array.astype(np.float32)),
                 Residuals(
                     amp_residuals[mode].astype(np.float32),
-                    phase_residuals[mode].astype(np.float32),
+                    # float64: still carries the ~1e5 rad arg H_lm constant
+                    # until remove_linear_trend subtracts it.
+                    np.asarray(phase_residuals[mode], dtype=np.float64),
                 ),
             )
         return precomputed
