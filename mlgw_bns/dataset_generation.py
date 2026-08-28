@@ -1343,9 +1343,15 @@ class Dataset:
         #         f"Increase oversample factor (currently {oversample})"
         #     )
 
-        # Take first 'size' valid results
+        # Take first 'size' valid results.
+        # The phase residual is kept in float64: with the per-mode
+        # `phase = -phase` convention it carries the full
+        # ``arg H_lm(f0)`` constant (~1e4-1e5 rad for the HOM), and a
+        # float32 cast here would stamp a ~5e-3 rad quantisation floor onto
+        # the training data before ``remove_linear_trend`` subtracts that
+        # constant back off.
         amp_residuals = np.array([r[0] for r in valid_results[:size]], dtype=np.float32)
-        phi_residuals = np.array([r[1] for r in valid_results[:size]], dtype=np.float32)
+        phi_residuals = np.array([r[1] for r in valid_results[:size]], dtype=np.float64)
         parameter_array = np.array([r[2] for r in valid_results[:size]], dtype=np.float32)
 
         logging.info(
