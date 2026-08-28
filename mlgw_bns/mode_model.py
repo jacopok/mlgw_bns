@@ -303,8 +303,15 @@ class ModeModel:
         self.dataset = self._make_dataset()
 
         if downsampling_training is None:
+            # For the higher-order modes, cap the frequency ratio between
+            # adjacent phase nodes so the high-frequency band (where the
+            # (4,4) waveform phase looks locally linear but its residual
+            # does not) stays populated.
             self.downsampling_training: DownsamplingTraining = (
-                GreedyDownsamplingTraining(self.dataset)
+                GreedyDownsamplingTraining(
+                    self.dataset,
+                    max_phi_gap_ratio=1.03 if mode is not None else None,
+                )
             )
         elif isinstance(downsampling_training, type) and issubclass(
             downsampling_training, DownsamplingTraining
