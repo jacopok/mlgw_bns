@@ -34,6 +34,7 @@ from typing import IO, Optional, Union
 
 import numpy as np
 from importlib.resources import files
+from joblib import Parallel, delayed
 from numba import njit, prange  # type: ignore
 
 from .data_management import Residuals
@@ -730,23 +731,33 @@ class Model:
         params_list = [next(parameter_generator) for _ in range(reference_dataset_size)]
         parameter_array = np.array([p.array for p in params_list], dtype=float)
 
+        n_points = len(f_ref_natural)
+
+        def _reference_phase_residual(generator, params):
+            """One EOB residual draw; None on any failure or bad shape."""
+            try:
+                result = generator.generate_residuals(params, f_ref_natural)
+            except Exception:  # pragma: no cover - EOB blowups
+                return None
+            if result is None or len(result[1]) != n_points:
+                return None
+            phase = np.asarray(result[1], dtype=float)
+            return phase if np.all(np.isfinite(phase)) else None
+
         keep = np.ones(reference_dataset_size, dtype=bool)
         phase_residuals: dict = {}
         for mode in self.modes:
             generator = self.mode_models[mode].waveform_generator
-            rows = np.full((reference_dataset_size, len(f_ref_natural)), np.nan)
-            for i, params in enumerate(params_list):
-                try:
-                    result = generator.generate_residuals(params, f_ref_natural)
-                except Exception as exc:  # pragma: no cover - EOB blowups
-                    logging.warning("Reference EOB failed for %s: %s", mode, exc)
-                    result = None
-                if result is None or not np.all(np.isfinite(result[1])):
+            rows_list = Parallel(n_jobs=16)(
+                delayed(_reference_phase_residual)(generator, params)
+                for params in params_list
+            )
+            rows = np.full((reference_dataset_size, n_points), np.nan)
+            for i, phase in enumerate(rows_list):
+                if phase is None:
                     keep[i] = False
-                elif len(result[1]) == len(f_ref_natural):
-                    rows[i] = result[1]
                 else:
-                    keep[i] = False
+                    rows[i] = phase
             phase_residuals[mode] = rows
 
         if keep.sum() < 2:
