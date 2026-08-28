@@ -335,99 +335,96 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
             hc_im[to_slice],
         )
 
+    def all_modes_amplitude_phase(
+        self,
+        params: WaveformParameters,
+        modes: Iterable[Mode],
+        frequencies: Optional[np.ndarray] = None,
+    ) -> Dict[Mode, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        r"""One TEOBResumS call, ``(f, amplitude, phase)`` for every requested mode.
+
+        TEOBResumS computes each :math:`(\ell, m)` multipole independently and
+        returns them all in a single ``hflm`` dict, so asking for several modes
+        at once costs one EOB evaluation instead of one per mode.
+
+        The ODE integration start is lowered by
+        :func:`initial_frequency_scaling` of the *whole set* (i.e. by the
+        highest-:math:`m` mode requested), so every mode has support across the
+        band; see :func:`start_integration_early`. This differs from calling
+        this method once per mode: e.g. asking for ``[(2,2),(4,4)]`` together
+        starts the ``(2,2)`` integration at half the frequency it would use on
+        its own. The per-mode ``hflm`` multipoles do not depend on
+        ``par_dict["inclination"]`` (only the summed polarizations do), so it is
+        left at the :meth:`~mlgw_bns.dataset_generation.WaveformParameters.teobresums`
+        default.
+
+        The phase convention matches :meth:`effective_one_body_waveform`:
+        aligned to the merger by :meth:`_align_mode_phase_to_merger` and
+        sign-flipped, keeping the additive ``arg H_lm(f0)`` constant for the
+        shared :class:`~mlgw_bns.neural_network.ModePhasesNN` to learn.
+
+        Returns
+        -------
+        dict[Mode, tuple[np.ndarray, np.ndarray, np.ndarray]]
+            ``mode -> (f_spa, amplitude, phase)``, each on the requested grid.
+        """
+        modes = list(modes)
+
+        par_dict: dict = params.teobresums()
+
+        to_slice = start_integration_early(par_dict, frequencies, modes)
+
+        par_dict["arg_out"] = "yes"
+        par_dict["use_mode_lm"] = [mode_to_k(mode) for mode in modes]
+
+        f_spa, _, _, _, _, hflm, htlm, dyn = self.eobrun_callable(par_dict)
+
+        f_spa = f_spa[to_slice]
+        merger_time = self._merger_time(dyn, htlm)
+
+        result: Dict[Mode, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+        for mode in modes:
+            key = str(mode_to_k(mode))
+            amplitude = hflm[key][0][to_slice] * params.eta
+            phase = self._align_mode_phase_to_merger(
+                hflm[key][1][to_slice], f_spa, merger_time
+            )
+            result[mode] = (f_spa, amplitude, -phase)
+        return result
+
     def get_amplitude_phase_at_inclination(
         self,
         params: WaveformParameters,
         frequencies: Optional[np.ndarray] = None,
         inclination: float = np.pi / 3,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return frequency, amplitude, and phase for this mode at fixed inclination.
+        """Frequency, amplitude and phase for this generator's single mode.
 
-        Used for per-mode extraction when building mode dicts for mismatch.
-
-        Parameters
-        ----------
-        params : WaveformParameters
-            Intrinsic and extrinsic source parameters.
-        frequencies : np.ndarray, optional
-            Frequency grid; if omitted, the generator default grid is used.
-        inclination : float
-            Inclination angle :math:`\\iota` passed to TEOBResumS.
-
-        Returns
-        -------
-        f_spa : np.ndarray
-            Frequency samples.
-        amplitude : np.ndarray
-            Mode amplitude.
-        phase : np.ndarray
-            Unwrapped mode phase.
+        Thin wrapper over :meth:`all_modes_amplitude_phase`. ``inclination``
+        is accepted for backwards compatibility but ignored: the per-mode
+        ``hflm`` multipoles do not depend on it.
         """
         assert self.mode is not None
-
-        par_dict: dict = params.teobresums()
-
-        to_slice = start_integration_early(par_dict, frequencies, [self.mode])
-
-        par_dict["arg_out"] = "yes"
-        par_dict["use_mode_lm"] = [mode_to_k(self.mode)]
-        par_dict["inclination"] = inclination
-
-        f_spa, hp_re, hp_im, _, _, hflm, htlm, dyn = self.eobrun_callable(par_dict)
-
-        hp = (hp_re - 1j * hp_im)[to_slice]
-        f_spa = f_spa[to_slice]
-
-        # _, phase = phase_unwrapping(hp)
-        phase = hflm[str(mode_to_k(self.mode))][1][to_slice]
-        amplitude = hflm[str(mode_to_k(self.mode))][0][to_slice] * params.eta
-        phase = self._align_mode_phase_to_merger(
-            phase, f_spa, self._merger_time(dyn, htlm)
-        )
-        # No per-mode node-0 anchor: the additive phase constant
-        # `arg H_lm` (aligned to merger) is kept, to be learned by the
-        # shared `ModePhasesNN` reference-phase regressor instead.
-        phase = -phase
-
-        return (f_spa, amplitude, phase)
+        return self.all_modes_amplitude_phase(params, [self.mode], frequencies)[
+            self.mode
+        ]
 
     def effective_one_body_waveform(
         self,
         params: WaveformParameters,
         frequencies: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``(f, amplitude, phase)`` for this generator's single mode.
+
+        Thin wrapper over :meth:`all_modes_amplitude_phase`; kept so that the
+        single-mode :class:`~mlgw_bns.dataset_generation.WaveformGenerator`
+        contract (used by ``Dataset.generate_residuals`` and every non-batched
+        caller) is unchanged.
+        """
         assert self.mode is not None
-
-        par_dict: dict = params.teobresums()
-
-        to_slice = start_integration_early(par_dict, frequencies, [self.mode])
-
-        par_dict["arg_out"] = "yes"
-        par_dict["use_mode_lm"] = [mode_to_k(self.mode)]
-
-        if self.mode == Mode(3, 3) or self.mode == Mode(2, 1) or self.mode == Mode(4, 4):
-            par_dict["inclination"] = np.pi / 2
-
-        # print(without_keys(par_dict, {"freqs"}))
-
-        f_spa, hp_re, hp_im, _, _, hflm, htlm, dyn = self.eobrun_callable(par_dict)
-
-        hp = (hp_re - 1j * hp_im)[to_slice]
-        # hc = (hc_re - 1j * hc_im)[to_slice]
-        # h = hp - 1j * hc
-        f_spa = f_spa[to_slice]
-
-        # _, phase = phase_unwrapping(hp)
-        amplitude = hflm[str(mode_to_k(self.mode))][0][to_slice] * params.eta
-        phase = hflm[str(mode_to_k(self.mode))][1][to_slice]
-        phase = self._align_mode_phase_to_merger(
-            phase, f_spa, self._merger_time(dyn, htlm)
-        )
-        # No per-mode node-0 anchor: keep the additive `arg H_lm` constant
-        # in the residual, for the shared `ModePhasesNN` to learn.
-        phase = -phase
-
-        return (f_spa, amplitude, phase)
+        return self.all_modes_amplitude_phase(params, [self.mode], frequencies)[
+            self.mode
+        ]
 
 
 def spherical_harmonic_spin_2(
