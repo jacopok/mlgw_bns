@@ -846,8 +846,8 @@ def reference_phase_backbone(
     parameters only through :math:`(\eta, \chi_1, \chi_2, \Lambda_1,
     \Lambda_2)` and not the total mass, because :math:`v = (\pi M f_{\rm
     Hz} T_\odot)^{1/3} = (\pi f_{\rm natural})^{1/3}`. The central
-    difference makes the result independent of the ``- phase[0]`` anchor
-    inside ``phase_5h_post_newtonian_tidal``.
+    difference makes the result independent of any additive constant in
+    ``phase_5h_post_newtonian_tidal`` (which is now returned un-anchored).
     """
     param_array = np.asarray(param_array, dtype=float)
     if param_array.ndim != 2 or param_array.shape[1] != 5:

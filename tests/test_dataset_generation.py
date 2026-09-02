@@ -163,6 +163,13 @@ def test_residuals_are_not_too_large(variable_parameters, teob_generator):
 
     length = len(amp_residuals)
 
+    # The EOB and PN phases are both sourced absolute (no anchor at f0), so the
+    # raw phase residual carries a large, nearly frequency-independent constant
+    # (the PN stationary-phase value at f0, ~1e4 rad). That constant is stripped
+    # downstream by `remove_linear_trend`; what has to be small is the residual
+    # *shape*, i.e. the residual referenced to its first node.
+    phi_residuals = phi_residuals - phi_residuals[0]
+
     # The residuals overall should be below a relatively loose bound
     assert np.all(abs(amp_residuals) < 10)
     assert np.all(abs(phi_residuals) < 300)
@@ -197,7 +204,11 @@ def test_true_waveforms_in_validation(dataset, parameters):
     )
 
     assert np.allclose(amp_direct, abs(cartesian_wf_from_polar))
+    # The phases are sourced absolute now, and the overall multiple of 2*pi is
+    # not recoverable from the complex waveform (np.angle folds it into
+    # [-pi, pi]); compare the phase relative to its first node.
+    phi_recomposed = np.unwrap(np.angle(cartesian_wf_from_polar))
     assert np.allclose(
-        phi_direct,
-        np.unwrap(np.angle(cartesian_wf_from_polar)),
+        phi_direct - phi_direct[0],
+        phi_recomposed - phi_recomposed[0],
     )

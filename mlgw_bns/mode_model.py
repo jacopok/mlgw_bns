@@ -1206,11 +1206,23 @@ class ModeModel:
                 intrinsic_params,
                 low_freqs,
             )
-            
+
+            # Glue the model-band phase onto the end of the low-frequency PN
+            # segment by matching the value at the connection frequency. The
+            # explicit `- resampled_phi[0]` makes this correct whether the PN
+            # phase is anchored at f0 or carries the absolute stationary-phase
+            # backbone (in which case a bare `+ low_f_phi[-1]` would double it).
             resampled_phi = np.concatenate((
                 low_f_phi[:-1],
-                resampled_phi[1:] + low_f_phi[-1]
+                resampled_phi[1:] - resampled_phi[0] + low_f_phi[-1]
             ))
+
+        # Anchor the phase to zero at the first node so that `reference_phase`
+        # continues to set the phase there. HOM models keep the per-mode
+        # constant restored by `_predicted_mode_phase0`, which carries the
+        # inter-mode alignment.
+        if self.mode_phases_predictor is None:
+            resampled_phi = resampled_phi - resampled_phi[0]
 
         if extend_hf:
             resampled_amp = np.concatenate((resampled_amp, np.zeros(hf_segment_length)))
@@ -1343,7 +1355,17 @@ class ModeModel:
             low_amp[mask] += smoothing_func(zero_to_one) * amp_diff
 
             resampled_amp = np.concatenate((low_amp[:-1], resampled_amp[1:]))
-            resampled_phi = np.concatenate((low_phi[:-1], resampled_phi[1:] + low_phi[-1]))
+            # See the note in `predict_amplitude_phase`: match at the connection
+            # frequency so this is correct for an absolute PN phase too.
+            resampled_phi = np.concatenate(
+                (low_phi[:-1], resampled_phi[1:] - resampled_phi[0] + low_phi[-1])
+            )
+
+        # Anchor to zero at the first node for non-HOM models so that
+        # `reference_phase` sets the phase there; HOM per-mode constants are
+        # kept (they carry the inter-mode alignment).
+        if self.mode_phases_predictor is None:
+            resampled_phi = resampled_phi - resampled_phi[0]
 
         # t8 = perf_counter()
 
