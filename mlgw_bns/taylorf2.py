@@ -886,4 +886,9 @@ def phase_5h_post_newtonian_tidal(
     # I use the convention h = h+ + i hx
     phase = -phi_5pn - phi_tidal - phi_qm
 
-    return phase - phase[0]
+    # Return the absolute stationary-phase phase, not anchored to zero at the
+    # first sample. This keeps the PN baseline consistent with the (equally
+    # un-anchored) EOB phase; the anchoring is done downstream by
+    # ``remove_linear_trend`` at training time and by re-zeroing the combined
+    # phase before ``reference_phase`` is applied at prediction time.
+    return phase

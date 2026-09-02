@@ -425,8 +425,12 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
 
         waveform = (rhpf - 1j * ihpf)[to_slice]
 
-        amplitude, phase = phase_unwrapping(waveform)
-        
+        # Do not anchor the phase at the first sample: keep the EOB baseline
+        # sourced the same (absolute) way as the PN one. The anchoring happens
+        # downstream (`remove_linear_trend` at training time, phase re-zeroing
+        # at prediction time).
+        amplitude, phase = phase_unwrapping(waveform, set_zero_at_start=False)
+
         return (f_spa, amplitude, phase)
 
 

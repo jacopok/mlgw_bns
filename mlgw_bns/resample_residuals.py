@@ -116,9 +116,12 @@ def compute_cartesian_waveform(
     """
 
     amp = amplitude_residuals * amp_pn
+    # `phi_pn` is the absolute stationary-phase phase; anchor it at the first
+    # node so `reference_phase` sets the phase there (and to avoid carrying a
+    # ~1e5 rad offset through `exp`).
     phi = (
         phi_residuals
-        + phi_pn
+        + (phi_pn - phi_pn[0])
         + reference_phase
         + (2 * np.pi * time_shift) * frequencies
     )
