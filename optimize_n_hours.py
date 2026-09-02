@@ -24,7 +24,9 @@ from mlgw_bns.mode_model import ModeModel
 from mlgw_bns.model import DEFAULT_MODES
 from mlgw_bns.neural_network import KernelRidgeNetwork
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+)
 
 #: Training waveforms per mode, matching HyperparameterOptimization.n_train_fixed.
 N_TRAIN = 2**13

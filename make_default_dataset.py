@@ -24,7 +24,9 @@ import logging
 from mlgw_bns.model import DEFAULT_MODES, MODELS_AVAILABLE, PRETRAINED_MODEL_FOLDER, Model
 from mlgw_bns.neural_network import KernelRidgeNetwork, SklearnNetwork
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+)
 
 #: Where training writes its output, relative to the current directory.
 TRAINING_BASENAME = MODELS_AVAILABLE[0]

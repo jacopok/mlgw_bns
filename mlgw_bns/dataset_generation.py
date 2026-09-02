@@ -13,9 +13,8 @@ import h5py
 import numpy as np
 from numpy.random import default_rng
 from joblib import Parallel, delayed
-from tqdm_joblib import tqdm_joblib
-from tqdm import tqdm  # type: ignore
 
+from .progress import joblib_progress
 from .data_management import (
     DownsamplingIndices,
     array_memory,
@@ -1329,7 +1328,7 @@ class Dataset:
                 pass
             return None
 
-        with tqdm_joblib(tqdm(desc="Generating residuals", total=n_generate)):
+        with joblib_progress("Generating residuals", n_generate):
             results = Parallel(n_jobs=n_jobs)(
                 delayed(generate_single)(p) for p in parameters
             )
@@ -1513,7 +1512,7 @@ class Dataset:
             )
             return amp[amp_indices], phi[phi_indices], par.array
 
-        with tqdm_joblib(tqdm(desc="Generating waveforms", total=len(waveform_param_list))):
+        with joblib_progress("Generating waveforms", len(waveform_param_list)):
             results = Parallel(n_jobs=n_jobs)(
                 delayed(generate_single)(par) for par in waveform_param_list
             )

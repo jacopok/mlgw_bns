@@ -39,6 +39,7 @@ from numba import njit, prange  # type: ignore
 
 from .data_management import Residuals
 from .dataset_generation import Dataset
+from .progress import joblib_progress
 from .higher_order_modes import (
     Mode,
     ModeGeneratorFactory,
@@ -738,6 +739,7 @@ class Model:
             dataset.frequencies,
             downsampling_indices_by_mode,
             amplitude_reference_by_mode,
+            progress_desc="PCA/NN training sweep",
         )
         if len(parameter_array) < size:
             logging.warning(
@@ -811,7 +813,7 @@ class Model:
         parameter_array = np.array([p.array for p in params_list], dtype=float)
 
         parameter_array, _, phase_residuals = self._multimode_mode_residuals(
-            params_list, f_ref_natural
+            params_list, f_ref_natural, progress_desc="Reference pre-pass sweep"
         )
 
         if len(parameter_array) < 2:
@@ -852,6 +854,7 @@ class Model:
         frequencies_natural: np.ndarray,
         downsampling_indices_by_mode: Optional[dict] = None,
         amplitude_reference_by_mode: Optional[dict] = None,
+        progress_desc: str = "Multi-mode EOB sweep",
     ):
         r"""One EOB call per parameter point, residuals for every mode.
 
@@ -876,6 +879,8 @@ class Model:
             Optional ``mode -> WaveformParameters`` for the fixed-reference
             amplitude normalisation (see
             :meth:`WaveformGenerator.generate_residuals`).
+        progress_desc
+            Label for the progress reporting of the parallel EOB sweep.
 
         Returns
         -------
@@ -930,7 +935,8 @@ class Model:
                 )
             return out
 
-        results = Parallel(n_jobs=16)(delayed(_one)(p) for p in params_list)
+        with joblib_progress(progress_desc, len(params_list)):
+            results = Parallel(n_jobs=16)(delayed(_one)(p) for p in params_list)
 
         keep = [i for i, r in enumerate(results) if r is not None]
         parameter_array = np.array(
