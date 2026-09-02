@@ -27,6 +27,7 @@ frequency_downsampling_histograms.py
 !mlgw_bns/data/*.h5
 !mlgw_bns/data/*.pkl
 !mlgw_bns/data/*.yaml
+mlgw_bns/data/*_arrays.h5
 .claude/settings.json
 visualization/*.png
 default_hom_l2_m1.yaml
@@ -44,6 +45,7 @@ retrain_systemd.log
 pathology_systemd.log
 pathology2.log
 retrain_default_hom.log
+retrain_default_hom_*.log
 
 # scratch diagnostics / exploratory plots
 *.png
