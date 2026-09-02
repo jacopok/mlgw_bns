@@ -204,8 +204,9 @@ class ValidateModel:
                 Mismatch for each waveform in the parameter set.
         """
         true_waveforms, valid_param_set = self.true_waveforms(param_set)
-        phase0_eob = np.copy(true_waveforms.phases)
-        true_waveforms.phases -= phase0_eob[:, 0].reshape(-1, 1)
+        # The EOB phase is left with its native value at f0 (not re-zeroed),
+        # so that the per-mode reference-phase regression can be judged
+        # against a truth that still carries an absolute phase there.
 
         predicted_waveforms = self.model.predict_waveforms_bulk(valid_param_set, nn)
 
@@ -372,8 +373,8 @@ class ValidateModel:
             true_waveforms, valid_param_set = self.true_waveforms(self.parameter_set)
             # Use filtered params for the subsequent prediction step.
             self.parameter_set = valid_param_set
-            phase0_eob = np.copy(true_waveforms.phases)
-            true_waveforms.phases -= phase0_eob[:, 0].reshape(-1, 1)
+            # EOB phase left with its native f0 value (not re-zeroed): the
+            # per-mode reference-phase regression is meant to reproduce it.
 
         if zero_residuals:
             predicted_waveforms = self.post_newtonian_waveforms(self.parameter_set)
@@ -431,8 +432,8 @@ class ValidateModel:
         if true_waveforms is None:
             true_waveforms, valid_param_set = self.true_waveforms(self.parameter_set)
             self.parameter_set = valid_param_set
-            phase0_eob = np.copy(true_waveforms.phases)
-            true_waveforms.phases -= phase0_eob[:, 0].reshape(-1, 1)
+            # EOB phase left with its native f0 value (not re-zeroed): the
+            # per-mode reference-phase regression is meant to reproduce it.
 
         if zero_residuals:
             predicted_waveforms = self.post_newtonian_waveforms(self.parameter_set)
