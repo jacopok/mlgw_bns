@@ -90,6 +90,54 @@ def initial_frequency_scaling(modes: Iterable[Mode]) -> float:
     return min(1.0, 2.0 / max(mode.m for mode in modes))
 
 
+def srate_interp_scaling(modes: Iterable[Mode]) -> float:
+    r"""Factor by which the TEOBResumS ``srate_interp`` must be raised so that
+    the stationary-phase-approximation band ceiling covers every requested mode.
+
+    TEOBResumS's :c:func:`SPA` routine computes the native (chirping) SPA phase
+    only up to ``srate_interp / 2``; above the mode's attachment (merger)
+    frequency it prolongs the phase *linearly* in :math:`f`. That continuation
+    is :math:`C^1` but not :math:`C^2` -- it kills the :math:`\mathrm{d}^2
+    \Psi/\mathrm{d} f^2 = 2\pi/\dot F` curvature of the real SPA -- so the join
+    is a curvature kink which the subsequent cubic-spline regrid turns into a
+    localised oscillation in the output phase.
+
+    ``srate_interp`` is tuned to the :math:`(2,2)` band, i.e. its Nyquist sits
+    near the :math:`(2,2)` merger. The :math:`(\ell, m)` mode chirps at
+    :math:`m/2` times the orbital rate, so its merger frequency is
+    :math:`\sim (m/2) f^{22}_{\text{merger}}`, which for :math:`m > 2` lands
+    *inside* the requested band -- putting the kink, and its spline ringing, in
+    the data we keep. Raising ``srate_interp`` by :math:`m_{\text{max}}/2`
+    pushes the ceiling (and the linear tail) back above the band for every
+    mode, matching the treatment the :math:`(2,2)` already gets.
+
+    Capped below at 1 (never lower the sample rate).
+
+    Parameters
+    ----------
+    modes : Iterable[Mode]
+        Modes which will be generated with this parameter dictionary.
+
+    Returns
+    -------
+    float
+        Multiplicative factor to apply to ``srate_interp``.
+
+    Examples
+    --------
+    >>> srate_interp_scaling([Mode(2, 2)])
+    1.0
+    >>> srate_interp_scaling([Mode(2, 1)])
+    1.0
+    >>> srate_interp_scaling([Mode(3, 3)])
+    1.5
+    >>> srate_interp_scaling([Mode(2, 2), Mode(4, 4)])
+    2.0
+    """
+
+    return max(1.0, max(mode.m for mode in modes) / 2.0)
+
+
 def start_integration_early(
     par_dict: dict,
     frequencies: Optional[np.ndarray],
@@ -122,7 +170,8 @@ def start_integration_early(
     par_dict : dict
         TEOBResumS parameter dictionary, as returned by
         :meth:`WaveformParameters.teobresums`. Modified in-place: the
-        ``initial_frequency`` is lowered, and if ``frequencies`` is given the
+        ``initial_frequency`` is lowered, ``srate_interp`` is raised (see
+        :func:`srate_interp_scaling`), and if ``frequencies`` is given the
         ``df`` key is replaced by ``interp_freqs`` and ``freqs``.
     frequencies : np.ndarray, optional
         Frequencies (natural units) at which the waveform is required.
@@ -144,6 +193,11 @@ def start_integration_early(
 
     new_f0 = f_0 * initial_frequency_scaling(modes) - delta_f * n_additional
     par_dict["initial_frequency"] = new_f0
+
+    # Raise the SPA band ceiling so the C1-but-not-C2 linear phase tail (and its
+    # cubic-spline ringing) stays above the requested band for every mode, not
+    # just the (2,2); see :func:`srate_interp_scaling`.
+    par_dict["srate_interp"] *= srate_interp_scaling(modes)
 
     if frequencies is not None:
         par_dict["freqs"] = list(
