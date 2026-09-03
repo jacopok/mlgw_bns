@@ -4,9 +4,10 @@ multi-mode waveform reconstruction.
 
 Three things are produced:
 
-1. **mlgw-EOB residuals**, per mode: the amplitude ratio
-   ``A_mlgw / A_EOB``, and two views of the phase error --- one with the
-   surrogate's *predicted* merger time shift applied (constant removed),
+1. **mlgw-EOB residuals**, per mode: the fractional amplitude error
+   ``2 (A_mlgw - A_EOB) / (|A_mlgw| + |A_EOB|)`` (bounded through the
+   odd-m amplitude nodes), and two views of the phase error --- one with
+   the surrogate's *predicted* merger time shift applied (constant removed),
    one with the best-fit linear-in-frequency term removed by least
    squares. The EOB phase is kept with its native value at ``f_0``. If
    the first phase row is much larger than the second, the time/phase
@@ -145,7 +146,11 @@ def mlgw_eob_residuals(validator: ValidateModel, n_waveforms: int):
     amplitude_frequencies_hz, phase_frequencies_hz : np.ndarray
         Frequencies of the amplitude / phase sample points, in Hz.
     amplitude_residuals : np.ndarray
-        ``A_mlgw / A_EOB``, shape ``(n_waveforms, n_amp_points)``.
+        ``2 (A_mlgw - A_EOB) / (|A_mlgw| + |A_EOB|)``, shape
+        ``(n_waveforms, n_amp_points)``. This is the fractional amplitude
+        error for small errors, but stays bounded to ``[-2, 2]`` through
+        the amplitude nodes of the odd-m modes, where ``A_EOB`` passes
+        through zero and a plain ratio would diverge.
     phase_residuals_regressed : np.ndarray
         Shape ``(n_waveforms, n_phase_points)``, see above.
     phase_residuals_detrended : np.ndarray
@@ -168,8 +173,11 @@ def mlgw_eob_residuals(validator: ValidateModel, n_waveforms: int):
         .reshape(-1, 1)
     )
 
-    amplitude_residuals = (
-        predicted_waveforms.amplitudes / true_waveforms.amplitudes
+    amplitude_residuals = 2 * (
+        predicted_waveforms.amplitudes - true_waveforms.amplitudes
+    ) / (
+        np.abs(predicted_waveforms.amplitudes)
+        + np.abs(true_waveforms.amplitudes)
     )
 
     phase_residuals = predicted_waveforms.phases - true_waveforms.phases
@@ -203,7 +211,9 @@ def plot_residuals(model: Model) -> dict:
 
     Three rows:
 
-    1. the amplitude ratio ``A_mlgw / A_EOB``;
+    1. ``2 (A_mlgw - A_EOB) / (|A_mlgw| + |A_EOB|)`` --- the fractional
+       amplitude error, bounded to ``[-2, 2]`` through the odd-m modes'
+       amplitude nodes;
     2. ``(phi_mlgw + predicted time shift) - phi_EOB``, overall constant
        removed --- the frequency-dependent phase error left once the
        surrogate's own time/phase predictors have run. Large values here
@@ -241,9 +251,12 @@ def plot_residuals(model: Model) -> dict:
             axes[2, i].plot(phi_f, phi_det[j], color=color, alpha=0.6, linewidth=0.8)
 
         axes[0, i].set_title(rf"$(\ell, m) = ({mode.l}, {mode.m})$")
+        axes[0, i].set_ylim(-2.1, 2.1)
         axes[2, i].set_xlabel("$f$ [Hz]")
 
-    axes[0, 0].set_ylabel(r"$A_{\rm mlgw} / A_{\rm EOB}$")
+    axes[0, 0].set_ylabel(
+        r"$2 (A_{\rm mlgw} - A_{\rm EOB}) / (|A_{\rm mlgw}| + |A_{\rm EOB}|)$"
+    )
     axes[1, 0].set_ylabel(
         r"$(\phi_{\rm mlgw} + \Delta t_{\rm pred}) - \phi_{\rm EOB}$,"
         "\nconstant removed [rad]"
@@ -253,13 +266,12 @@ def plot_residuals(model: Model) -> dict:
         "\nbest-fit linear term removed [rad]"
     )
 
-    # The amplitude row holds a ratio, so its "no error" line sits at 1;
-    # the two phase rows are differences, so theirs sit at 0.
-    for reference, ax_row in zip([1.0, 0.0, 0.0], axes):
+    # Every row is now a difference, so its "no error" line sits at 0.
+    for ax_row in axes:
         for ax in ax_row:
             ax.grid(True)
             ax.set_xscale("log")
-            ax.axhline(reference, color="black", linewidth=0.8, linestyle="--")
+            ax.axhline(0.0, color="black", linewidth=0.8, linestyle="--")
 
     sm = plt.cm.ScalarMappable(
         cmap=cmap, norm=plt.Normalize(vmin=q_min, vmax=q_max)
