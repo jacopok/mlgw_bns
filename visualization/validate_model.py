@@ -46,6 +46,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 
+from mlgw_bns.data_management import Residuals
+from mlgw_bns.dataset_generation import ParameterSet
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.mode_model import ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
@@ -62,10 +64,24 @@ OUTPUT_PREFIX = "validation"
 MODES = [Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
 
 N_RESIDUAL_WAVEFORMS = 40
-N_MISMATCH_WAVEFORMS = 1000
-N_FULL_WAVEFORM_MISMATCHES = 1000
+N_MISMATCH_WAVEFORMS = 100
+N_FULL_WAVEFORM_MISMATCHES = 100
+N_PREDICTOR_VALIDATION_WAVEFORMS = 1000
 
 SEED = 17
+#: Seed for the time-shift/mode-phases predictor validation: deliberately
+#: different from ``SEED`` (and from whatever seed ``Model.generate`` used
+#: for its reference pre-pass) so the comparison is against fresh data,
+#: not a resampling of whatever the predictors were fit on.
+PREDICTOR_VALIDATION_SEED = 4004
+
+#: Defaults mirroring ``Model.generate``'s reference pre-pass (see
+#: ``Model._train_reference_predictors``): the coarse grid the time-shift
+#: and mode-phases predictors were actually fit on. Not persisted on the
+#: model itself, so validating against "the same grid" means assuming the
+#: caller used these defaults (true for ``make_default_dataset.py``).
+REFERENCE_GRID_POINTS = 64
+REFERENCE_FMAX_HZ = 512.0
 
 # Extrinsic parameters used for the full-waveform reconstruction; the
 # intrinsic ones are drawn from the training distribution.
@@ -120,20 +136,97 @@ def load_model(filename: str = None) -> Model:
     return model
 
 
-def mlgw_eob_residuals(validator: ValidateModel, n_waveforms: int):
+def batched_true_waveforms(model: Model, mode: Mode, parameter_set):
+    r"""EOB ground truth for one mode, generated with *all* modes requested.
+
+    ``ValidateModel.true_waveforms`` (and :meth:`Model.get_teob_modes_dict`)
+    generate ground truth one mode at a time, via
+    :meth:`~mlgw_bns.higher_order_modes.TEOBResumSModeGenerator.effective_one_body_waveform`.
+    But :meth:`~mlgw_bns.higher_order_modes.TEOBResumSModeGenerator.all_modes_amplitude_phase`
+    lowers the ODE integration start frequency to match the *highest-m*
+    mode in the request (see ``start_integration_early``), so a single-mode
+    call integrates from a later starting point than a batched
+    ``model.modes``-wide call would. That changes the merger-aligned
+    absolute phase by a large amount (many extra low-frequency GW cycles),
+    and is exactly the discrepancy tracked as ``[[batched-multimode-eob]]``.
+
+    The model's ``time_shifts_predictor``/``mode_phases_predictor`` were
+    *trained* on the batched convention (``Model._train_reference_predictors``
+    uses ``Model._multimode_mode_residuals``, which requests every mode at
+    once). So comparing them against a single-mode-generated ground truth
+    compares against the wrong absolute phase reference entirely --- this
+    function instead reproduces the batched convention, one EOB call (for
+    every mode in ``model.modes`` together) per parameter point, exactly
+    like the training path.
+
+    Returns
+    -------
+    true_amplitudes, true_phases : np.ndarray
+        Shape ``(n_valid, n_amp_points)`` / ``(n_valid, n_phase_points)``,
+        at ``mode``'s own downsampling indices.
+    parameter_set : ParameterSet
+        Filtered to the waveforms for which the EOB call succeeded.
+    """
+    mode_model = model.mode_models[mode]
+    downsampling = mode_model.downsampling_indices
+    frequencies_natural = mode_model.dataset.frequencies
+    generator = mode_model.waveform_generator
+
+    waveform_params_list = parameter_set.waveform_parameters(mode_model.dataset)
+
+    valid_indices = []
+    true_amp_list = []
+    true_phase_list = []
+    for j, wp in enumerate(waveform_params_list):
+        try:
+            batched = generator.all_modes_amplitude_phase(
+                wp, model.modes, frequencies_natural
+            )
+            _, amp_full, phase_full = batched[mode]
+        except Exception:  # pragma: no cover - EOB blowups
+            continue
+        if len(amp_full) != len(frequencies_natural) or not (
+            np.all(np.isfinite(amp_full)) and np.all(np.isfinite(phase_full))
+        ):
+            continue
+        valid_indices.append(j)
+        true_amp_list.append(amp_full[downsampling.amplitude_indices])
+        true_phase_list.append(phase_full[downsampling.phase_indices])
+
+    if len(valid_indices) < 2:
+        raise RuntimeError(
+            "The batched EOB sweep produced fewer than 2 valid waveforms; "
+            "try a larger n_waveforms."
+        )
+
+    if len(valid_indices) != len(waveform_params_list):
+        parameter_set = parameter_set[valid_indices]
+
+    return np.stack(true_amp_list), np.stack(true_phase_list), parameter_set
+
+
+def mlgw_eob_residuals(model: Model, mode: Mode, n_waveforms: int):
     r"""Return the mlgw-vs-EOB amplitude and phase residuals for one mode.
 
     Both waveform sets are taken in the model's own downsampled
-    amplitude/phase representation. The EOB phase is kept with its native
-    value at :math:`f_0` (not re-zeroed), so the two phase residuals below
-    are on the same footing as the residuals plot's two rows:
+    amplitude/phase representation. The ground truth comes from
+    :func:`batched_true_waveforms`, not a single-mode EOB call (see its
+    docstring for why: the time-shift/mode-phases predictors are trained
+    against the batched-EOB-call convention, and comparing against a
+    single-mode-generated ground truth compares against the wrong absolute
+    phase reference). The EOB phase is kept with its native value at
+    :math:`f_0` (not re-zeroed), so the two phase residuals below are on
+    the same footing as the residuals plot's two rows:
 
     * ``phase_residuals_regressed`` --- ``phi_mlgw`` with the *predicted*
-      merger time shift added, minus ``phi_EOB``, with the overall
-      constant removed (a global reference phase is marginalised in every
-      mismatch). What is left is the frequency-dependent error the
-      surrogate actually contributes once its own predictors have run;
-      if this is large, the time/phase predictors are not doing their job.
+      merger time shift and the *predicted* per-mode reference-phase
+      constant (``a * M_lm + b``, from the shared ``ModePhasesNN``, for
+      HOM models) both added, minus ``phi_EOB``. What is left is the
+      frequency-dependent error the surrogate actually contributes once
+      every one of its own predictors has run; if this is large, the
+      time/phase predictors are not doing their job. For non-HOM models
+      (no mode-phases predictor), an empirical median is subtracted
+      instead, since there is no reference-phase prediction to add back.
     * ``phase_residuals_detrended`` --- ``phi_mlgw - phi_EOB`` with its
       best-fit linear-in-frequency term removed by least squares. A purely
       linear residual is only a time-shift error, which a mismatch
@@ -158,13 +251,17 @@ def mlgw_eob_residuals(validator: ValidateModel, n_waveforms: int):
     parameter_set : ParameterSet
         The (filtered) parameters these residuals correspond to.
     """
+    mode_model = model.mode_models[mode]
+    validator = SharedTimeshiftValidateModel(mode_model, model.time_shifts_predictor)
     parameter_set = validator.param_set(n_waveforms, SEED)
 
-    true_waveforms, parameter_set = validator.true_waveforms(parameter_set)
+    true_amplitudes, true_phases, parameter_set = batched_true_waveforms(
+        model, mode, parameter_set
+    )
     predicted_waveforms = validator.predicted_waveforms(parameter_set)
 
-    downsampling = validator.model.downsampling_indices
-    frequencies_hz = validator.model.dataset.frequencies_hz
+    downsampling = mode_model.downsampling_indices
+    frequencies_hz = mode_model.dataset.frequencies_hz
     phase_freqs = frequencies_hz[downsampling.phase_indices]
 
     time_shifts = (
@@ -174,20 +271,54 @@ def mlgw_eob_residuals(validator: ValidateModel, n_waveforms: int):
     )
 
     amplitude_residuals = 2 * (
-        predicted_waveforms.amplitudes - true_waveforms.amplitudes
+        predicted_waveforms.amplitudes - true_amplitudes
     ) / (
         np.abs(predicted_waveforms.amplitudes)
-        + np.abs(true_waveforms.amplitudes)
+        + np.abs(true_amplitudes)
     )
 
-    phase_residuals = predicted_waveforms.phases - true_waveforms.phases
+    phase_residuals = predicted_waveforms.phases - true_phases
 
-    phase_residuals_regressed = phase_residuals + (
-        2 * np.pi * (phase_freqs - phase_freqs[0]) * time_shifts
-    )
-    phase_residuals_regressed -= np.median(
-        phase_residuals_regressed, axis=1, keepdims=True
-    )
+    # `predicted_waveforms` comes from `predict_waveforms_bulk`, which
+    # recomposes the NN's residual plus the PN phase directly and so
+    # never adds back the per-mode reference-phase constant that
+    # `ModeModel.predict_amplitude_phase` restores via
+    # `_predicted_mode_phase0` (`a * M_lm + b`, predicted by the shared
+    # `ModePhasesNN` --- see `[[hom-per-mode-phase-anchor]]`), nor the
+    # time-shift term. Rather than reconstruct those by hand (error-prone:
+    # the phase0 constant is per-mode-scaled and easy to get the sign or
+    # magnitude of wrong), call the model's own
+    # `predict_amplitude_phase` --- the exact production code path ---
+    # at the training total mass, which applies both correctly.
+    if mode_model.mode_phases_predictor is not None:
+        waveform_params_list = parameter_set.waveform_parameters(mode_model.dataset)
+        predicted_full_phases = np.empty_like(phase_residuals)
+        for j, wp in enumerate(waveform_params_list):
+            extrinsic_params = ParametersWithExtrinsic(
+                mass_ratio=wp.mass_ratio,
+                lambda_1=wp.lambda_1,
+                lambda_2=wp.lambda_2,
+                chi_1=wp.chi_1,
+                chi_2=wp.chi_2,
+                distance_mpc=1.0,
+                inclination=0.0,
+                total_mass=mode_model.dataset.total_mass,
+            )
+            _, predicted_full_phases[j] = mode_model.predict_amplitude_phase(
+                phase_freqs, extrinsic_params
+            )
+        phase_residuals_regressed = predicted_full_phases - true_phases
+    else:
+        # Non-HOM models re-zero the phase at f0 (no phase0 predictor to
+        # restore), so only the time shift needs to be added back by hand;
+        # an empirical median stands in for the (here, genuinely absent)
+        # reference-phase constant.
+        phase_residuals_regressed = phase_residuals + (
+            2 * np.pi * (phase_freqs - phase_freqs[0]) * time_shifts
+        )
+        phase_residuals_regressed -= np.median(
+            phase_residuals_regressed, axis=1, keepdims=True
+        )
 
     phase_residuals_detrended = np.empty_like(phase_residuals)
     for j in range(len(phase_residuals)):
@@ -235,11 +366,8 @@ def plot_residuals(model: Model) -> dict:
     residuals_by_mode = {}
 
     for i, mode in enumerate(MODES):
-        validator = SharedTimeshiftValidateModel(
-            model.mode_models[mode], model.time_shifts_predictor
-        )
         amp_f, phi_f, amp_res, phi_reg, phi_det, param_set = mlgw_eob_residuals(
-            validator, N_RESIDUAL_WAVEFORMS
+            model, mode, N_RESIDUAL_WAVEFORMS
         )
         residuals_by_mode[mode] = (amp_f, phi_f, amp_res, phi_reg, phi_det)
 
@@ -290,7 +418,11 @@ def plot_residuals(model: Model) -> dict:
     return residuals_by_mode
 
 
-def predicted_shift_mismatches(validator: ValidateModel, n_waveforms: int):
+def predicted_shift_mismatches(
+    validator: ValidateModel,
+    n_waveforms: int,
+    parameter_set=None,
+):
     r"""Single-mode mismatch with the *predicted* merger time shift applied.
 
     Unlike :meth:`ValidateModel.validation_mismatches`, no residual time
@@ -299,8 +431,14 @@ def predicted_shift_mismatches(validator: ValidateModel, n_waveforms: int):
     :math:`|\cdot|` in the overlap). This is the mismatch counterpart of
     the residuals plot's middle row --- it says how good the model is
     once its predictors have run, with nothing optimised afterwards.
+
+    ``parameter_set``, if given, is used instead of drawing
+    ``n_waveforms`` fresh ones (``n_waveforms`` is then ignored) --- used
+    by :func:`mismatch_vs_power_by_mode` to pair this up with a specific
+    already-drawn sample.
     """
-    parameter_set = validator.param_set(n_waveforms, SEED)
+    if parameter_set is None:
+        parameter_set = validator.param_set(n_waveforms, SEED)
     true_waveforms, parameter_set = validator.true_waveforms(parameter_set)
     predicted_waveforms = validator.predicted_waveforms(parameter_set)
 
@@ -322,13 +460,27 @@ def predicted_shift_mismatches(validator: ValidateModel, n_waveforms: int):
     weight = np.gradient(validator.frequencies) / validator.psd_values
 
     def inner(a, b):
-        return np.abs(np.sum(np.conj(a) * b * weight, axis=-1))
+        return np.sum(np.conj(a) * b * weight, axis=-1).real
 
     overlap = inner(true_cartesian, predicted_cartesian) / np.sqrt(
         inner(true_cartesian, true_cartesian)
         * inner(predicted_cartesian, predicted_cartesian)
     )
     return 1.0 - overlap
+
+
+def optimised_mismatches(validator: ValidateModel, parameter_set):
+    r"""Single-mode mismatch for a given parameter set, residual time+phase
+    marginalised --- i.e. the same computation as
+    ``validator.validation_mismatches(..., include_time_shifts=True)``, but
+    for an already-drawn ``parameter_set`` rather than one it draws itself.
+    Used by :func:`mismatch_vs_power_by_mode` to pair this up with a
+    specific sample.
+    """
+    true_waveforms, parameter_set = validator.true_waveforms(parameter_set)
+    predicted_waveforms = validator.predicted_waveforms(parameter_set)
+    validator._apply_predicted_time_shifts(predicted_waveforms, parameter_set)
+    return validator.mismatch_array(true_waveforms, predicted_waveforms), parameter_set
 
 
 def per_mode_mismatches(model: Model) -> dict:
@@ -451,6 +603,314 @@ def full_waveform_mismatches(model: Model) -> tuple:
         f"worst {np.max(mismatches):.3e}"
     )
     return mismatches, power_fractions
+
+
+def mismatch_vs_power_by_mode(model: Model, n_waveforms: int = N_FULL_WAVEFORM_MISMATCHES) -> dict:
+    r"""Per-mode, per-sample mismatch paired with that mode's power share.
+
+    The power fraction needs the full multi-mode Cartesian reconstruction
+    (:meth:`Model.predict_modes_dict` and :meth:`Model.get_teob_modes_dict`),
+    since it is a ratio of one mode's power to the summed waveform's. But
+    those two methods disagree on the *absolute* merger-time convention
+    (:meth:`Model.get_teob_modes_dict` keeps TEOBResumS's native phase,
+    while the surrogate's reconstruction is built up in a different,
+    pre-aligned frame) by an amount that swamps any single-mode mismatch
+    unless it is optimised away --- which is exactly what
+    :func:`full_waveform_mismatches` already does for the full waveform via
+    ``max_delta_t=0.07``. A per-mode mismatch computed directly from these
+    two dicts would therefore mostly measure that irrelevant offset, not
+    the surrogate's quality.
+
+    So instead, for each sampled waveform, the per-mode mismatches
+    (``optimised`` and ``regressed``) are computed exactly as
+    :func:`per_mode_mismatches` computes them --- via each mode's
+    :class:`SharedTimeshiftValidateModel`, ``optimised`` using the same
+    routine as ``validation_mismatches(..., include_time_shifts=True)``
+    and ``regressed`` calling :func:`predicted_shift_mismatches` --- just
+    for one already-drawn parameter set at a time, so each mismatch can be
+    paired with that same sample's power fraction.
+
+    ``power_fraction`` is :math:`(h_{\ell m}|h_{\ell m}) / (h|h)`, taking
+    the *maximum* of the fraction computed from the EOB waveform and from
+    the mlgw-predicted one (either can be the more informative one, e.g.
+    if the surrogate over- or under-predicts a mode's amplitude relative
+    to truth).
+
+    Returns
+    -------
+    dict[Mode, dict[str, np.ndarray]]
+        ``{mode: {"power_fraction": ..., "optimised": ..., "regressed": ...}}``.
+    """
+    validators = {
+        mode: SharedTimeshiftValidateModel(
+            model.mode_models[mode], model.time_shifts_predictor
+        )
+        for mode in MODES
+    }
+    power_validator = ValidateModel(model.mode_models[Mode(2, 2)])
+    frequencies = power_validator.frequencies
+
+    parameter_generator = model.dataset.make_parameter_generator(SEED)
+
+    def power(a: np.ndarray, mask: np.ndarray) -> float:
+        """PSD-weighted power of a complex waveform over the support."""
+        weight = np.gradient(frequencies[mask]) / power_validator.psd_values[mask]
+        return float(np.abs(np.sum(np.conj(a[mask]) * a[mask] * weight)))
+
+    results: dict = {
+        mode: {"power_fraction": [], "optimised": [], "regressed": []}
+        for mode in MODES
+    }
+
+    for _ in range(n_waveforms):
+        intrinsic = next(parameter_generator)
+        params = ParametersWithExtrinsic(
+            mass_ratio=intrinsic.mass_ratio,
+            lambda_1=intrinsic.lambda_1,
+            lambda_2=intrinsic.lambda_2,
+            chi_1=intrinsic.chi_1,
+            chi_2=intrinsic.chi_2,
+            distance_mpc=DISTANCE_MPC,
+            inclination=INCLINATION,
+            total_mass=TOTAL_MASS,
+        )
+
+        predicted = model.predict_modes_dict(frequencies, params)
+        true = model.get_teob_modes_dict(frequencies, params)
+
+        support = np.ones(len(frequencies), dtype=bool)
+        for mode_array in true.values():
+            support &= np.abs(mode_array) > 0
+        if support.sum() < 2:
+            continue
+
+        total_power_true = power(sum(true.values()), support)
+        total_power_pred = power(sum(predicted.values()), support)
+        if total_power_true <= 0 or total_power_pred <= 0:
+            continue
+
+        parameter_set = ParameterSet.from_list_of_waveform_parameters([intrinsic])
+
+        for mode in MODES:
+            key = (mode.l, mode.m)
+            if key not in true or key not in predicted:
+                continue
+
+            power_true = power(true[key], support) / total_power_true
+            power_pred = power(predicted[key], support) / total_power_pred
+            power_fraction = max(power_true, power_pred)
+
+            validator = validators[mode]
+            optimised_array, valid_param_set = optimised_mismatches(
+                validator, parameter_set
+            )
+            if valid_param_set.parameter_array.shape[0] == 0:
+                continue
+            regressed_array = predicted_shift_mismatches(
+                validator, 1, parameter_set=valid_param_set
+            )
+
+            results[mode]["power_fraction"].append(power_fraction)
+            results[mode]["optimised"].append(optimised_array[0])
+            results[mode]["regressed"].append(regressed_array[0])
+
+    return {
+        mode: {key: np.array(values) for key, values in per_mode.items()}
+        for mode, per_mode in results.items()
+    }
+
+
+def plot_mismatch_vs_power(data: dict) -> None:
+    r"""Scatter mismatch against per-mode power fraction, colored by mode.
+
+    ``data`` is the output of :func:`mismatch_vs_power_by_mode`. Optimised
+    points (residual time+phase marginalised) are drawn with transparency;
+    regressed points (predicted time shift, phase marginalised) are drawn
+    in full color, so the two clouds for a given mode are visually
+    distinguishable while sharing that mode's color.
+    """
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    for mode, color in zip(
+        MODES, plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    ):
+        per_mode = data[mode]
+        if not len(per_mode["power_fraction"]):
+            continue
+        label = rf"$(\ell, m) = ({mode.l}, {mode.m})$"
+        ax.scatter(
+            per_mode["power_fraction"],
+            per_mode["optimised"],
+            color=color,
+            alpha=0.25,
+            s=14,
+            marker="o",
+            linewidths=0,
+        )
+        ax.scatter(
+            per_mode["power_fraction"],
+            per_mode["regressed"],
+            color=color,
+            alpha=1.0,
+            s=14,
+            marker="o",
+            linewidths=0,
+            label=label,
+        )
+
+    ax.set_xscale("logit")
+    ax.set_yscale("log")
+    ax.set_xlabel("Power fraction, $\\max$(EOB, mlgw)")
+    ax.set_ylabel("Mismatch")
+    ax.set_title(
+        "faint: residual time+phase marginalised (optimised)    "
+        "full color: predicted time shift, phase marginalised (regressed)",
+        fontsize="small",
+    )
+    ax.grid(True)
+    ax.legend()
+    fig.suptitle("Per-mode mismatch vs. power fraction")
+    fig.tight_layout()
+
+    outfile = f"{OUTPUT_PREFIX}_mismatch_vs_power.png"
+    fig.savefig(outfile, dpi=150)
+    print(f"Saved plot to {outfile}")
+
+
+def predictor_validation_data(
+    model: Model,
+    n_waveforms: int = N_PREDICTOR_VALIDATION_WAVEFORMS,
+    seed: int = PREDICTOR_VALIDATION_SEED,
+    reference_grid_points: int = REFERENCE_GRID_POINTS,
+    reference_fmax_hz: float = REFERENCE_FMAX_HZ,
+) -> dict:
+    r"""Actual vs. predicted time shift and per-mode reference phase.
+
+    Mirrors :meth:`Model._train_reference_predictors` exactly (same coarse
+    geometric grid, same one-EOB-call-per-point sweep via
+    :meth:`Model._multimode_mode_residuals`), but on a *fresh* parameter
+    draw (``seed``, distinct from both :data:`SEED` and whatever seed
+    ``Model.generate`` used), so this checks generalisation rather than
+    refitting a training residual.
+
+    The two "actual" targets are computed exactly as
+    ``_train_reference_predictors`` computes them:
+
+    * the shared merger time shift --- the least-squares low-frequency
+      slope of the (2,2) mode's *raw* phase residual (EOB minus PN),
+      via :meth:`Residuals.phase_timeshifts`;
+    * each mode's reference phase :math:`\phi_{\ell m}(f_0)` --- simply
+      that mode's raw phase residual at the first grid point.
+
+    Returns
+    -------
+    dict
+        ``{"time_shift": {"actual": ..., "predicted": ...},
+        "phase0": {mode: {"actual": ..., "predicted": ...}, ...}}``.
+        The ``"phase0"`` entry is empty if the model has no
+        ``mode_phases_predictor`` (i.e. is not a HOM model).
+    """
+    reference_mode = Mode(2, 2)
+    dataset = model.mode_models[reference_mode].dataset
+
+    f0_natural = float(dataset.frequencies[0])
+    grid_hz = np.geomspace(
+        dataset.natural_units_to_hz(f0_natural),
+        min(reference_fmax_hz, dataset.effective_srate_hz / 2),
+        reference_grid_points,
+    )
+    f_ref_natural = dataset.hz_to_natural_units(grid_hz)
+    f_ref_natural[0] = f0_natural
+    grid_hz = dataset.natural_units_to_hz(f_ref_natural)
+
+    parameter_generator = dataset.make_parameter_generator(seed=seed)
+    params_list = [next(parameter_generator) for _ in range(n_waveforms)]
+
+    parameter_array, _, phase_residuals = model._multimode_mode_residuals(
+        params_list, f_ref_natural, progress_desc="Predictor validation sweep"
+    )
+    if len(parameter_array) < 2:
+        raise RuntimeError(
+            "The predictor-validation sweep produced fewer than 2 valid "
+            "waveforms; try a larger n_waveforms."
+        )
+
+    reference_phase_residuals = phase_residuals[reference_mode]
+    actual_time_shifts = Residuals(
+        np.zeros_like(reference_phase_residuals), reference_phase_residuals
+    ).phase_timeshifts(frequencies=grid_hz)
+    predicted_time_shifts = np.asarray(
+        model.time_shifts_predictor.predict(parameter_array)
+    ).reshape(-1)
+
+    result = {
+        "time_shift": {
+            "actual": actual_time_shifts,
+            "predicted": predicted_time_shifts,
+        },
+        "phase0": {},
+    }
+
+    if model.mode_phases_predictor is not None:
+        predicted_phase0_array = model.mode_phases_predictor.predict(parameter_array)
+        for mode in model.modes:
+            mode_phases_index = model.mode_models[mode].mode_phases_index
+            if mode_phases_index is None:
+                continue
+            result["phase0"][mode] = {
+                "actual": phase_residuals[mode][:, 0],
+                "predicted": predicted_phase0_array[:, mode_phases_index],
+            }
+
+    return result
+
+
+def plot_predictor_validation(data: dict) -> None:
+    r"""Histogram actual vs. predicted time shift and per-mode phase0.
+
+    ``data`` is the output of :func:`predictor_validation_data`. One
+    panel for the shared time-shift predictor, plus one per mode with a
+    reference-phase prediction, each overlaying the "actual" (fresh EOB
+    residual) and "predicted" (model) distributions.
+    """
+    modes_with_phase0 = list(data["phase0"].keys())
+    n_panels = 1 + len(modes_with_phase0)
+
+    fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4.5), squeeze=False)
+    axes = axes[0]
+
+    def plot_panel(ax, actual: np.ndarray, predicted: np.ndarray, title: str, xlabel: str) -> None:
+        ax.hist(predicted-actual, bins=40, alpha=0.55, density=True, label="actual (fresh EOB)")
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.grid(True)
+        ax.legend(fontsize="small")
+
+    plot_panel(
+        axes[0],
+        data["time_shift"]["actual"]*1e6,
+        data["time_shift"]["predicted"]*1e6,
+        "Shared time shift",
+        r"$\Delta t$ [us]",
+    )
+
+    for i, mode in enumerate(modes_with_phase0):
+        plot_panel(
+            axes[i + 1],
+            data["phase0"][mode]["actual"],
+            data["phase0"][mode]["predicted"],
+            rf"$(\ell, m) = ({mode.l}, {mode.m})$ reference phase",
+            r"$\phi_{\ell m}(f_0)$ [rad]",
+        )
+
+    fig.suptitle(
+        "Time-shift / mode-phase0 predictors: actual (fresh EOB) vs. predicted"
+    )
+    fig.tight_layout()
+
+    outfile = f"{OUTPUT_PREFIX}_predictor_validation.png"
+    fig.savefig(outfile, dpi=150)
+    print(f"Saved plot to {outfile}")
 
 
 def report_weighted_mismatches(
@@ -592,6 +1052,9 @@ if __name__ == "__main__":
     print("Computing mlgw-EOB residuals...")
     plot_residuals(model)
 
+    print("Validating time-shift and mode-phase0 predictors against fresh data...")
+    plot_predictor_validation(predictor_validation_data(model))
+
     print("Computing per-mode mismatches...")
     mismatches_by_mode = per_mode_mismatches(model)
 
@@ -600,3 +1063,7 @@ if __name__ == "__main__":
 
     report_weighted_mismatches(mismatches_by_mode, power_fractions, full_mismatches)
     plot_mismatches(mismatches_by_mode, full_mismatches, power_fractions)
+
+    print("Computing per-mode mismatch vs. power fraction...")
+    mismatch_vs_power = mismatch_vs_power_by_mode(model)
+    plot_mismatch_vs_power(mismatch_vs_power)
