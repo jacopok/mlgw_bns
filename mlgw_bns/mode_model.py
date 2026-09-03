@@ -1110,7 +1110,13 @@ class ModeModel:
             # this should never happen! 
             raise ValueError('At least one point should be in the model band')
 
-        if rescaled_frequencies[-1] > self.dataset.effective_srate_hz / 2.0:
+        # The trained band's own top edge, not the theoretical
+        # `effective_srate_hz / 2`: the dataset's frequency grid can land a
+        # hair past that nominal value by construction, which would
+        # otherwise make this model's own last trained point count as
+        # "out of band" and get zeroed out (see `[[predict-amplitude-phase-hf-edge]]`).
+        trained_fmax_hz = self.dataset.frequencies_hz[-1]
+        if rescaled_frequencies[-1] > trained_fmax_hz:
             if not self.extend_with_zeros_at_high_frequency:
                 raise FrequencyTooHighError(
                     "This model is not configured to be extended with zeros at high frequency."
@@ -1119,7 +1125,7 @@ class ModeModel:
                 )
             else:
                 extend_hf = True
-                high_frequency_index = int(np.searchsorted(rescaled_frequencies, self.dataset.effective_srate_hz / 2.0))
+                high_frequency_index = int(np.searchsorted(rescaled_frequencies, trained_fmax_hz))
                 hf_segment_length = len(rescaled_frequencies) - high_frequency_index
                 rescaled_frequencies = rescaled_frequencies[:high_frequency_index]
 
@@ -1262,7 +1268,6 @@ class ModeModel:
         # Rescale frequencies early
         rescaled_frequencies = frequencies * (params.total_mass / self.dataset.total_mass)
         eff_fmin_hz = self.dataset.effective_initial_frequency_hz
-        eff_srate_hz = self.dataset.effective_srate_hz
         rescaled_f_min = rescaled_frequencies[0]
         rescaled_f_max = rescaled_frequencies[-1]
 
@@ -1288,11 +1293,17 @@ class ModeModel:
         # ----------------------------
         # High-frequency extension
         # ----------------------------
-        extend_hf = rescaled_f_max > eff_srate_hz / 2.0
+        # The trained band's own top edge, not the theoretical
+        # `eff_srate_hz / 2`: the dataset's frequency grid can land a hair
+        # past that nominal value by construction, which would otherwise
+        # make this model's own last trained point count as "out of band"
+        # and get zeroed out (see `[[predict-amplitude-phase-hf-edge]]`).
+        trained_fmax_hz = self.dataset.frequencies_hz[-1]
+        extend_hf = rescaled_f_max > trained_fmax_hz
         if extend_hf:
             if not self.extend_with_zeros_at_high_frequency:
                 raise FrequencyTooHighError("ModeModel not configured to extend with zeros at high frequency.")
-            high_frequency_index = np.searchsorted(rescaled_frequencies, eff_srate_hz / 2.0)
+            high_frequency_index = np.searchsorted(rescaled_frequencies, trained_fmax_hz)
             hf_segment_length = len(rescaled_frequencies) - high_frequency_index
             rescaled_frequencies = rescaled_frequencies[:high_frequency_index]
 
