@@ -32,6 +32,7 @@ from .dataset_generation import (
     Dataset,
     ParameterGenerator,
     ParameterSet,
+    UniformParameterGenerator,
     TEOBResumSGenerator,
     WaveformGenerator,
     WaveformParameters,
@@ -268,6 +269,7 @@ class ModeModel:
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
         parameter_ranges: ParameterRanges = ParameterRanges(),
         parameter_generator : Optional[ParameterGenerator] = None,
+        parameter_generator_class: Optional[Type[ParameterGenerator]] = None,
         mode: Optional[Mode] = None,
         reference_amplitude: bool = False,
     ):
@@ -296,6 +298,11 @@ class ModeModel:
         self.initial_frequency_hz = initial_frequency_hz
         self.srate_hz = srate_hz
         self.multibanding = multibanding
+        self.parameter_generator_class = (
+            parameter_generator_class
+            if parameter_generator_class is not None
+            else UniformParameterGenerator
+        )
         self.parameter_generator = parameter_generator
         self.extend_with_post_newtonian = extend_with_post_newtonian
         self.extend_with_zeros_at_high_frequency = extend_with_zeros_at_high_frequency 
@@ -381,6 +388,7 @@ class ModeModel:
             multibanding=self.multibanding,
             parameter_ranges=self.parameter_ranges,
             parameter_generator=self.parameter_generator,
+            parameter_generator_class=self.parameter_generator_class,
             reference_amplitude=self.reference_amplitude,
         )
     

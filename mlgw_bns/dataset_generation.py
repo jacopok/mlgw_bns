@@ -861,6 +861,127 @@ class SobolParameterGenerator(UniformParameterGenerator):
         return WaveformParameters(q, l1, l2, c1, c2, self.dataset)
 
 
+class GWPriorParameterGenerator(UniformParameterGenerator):
+    r"""Generator matching the priors commonly used in GW parameter estimation.
+
+    Compared to :class:`UniformParameterGenerator`:
+
+    * the mass ratio :math:`q = m_1/m_2 \geq 1` is drawn uniformly in
+      :math:`1/q`, i.e. :math:`p(q) \propto 1/q^2`.  Concretely
+      :math:`1/q \sim \mathcal{U}(1/q_\max, 1/q_\min)`;
+    * each aligned spin component :math:`\chi = \chi_z` follows the
+      distribution obtained by projecting an isotropic spin (magnitude
+      uniform on :math:`[0, a]`, direction uniform on the sphere) onto the
+      :math:`z` axis:
+
+      .. math::
+          p(\chi) = -\frac{1}{2a}\,\ln\!\frac{|\chi|}{a},
+          \qquad |\chi| \leq a,
+
+      where :math:`a` is the larger magnitude of the corresponding
+      ``chi_range`` endpoints.  This density is already normalised (it
+      integrates to 1 over :math:`[-a, a]`) and finite everywhere, so no
+      low-magnitude cutoff is needed.  Sampling is by inverse-CDF: with
+      :math:`y = |\chi|/a`, the modulus CDF is :math:`y(1 - \ln y) = U`,
+      inverted as :math:`y = e^{1 + W_{-1}(-U/e)}` using the lower branch
+      of the Lambert :math:`W` function; the sign is drawn uniformly.
+
+    The tidal deformabilities keep the uniform distribution of the parent
+    class, since GW analyses have no single standard prior for them.
+
+    Either family of priors can be individually switched back to a plain
+    uniform distribution over the range, via ``q_prior`` and ``spin_prior``.
+    For example ``q_prior="gw", spin_prior="uniform"`` gives the GW mass-ratio
+    prior with spins drawn uniformly over ``chi1_range`` / ``chi2_range``.
+
+    Parameters
+    ----------
+    dataset : Dataset
+    parameter_ranges : ParameterRanges
+    seed : Optional[int]
+    q_prior : {"gw", "uniform"}
+            Prior on the mass ratio. ``"gw"`` (default) draws uniformly in
+            :math:`1/q`; ``"uniform"`` draws uniformly in :math:`q`.
+    spin_prior : {"gw", "uniform"}
+            Prior on each aligned spin component. ``"gw"`` (default) is the
+            projected-isotropic density above; ``"uniform"`` draws uniformly
+            over the corresponding ``chi`` range.
+    """
+
+    def __init__(
+        self,
+        dataset: Dataset,
+        parameter_ranges: ParameterRanges,
+        seed: Optional[int] = None,
+        q_prior: str = "gw",
+        spin_prior: str = "gw",
+    ):
+        super().__init__(
+            dataset=dataset, parameter_ranges=parameter_ranges, seed=seed
+        )
+        if q_prior not in ("gw", "uniform"):
+            raise ValueError(f"unknown q_prior {q_prior!r}")
+        if spin_prior not in ("gw", "uniform"):
+            raise ValueError(f"unknown spin_prior {spin_prior!r}")
+        self.q_prior = q_prior
+        self.spin_prior = spin_prior
+        self.chi1_abs_max = max(abs(self.chi1_range[0]), abs(self.chi1_range[1]))
+        self.chi2_abs_max = max(abs(self.chi2_range[0]), abs(self.chi2_range[1]))
+
+    def _projected_isotropic_spin(self, abs_max: float) -> float:
+        from scipy.special import lambertw
+
+        u = self.rng.uniform(0.0, 1.0)
+        y = np.exp(1.0 + np.real(lambertw(-u / np.e, k=-1)))
+        sign = self.rng.choice([-1.0, 1.0])
+        return float(sign * y * abs_max)
+
+    def _draw_q(self) -> float:
+        if self.q_prior == "uniform":
+            return self.rng.uniform(*self.q_range)
+        inverse_q = self.rng.uniform(1.0 / self.q_range[1], 1.0 / self.q_range[0])
+        return 1.0 / inverse_q
+
+    def _draw_spin(self, chi_range: tuple, abs_max: float) -> float:
+        if self.spin_prior == "uniform":
+            return self.rng.uniform(*chi_range)
+        return self._projected_isotropic_spin(abs_max)
+
+    def __next__(self) -> WaveformParameters:
+        mass_ratio = self._draw_q()
+        lambda_1 = self.rng.uniform(*self.lambda1_range)
+        lambda_2 = self.rng.uniform(*self.lambda2_range)
+        chi_1 = self._draw_spin(self.chi1_range, self.chi1_abs_max)
+        chi_2 = self._draw_spin(self.chi2_range, self.chi2_abs_max)
+
+        return WaveformParameters(
+            mass_ratio, lambda_1, lambda_2, chi_1, chi_2, self.dataset
+        )
+
+
+class GWPriorUniformSpinParameterGenerator(GWPriorParameterGenerator):
+    """:class:`GWPriorParameterGenerator` with ``spin_prior="uniform"`` baked in.
+
+    A named, zero-configuration class (so it can be passed as
+    ``parameter_generator_class`` and pickled): GW prior on the mass ratio
+    (uniform in :math:`1/q`), uniform prior on each aligned spin component.
+    """
+
+    def __init__(
+        self,
+        dataset: Dataset,
+        parameter_ranges: ParameterRanges,
+        seed: Optional[int] = None,
+    ):
+        super().__init__(
+            dataset=dataset,
+            parameter_ranges=parameter_ranges,
+            seed=seed,
+            q_prior="gw",
+            spin_prior="uniform",
+        )
+
+
 class Dataset:
     r"""Metadata for a dataset.
 
