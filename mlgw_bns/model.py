@@ -613,6 +613,7 @@ class Model:
         reference_dataset_size: int = 2000,
         reference_grid_points: int = 64,
         reference_fmax_hz: float = 512.0,
+        reference_batch_size: Optional[int] = None,
         seed: int = 0,
     ) -> None:
         """Run :meth:`ModeModel.generate` for every mode.
@@ -651,6 +652,14 @@ class Model:
             to 64.
         reference_fmax_hz : float, optional
             Upper frequency of the pre-pass grid, in Hz. Defaults to 512.
+        reference_batch_size : int, optional
+            Number of pre-pass waveforms generated per EOB sweep. The full
+            ``(batch, reference_grid_points)`` residual arrays are reduced to
+            their per-point regression targets and discarded before the next
+            batch, so peak memory scales with
+            ``reference_batch_size * reference_grid_points`` rather than
+            ``reference_dataset_size * reference_grid_points``. ``None`` (the
+            default) runs the whole pre-pass as a single batch.
         seed : int, optional
             Seed for the pre-pass parameter generator. Defaults to 0.
 
@@ -672,6 +681,7 @@ class Model:
                 reference_grid_points,
                 reference_fmax_hz,
                 seed,
+                reference_batch_size=reference_batch_size,
             )
 
         # Per-mode downsampling indices first: each still trains on its own
@@ -762,12 +772,110 @@ class Model:
             )
         return precomputed
 
+    def _reference_grid(
+        self, reference_grid_points: int, reference_fmax_hz: float
+    ) -> "tuple[np.ndarray, np.ndarray, float]":
+        """Coarse geometric ``f_0 -> reference_fmax_hz`` grid for the pre-pass.
+
+        Returns ``(grid_hz, f_ref_natural, f0_natural)``; the first node is
+        pinned to the dataset's own ``f_0`` so the per-mode reference phase
+        is read at exactly the training grid's lowest node.
+        """
+        dataset = self.mode_models[Mode(2, 2)].dataset
+        f0_natural = float(dataset.frequencies[0])
+        grid_hz = np.geomspace(
+            dataset.natural_units_to_hz(f0_natural),
+            min(reference_fmax_hz, dataset.effective_srate_hz / 2),
+            reference_grid_points,
+        )
+        f_ref_natural = dataset.hz_to_natural_units(grid_hz)
+        f_ref_natural[0] = f0_natural
+        grid_hz = dataset.natural_units_to_hz(f_ref_natural)
+        return grid_hz, f_ref_natural, f0_natural
+
+    def _reference_sweep_targets(
+        self,
+        parameter_generator,
+        n_points: int,
+        grid_hz: np.ndarray,
+        f_ref_natural: np.ndarray,
+        batch_size: Optional[int] = None,
+        progress_label: str = "Reference pre-pass sweep",
+    ) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
+        r"""Draw ``n_points`` parameters and reduce them to regression targets.
+
+        Pulls ``n_points`` parameters from ``parameter_generator``, runs the
+        multi-mode EOB sweep in batches of ``batch_size`` (default: one
+        batch), and reduces each batch's full ``(batch, n_grid)`` phase
+        residual arrays --- discarded straight after --- to the per-point
+        targets the two shared predictors consume:
+
+        * ``timeshifts`` --- the scalar low-frequency slope of the (2,2)
+          phase residual (``Residuals.phase_timeshifts``);
+        * ``reference_phases`` --- each mode's phase residual at ``f_0``,
+          column-ordered like :attr:`modes`.
+
+        Peak memory scales with ``batch_size * len(f_ref_natural)`` rather
+        than ``n_points * len(f_ref_natural)``.
+
+        Returns
+        -------
+        tuple
+            ``(parameter_array, timeshifts, reference_phases)`` with shapes
+            ``(n_valid, 5)``, ``(n_valid,)`` and ``(n_valid, n_modes)``.
+        """
+        reference_mode = Mode(2, 2)
+        batch_size = batch_size or n_points
+        batch_size = max(1, min(int(batch_size), n_points))
+
+        params_batches: list[np.ndarray] = []
+        timeshift_batches: list[np.ndarray] = []
+        mode_phase_batches: list[np.ndarray] = []
+
+        n_done = 0
+        while n_done < n_points:
+            this_batch = min(batch_size, n_points - n_done)
+            params_list = [next(parameter_generator) for _ in range(this_batch)]
+            n_done += this_batch
+
+            parameter_array, _, phase_residuals = self._multimode_mode_residuals(
+                params_list,
+                f_ref_natural,
+                progress_desc=f"{progress_label} ({n_done}/{n_points})",
+            )
+            if len(parameter_array) == 0:
+                continue
+
+            reference_phase_residuals = phase_residuals[reference_mode]
+            timeshifts = Residuals(
+                np.zeros_like(reference_phase_residuals), reference_phase_residuals
+            ).phase_timeshifts(frequencies=grid_hz)
+            reference_phases = np.stack(
+                [phase_residuals[mode][:, 0] for mode in self.modes], axis=1
+            )
+
+            params_batches.append(parameter_array)
+            timeshift_batches.append(np.asarray(timeshifts, dtype=float))
+            mode_phase_batches.append(np.asarray(reference_phases, dtype=float))
+
+        if sum(len(p) for p in params_batches) < 2:
+            raise RuntimeError(
+                "The reference pre-pass produced fewer than 2 valid waveforms."
+            )
+
+        return (
+            np.concatenate(params_batches, axis=0),
+            np.concatenate(timeshift_batches, axis=0),
+            np.concatenate(mode_phase_batches, axis=0),
+        )
+
     def _train_reference_predictors(
         self,
         reference_dataset_size: int,
         reference_grid_points: int,
         reference_fmax_hz: float,
         seed: int,
+        reference_batch_size: Optional[int] = None,
     ) -> None:
         r"""Fit the shared time-shift and per-mode reference-phase predictors.
 
@@ -789,6 +897,13 @@ class Model:
         Both predictions are subtracted from the per-mode training
         residuals by ``remove_linear_trend`` and added back at predict
         time, so the downstream PCA/NN only ever see small residuals.
+
+        The EOB sweep is run in batches of ``reference_batch_size``: each
+        batch's full ``(batch, reference_grid_points)`` residual arrays are
+        immediately reduced to the per-point regression targets (the scalar
+        (2,2) time shift and each mode's phase residual at :math:`f_0`) and
+        then discarded, so peak memory scales with the batch size rather
+        than ``reference_dataset_size``.
         """
         reference_mode = Mode(2, 2)
         if reference_mode not in self.modes:
@@ -797,29 +912,21 @@ class Model:
                 "`self.modes`, since the shared predictors are trained from it."
             )
 
-        dataset = self.mode_models[reference_mode].dataset
-        f0_natural = float(dataset.frequencies[0])
-        grid_hz = np.geomspace(
-            dataset.natural_units_to_hz(f0_natural),
-            min(reference_fmax_hz, dataset.effective_srate_hz / 2),
-            reference_grid_points,
+        grid_hz, f_ref_natural, f0_natural = self._reference_grid(
+            reference_grid_points, reference_fmax_hz
         )
-        f_ref_natural = dataset.hz_to_natural_units(grid_hz)
-        f_ref_natural[0] = f0_natural
-        grid_hz = dataset.natural_units_to_hz(f_ref_natural)
+        parameter_generator = self.mode_models[
+            reference_mode
+        ].dataset.make_parameter_generator(seed=seed)
 
-        parameter_generator = dataset.make_parameter_generator(seed=seed)
-        params_list = [next(parameter_generator) for _ in range(reference_dataset_size)]
-        parameter_array = np.array([p.array for p in params_list], dtype=float)
-
-        parameter_array, _, phase_residuals = self._multimode_mode_residuals(
-            params_list, f_ref_natural, progress_desc="Reference pre-pass sweep"
+        parameter_array, timeshifts, reference_phases = self._reference_sweep_targets(
+            parameter_generator,
+            reference_dataset_size,
+            grid_hz,
+            f_ref_natural,
+            batch_size=reference_batch_size,
         )
 
-        if len(parameter_array) < 2:
-            raise RuntimeError(
-                "The reference pre-pass produced fewer than 2 valid waveforms."
-            )
         logging.info(
             "Reference pre-pass: %d/%d valid waveforms on a %d-point grid "
             "[%.1f, %.1f] Hz",
@@ -827,19 +934,12 @@ class Model:
             grid_hz[0], grid_hz[-1],
         )
 
-        reference_phase_residuals = phase_residuals[reference_mode]
-        timeshifts = Residuals(
-            np.zeros_like(reference_phase_residuals), reference_phase_residuals
-        ).phase_timeshifts(frequencies=grid_hz)
         self.time_shifts_predictor = TimeshiftsNN(
             training_params=parameter_array,
             training_timeshifts=timeshifts,
         ).fit()
         self._propagate_time_shifts_predictor()
 
-        reference_phases = np.stack(
-            [phase_residuals[mode][:, 0] for mode in self.modes], axis=1
-        )
         self.mode_phases_predictor = ModePhasesNN(
             modes=[(m.l, m.m) for m in self.modes],
             f0_natural=f0_natural,
