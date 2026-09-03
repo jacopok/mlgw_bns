@@ -1463,12 +1463,14 @@ class Model:
             iota=inclination,
         )
 
+        modes = list(self.modes)
+        generator = self.mode_models[modes[0]].waveform_generator
+        waveforms = generator.all_modes_amplitude_phase(params_teob, modes, f_natural)
+
         amps_list: list[np.ndarray] = []
         phases_list: list[np.ndarray] = []
-        for mode in self.modes:
-            _f_spa, amp, phase = self.mode_models[mode].waveform_generator.get_amplitude_phase_at_inclination(
-                params_teob, f_natural, inclination=inclination
-            )
+        for mode in modes:
+            _f_eob, amp, phase = waveforms[mode]
             amps_list.append(amp)
             phases_list.append(phase)
 
