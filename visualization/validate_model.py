@@ -7,14 +7,16 @@ Three things are produced:
 1. **mlgw-EOB residuals**, per mode: the fractional amplitude error
    ``2 (A_mlgw - A_EOB) / (|A_mlgw| + |A_EOB|)`` (bounded through the
    odd-m amplitude nodes), and two views of the phase error --- one with
-   the surrogate's *predicted* merger time shift applied (constant removed),
-   one with the best-fit linear-in-frequency term removed by least
-   squares. The EOB phase is kept with its native value at ``f_0``. If
-   the first phase row is much larger than the second, the time/phase
-   predictors are not doing their job; normally the two agree.
+   the surrogate's *predicted* time-and-phase alignment applied (nothing
+   removed afterwards), one with the best-fit linear-in-frequency term
+   removed by least squares. The EOB phase is kept with its native value
+   at ``f_0``. If the first phase row is much larger than the second, the
+   time/phase predictors are not doing their job --- a failed
+   reference-phase prediction shows up there as a near-constant offset
+   (all-positive or all-negative across the band); normally the two agree.
 2. **Per-mode mismatches**, via :class:`ValidateModel`, in the same two
-   configurations: residual time and phase marginalised (``optimised``),
-   and the predicted time shift applied with only the phase marginalised
+   configurations: residual time and phase optimised (``optimised``),
+   and the surrogate's predicted time-and-phase alignment applied with
    (``pred-shift``). These are reported alongside each mode's *share of
    the PSD-weighted power* in the summed waveform, because a mismatch is
    a relative measure and so says nothing on its own about how much a
@@ -46,7 +48,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 
-from mlgw_bns.data_management import Residuals
+from mlgw_bns.data_management import FDWaveforms, Residuals
 from mlgw_bns.dataset_generation import ParameterSet
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.mode_model import ParametersWithExtrinsic
@@ -136,7 +138,7 @@ def load_model(filename: str = None) -> Model:
     return model
 
 
-def batched_true_waveforms(model: Model, mode: Mode, parameter_set):
+def batched_true_waveforms(model: Model, mode: Mode, parameter_set, min_valid: int = 2):
     r"""EOB ground truth for one mode, generated with *all* modes requested.
 
     ``ValidateModel.true_waveforms`` (and :meth:`Model.get_teob_modes_dict`)
@@ -193,10 +195,10 @@ def batched_true_waveforms(model: Model, mode: Mode, parameter_set):
         true_amp_list.append(amp_full[downsampling.amplitude_indices])
         true_phase_list.append(phase_full[downsampling.phase_indices])
 
-    if len(valid_indices) < 2:
+    if len(valid_indices) < min_valid:
         raise RuntimeError(
-            "The batched EOB sweep produced fewer than 2 valid waveforms; "
-            "try a larger n_waveforms."
+            f"The batched EOB sweep produced fewer than {min_valid} valid "
+            "waveforms; try a larger n_waveforms."
         )
 
     if len(valid_indices) != len(waveform_params_list):
@@ -345,16 +347,17 @@ def plot_residuals(model: Model) -> dict:
     1. ``2 (A_mlgw - A_EOB) / (|A_mlgw| + |A_EOB|)`` --- the fractional
        amplitude error, bounded to ``[-2, 2]`` through the odd-m modes'
        amplitude nodes;
-    2. ``(phi_mlgw + predicted time shift) - phi_EOB``, overall constant
-       removed --- the frequency-dependent phase error left once the
-       surrogate's own time/phase predictors have run. Large values here
-       mean the predictors are not doing their job;
+    2. ``phi_mlgw - phi_EOB`` with the surrogate's predicted time shift
+       *and* predicted per-mode reference phase applied, nothing removed
+       afterwards --- the phase error left once the predictors have run.
+       A failed reference-phase prediction shows up as a near-constant
+       nonzero offset across the band;
     3. ``phi_mlgw - phi_EOB`` with its best-fit linear-in-frequency term
        removed by least squares --- genuine phase-shape error that no
        time-and-phase alignment can absorb.
 
-    Rows 2 and 3 measure the same thing by two routes (predicted vs
-    optimised alignment) and agree closely when the predictors are good.
+    Row 3 is row 2 with an optimal linear alignment subtracted, so it
+    lower-bounds row 2; they agree closely when the predictors are good.
     """
     fig, axes = plt.subplots(
         3, len(MODES), figsize=(6 * len(MODES), 10), squeeze=False
@@ -386,8 +389,8 @@ def plot_residuals(model: Model) -> dict:
         r"$2 (A_{\rm mlgw} - A_{\rm EOB}) / (|A_{\rm mlgw}| + |A_{\rm EOB}|)$"
     )
     axes[1, 0].set_ylabel(
-        r"$(\phi_{\rm mlgw} + \Delta t_{\rm pred}) - \phi_{\rm EOB}$,"
-        "\nconstant removed [rad]"
+        r"$\phi_{\rm mlgw} - \phi_{\rm EOB}$,"
+        "\npredicted $\\Delta t$ + phase applied [rad]"
     )
     axes[2, 0].set_ylabel(
         r"$\phi_{\rm mlgw} - \phi_{\rm EOB}$,"
@@ -419,18 +422,32 @@ def plot_residuals(model: Model) -> dict:
 
 
 def predicted_shift_mismatches(
+    model: Model,
+    mode: Mode,
     validator: ValidateModel,
     n_waveforms: int,
     parameter_set=None,
 ):
-    r"""Single-mode mismatch with the *predicted* merger time shift applied.
+    r"""Single-mode mismatch with the surrogate's predicted alignment applied.
 
-    Unlike :meth:`ValidateModel.validation_mismatches`, no residual time
-    shift is optimised: the surrogate's own time-shift prediction is
-    added and only the global reference phase is marginalised (via the
-    :math:`|\cdot|` in the overlap). This is the mismatch counterpart of
-    the residuals plot's middle row --- it says how good the model is
-    once its predictors have run, with nothing optimised afterwards.
+    Unlike :meth:`ValidateModel.validation_mismatches`, **nothing is
+    optimised**: the predicted waveform is built by the full production
+    path (:meth:`ModeModel.predict_amplitude_phase`, which applies both
+    the predicted per-mode reference phase and the predicted time shift),
+    and the overlap uses the *real* Wiener product --- the reference phase
+    is not marginalised either. This is the mismatch counterpart of the
+    residuals plot's middle row: it says how good the model is once its
+    predictors have run, and a large value means a predictor has failed
+    (typically the reference-phase constant, which then shows up as a
+    near-constant offset in that row).
+
+    The ground truth is the *batched* multi-mode EOB waveform
+    (:func:`batched_true_waveforms`), i.e. the same convention the
+    reference-phase / time-shift predictors were trained on and the same
+    one the residuals plot uses. ``ValidateModel.true_waveforms`` instead
+    generates one mode at a time; its absolute phase differs by many
+    low-frequency cycles (``[[batched-multimode-eob]]``), and with nothing
+    optimised or marginalised here that offset alone gives mismatch ~ 1.
 
     ``parameter_set``, if given, is used instead of drawing
     ``n_waveforms`` fresh ones (``n_waveforms`` is then ignored) --- used
@@ -439,20 +456,39 @@ def predicted_shift_mismatches(
     """
     if parameter_set is None:
         parameter_set = validator.param_set(n_waveforms, SEED)
-    true_waveforms, parameter_set = validator.true_waveforms(parameter_set)
+
+    true_amplitudes, true_phases, parameter_set = batched_true_waveforms(
+        model, mode, parameter_set, min_valid=1
+    )
+    true_waveforms = FDWaveforms(amplitudes=true_amplitudes, phases=true_phases)
+
     predicted_waveforms = validator.predicted_waveforms(parameter_set)
 
-    phase_freqs = validator.model.dataset.frequencies_hz[
-        validator.model.downsampling_indices.phase_indices
+    # `predicted_waveforms` (from `predict_waveforms_bulk`) recomposes the NN
+    # residual plus the PN phase directly: its phase carries neither the
+    # per-mode reference-phase constant nor the predicted time shift.
+    # Overwrite just the phase with the full production path
+    # `ModeModel.predict_amplitude_phase`, which applies both --- exactly as
+    # row 2 of the residuals plot does --- so the two views compare the same
+    # waveform. (The bulk-path amplitude is already correct.)
+    mode_model = validator.model
+    phase_freqs = mode_model.dataset.frequencies_hz[
+        mode_model.downsampling_indices.phase_indices
     ]
-    time_shifts = (
-        validator.time_shifts_predictor()
-        .predict(parameter_set.parameter_array)
-        .reshape(-1, 1)
-    )
-    predicted_waveforms.phases = predicted_waveforms.phases + (
-        2 * np.pi * (phase_freqs - phase_freqs[0]) * time_shifts
-    )
+    for j, wp in enumerate(parameter_set.waveform_parameters(mode_model.dataset)):
+        extrinsic_params = ParametersWithExtrinsic(
+            mass_ratio=wp.mass_ratio,
+            lambda_1=wp.lambda_1,
+            lambda_2=wp.lambda_2,
+            chi_1=wp.chi_1,
+            chi_2=wp.chi_2,
+            distance_mpc=1.0,
+            inclination=0.0,
+            total_mass=mode_model.dataset.total_mass,
+        )
+        _, predicted_waveforms.phases[j] = mode_model.predict_amplitude_phase(
+            phase_freqs, extrinsic_params
+        )
 
     true_cartesian, predicted_cartesian = validator.waveforms(
         true_waveforms, predicted_waveforms
@@ -462,6 +498,10 @@ def predicted_shift_mismatches(
     def inner(a, b):
         return np.sum(np.conj(a) * b * weight, axis=-1).real
 
+    # Real Wiener product: the reference phase is *not* marginalised. This is
+    # the mismatch counterpart of the residuals plot's middle row, so the two
+    # compare the same predicted waveform (predicted time shift + predicted
+    # per-mode reference phase applied, nothing optimised afterwards).
     overlap = inner(true_cartesian, predicted_cartesian) / np.sqrt(
         inner(true_cartesian, true_cartesian)
         * inner(predicted_cartesian, predicted_cartesian)
@@ -487,9 +527,9 @@ def per_mode_mismatches(model: Model) -> dict:
     """Single-mode mismatch distributions for every mode, two configurations.
 
     Returns ``{mode: (optimised, regressed)}`` where ``optimised`` has a
-    residual time shift and phase marginalised (the canonical per-mode
+    residual time shift and phase optimised (the canonical per-mode
     mismatch) and ``regressed`` instead applies the surrogate's predicted
-    time shift and marginalises only the phase --- the same two routes as
+    time shift and reference phase, with nothing optimised --- the same two routes as
     rows 3 and 2 of the residuals plot.
     """
     mismatches_by_mode = {}
@@ -504,7 +544,7 @@ def per_mode_mismatches(model: Model) -> dict:
             )
         )
         regressed = np.array(
-            predicted_shift_mismatches(validator, N_MISMATCH_WAVEFORMS)
+            predicted_shift_mismatches(model, mode, validator, N_MISMATCH_WAVEFORMS)
         )
         mismatches_by_mode[mode] = (optimised, regressed)
         print(
@@ -531,7 +571,16 @@ def full_waveform_mismatches(model: Model) -> tuple:
     Returns
     -------
     mismatches : np.ndarray
-        Full-waveform mismatches.
+        Full-waveform mismatches, time- and reference-phase-optimised.
+    mismatches_no_opt : np.ndarray
+        Full-waveform mismatches with **nothing optimised**: the real
+        Wiener product between the summed surrogate waveform
+        (:meth:`Model.predict_modes_dict`, its predicted per-mode
+        :math:`\Delta t` and reference phases already applied) and the
+        summed batched-EOB truth (:meth:`Model.get_teob_modes_dict`). The
+        multi-mode counterpart of the per-mode ``predicted-shift``
+        mismatch --- how good the surrogate waveform is straight out of
+        ``Model.predict``, with no alignment tuning.
     power_fractions : dict[Mode, np.ndarray]
         Per-mode power fractions, one entry per waveform.
     """
@@ -552,7 +601,19 @@ def full_waveform_mismatches(model: Model) -> tuple:
             )
         )
 
+    def real_wiener_mismatch(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> float:
+        """``1 - Re(a|b) / sqrt((a|a)(b|b))`` --- nothing optimised."""
+        fm = frequencies[mask]
+        psd_m = validator.psd_values[mask]
+
+        def ip(x, y):
+            return np.trapezoid(np.conj(x[mask]) * y[mask] / psd_m, x=fm)
+
+        denom = np.sqrt(ip(a, a).real * ip(b, b).real)
+        return 1.0 if denom <= 0 else 1.0 - ip(a, b).real / denom
+
     mismatches = []
+    mismatches_no_opt = []
     power_fractions: dict = {mode: [] for mode in MODES}
     for _ in range(N_FULL_WAVEFORM_MISMATCHES):
         intrinsic = next(parameter_generator)
@@ -585,6 +646,9 @@ def full_waveform_mismatches(model: Model) -> tuple:
                 frequencies=frequencies[support],
             )
         )
+        mismatches_no_opt.append(
+            real_wiener_mismatch(sum(true.values()), sum(predicted.values()), support)
+        )
 
         total_power = inner_product(sum(true.values()), support)
         for mode in MODES:
@@ -595,14 +659,23 @@ def full_waveform_mismatches(model: Model) -> tuple:
                 )
 
     mismatches = np.array(mismatches)
+    mismatches_no_opt = np.array(mismatches_no_opt)
     power_fractions = {
         mode: np.array(values) for mode, values in power_fractions.items()
     }
     print(
-        f"  full waveform: median {np.median(mismatches):.3e}, "
+        f"  full waveform (optimised):     median {np.median(mismatches):.3e}, "
         f"worst {np.max(mismatches):.3e}"
     )
-    return mismatches, power_fractions
+    print(
+        f"  full waveform (not optimised): median {np.median(mismatches_no_opt):.3e}, "
+        f"worst {np.max(mismatches_no_opt):.3e}"
+    )
+    if len(mismatches) <= 25:
+        print("  per-waveform  [optimised | not optimised]:")
+        for a, b in zip(mismatches, mismatches_no_opt):
+            print(f"    {a:.3e} | {b:.3e}")
+    return mismatches, mismatches_no_opt, power_fractions
 
 
 def mismatch_vs_power_by_mode(model: Model, n_waveforms: int = N_FULL_WAVEFORM_MISMATCHES) -> dict:
@@ -706,9 +779,12 @@ def mismatch_vs_power_by_mode(model: Model, n_waveforms: int = N_FULL_WAVEFORM_M
             )
             if valid_param_set.parameter_array.shape[0] == 0:
                 continue
-            regressed_array = predicted_shift_mismatches(
-                validator, 1, parameter_set=valid_param_set
-            )
+            try:
+                regressed_array = predicted_shift_mismatches(
+                    model, mode, validator, 1, parameter_set=valid_param_set
+                )
+            except RuntimeError:
+                continue  # batched EOB call failed for this single sample
 
             results[mode]["power_fraction"].append(power_fraction)
             results[mode]["optimised"].append(optimised_array[0])
@@ -724,8 +800,9 @@ def plot_mismatch_vs_power(data: dict) -> None:
     r"""Scatter mismatch against per-mode power fraction, colored by mode.
 
     ``data`` is the output of :func:`mismatch_vs_power_by_mode`. Optimised
-    points (residual time+phase marginalised) are drawn with transparency;
-    regressed points (predicted time shift, phase marginalised) are drawn
+    points (residual time+phase optimised) are drawn with transparency;
+    regressed points (predicted time shift + reference phase, nothing
+    optimised) are drawn
     in full color, so the two clouds for a given mode are visually
     distinguishable while sharing that mode's color.
     """
@@ -763,8 +840,8 @@ def plot_mismatch_vs_power(data: dict) -> None:
     ax.set_xlabel("Power fraction, $\\max$(EOB, mlgw)")
     ax.set_ylabel("Mismatch")
     ax.set_title(
-        "faint: residual time+phase marginalised (optimised)    "
-        "full color: predicted time shift, phase marginalised (regressed)",
+        "faint: residual time+phase optimised    "
+        "full color: predicted \u0394t + reference phase, nothing optimised (regressed)",
         fontsize="small",
     )
     ax.grid(True)
@@ -919,7 +996,7 @@ def report_weighted_mismatches(
     """Print per-mode mismatches next to each mode's share of the power.
 
     ``optimised`` is the canonical per-mode mismatch (residual time and
-    phase marginalised); ``pred-shift`` applies the surrogate's predicted
+    phase optimised); ``pred-shift`` applies the surrogate's predicted
     time shift instead. The ``product`` column is ``optimised`` times the
     power share: to first order a mode's mismatch contributes to the
     full-waveform error in proportion to how much of the signal it is.
@@ -946,63 +1023,71 @@ def report_weighted_mismatches(
 def plot_mismatches(
     mismatches_by_mode: dict,
     full_mismatches: np.ndarray,
+    full_mismatches_no_opt: np.ndarray,
     power_fractions: Optional[dict] = None,
 ) -> None:
     r"""Plot the per-mode and full-waveform mismatch distributions.
 
-    Each distribution is shown as a KDE, evaluated in :math:`\log_{10}`
-    of the mismatch (since the values span several orders of magnitude
-    and the axis is log-scaled) and then mapped back onto that axis.
-    Each mode's legend entry carries its share of the PSD-weighted power,
-    so that a broad mismatch distribution can be read against how much
-    that mode actually contributes.
-    """
-    fig, ax = plt.subplots(figsize=(9, 5))
+    Two stacked panels sharing the mismatch axis:
 
-    all_values = [
-        arr
-        for pair in mismatches_by_mode.values()
-        for arr in pair
-    ] + [full_mismatches]
+    * **optimised** --- per-mode mismatch with a residual time shift and
+      reference phase marginalised, plus the (time-and-phase-optimised)
+      full-waveform mismatch;
+    * **not optimised** --- per-mode mismatch with only the surrogate's
+      predicted alignment applied (real Wiener product), plus the
+      matching non-optimised full-waveform mismatch.
+
+    Each distribution is a KDE in :math:`\log_{10}` mismatch. Each mode's
+    legend entry carries its share of the PSD-weighted power.
+    """
+    fig, axes = plt.subplots(2, 1, figsize=(9, 8), sharex=True)
+
+    all_values = [arr for pair in mismatches_by_mode.values() for arr in pair]
+    all_values += [full_mismatches, full_mismatches_no_opt]
     finite = np.concatenate([v[v > 0] for v in all_values if len(v)])
     log_grid = np.linspace(np.log10(finite.min()), np.log10(finite.max()), 400)
     grid = 10**log_grid
 
-    def plot_kde(values: np.ndarray, **kwargs) -> None:
+    # Per-panel peak of the *per-mode* KDEs only, so a tall full-waveform
+    # spike (e.g. the not-optimised one piling up near 1) does not squash
+    # the single-mode curves off the bottom of the axis.
+    per_mode_peak = [0.0, 0.0]
+
+    def plot_kde(i: int, values: np.ndarray, track: bool = False, **kwargs) -> None:
         positive = values[values > 0]
         if len(positive) < 2:
             return
-        log_values = np.log10(positive)
-        density = gaussian_kde(log_values)(log_grid)
-        ax.plot(grid, density, **kwargs)
+        density = gaussian_kde(np.log10(positive))(log_grid)
+        axes[i].plot(grid, density, **kwargs)
+        if track:
+            per_mode_peak[i] = max(per_mode_peak[i], float(density.max()))
 
-    for (mode, (optimised, regressed)), color in zip(
-        mismatches_by_mode.items(), plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    ):
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    for (mode, (optimised, regressed)), color in zip(mismatches_by_mode.items(), colors):
         label = rf"$(\ell, m) = ({mode.l}, {mode.m})$"
         if power_fractions and len(power_fractions.get(mode, [])):
             label += f"  [{np.median(power_fractions[mode]):.3%} of power]"
-        plot_kde(optimised, linewidth=2.0, color=color, label=label)
-        plot_kde(regressed, linewidth=1.4, linestyle="--", color=color)
+        plot_kde(0, optimised, track=True, linewidth=2.0, color=color, label=label)
+        plot_kde(1, regressed, track=True, linewidth=2.0, color=color, label=label)
 
-    plot_kde(
-        full_mismatches,
-        linewidth=2.2,
-        linestyle="--",
-        color="black",
-        label="full waveform",
-    )
+    plot_kde(0, full_mismatches, linewidth=2.4, linestyle="--",
+             color="black", label="full waveform")
+    plot_kde(1, full_mismatches_no_opt, linewidth=2.4, linestyle="--",
+             color="black", label="full waveform")
 
-    ax.set_xscale("log")
-    ax.set_xlabel("Mismatch")
-    ax.set_title(
-        "solid: residual time+phase marginalised    dashed: predicted time "
-        "shift applied, phase marginalised",
+    axes[0].set_title("residual time + reference phase optimised", fontsize="small")
+    axes[1].set_title(
+        "surrogate's predicted \u0394t + reference phase applied, nothing optimised",
         fontsize="small",
     )
-    ax.set_ylabel(r"Density [per $\log_{10}$ mismatch]")
-    ax.grid(True)
-    ax.legend()
+    axes[1].set_xscale("log")
+    axes[1].set_xlabel("Mismatch")
+    for i, ax in enumerate(axes):
+        ax.set_ylabel(r"Density [per $\log_{10}$ mismatch]")
+        ax.grid(True)
+        ax.legend(fontsize="small")
+        if per_mode_peak[i] > 0:
+            ax.set_ylim(0, 1.15 * per_mode_peak[i])
     fig.suptitle("Per-mode and full-waveform mismatch distributions (KDE)")
     fig.tight_layout()
 
@@ -1059,10 +1144,14 @@ if __name__ == "__main__":
     mismatches_by_mode = per_mode_mismatches(model)
 
     print("Computing full-waveform mismatches and per-mode power shares...")
-    full_mismatches, power_fractions = full_waveform_mismatches(model)
+    full_mismatches, full_mismatches_no_opt, power_fractions = full_waveform_mismatches(
+        model
+    )
 
     report_weighted_mismatches(mismatches_by_mode, power_fractions, full_mismatches)
-    plot_mismatches(mismatches_by_mode, full_mismatches, power_fractions)
+    plot_mismatches(
+        mismatches_by_mode, full_mismatches, full_mismatches_no_opt, power_fractions
+    )
 
     print("Computing per-mode mismatch vs. power fraction...")
     mismatch_vs_power = mismatch_vs_power_by_mode(model)

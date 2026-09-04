@@ -40,12 +40,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.kernel_approximation import RBFSampler
-from sklearn.linear_model import RidgeCV
+from sklearn.linear_model import LinearRegression, RidgeCV
 
 from mlgw_bns.model import DEFAULT_MODES, Model
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.neural_network import ModePhasesNN, TimeshiftsNN
-from mlgw_bns.pn_modes import Mode as PNMode, reference_phase_backbone
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -86,19 +85,20 @@ def make_targets(model, grid_hz, f_ref_natural, n_points, seed, batch_size, labe
 
 
 def phase_backbone_leftover(p, phi, modes, f0_natural):
-    """Replicate ``ModePhasesNN.fit``'s ``phi - (a*backbone + b)`` per mode.
+    """Replicate ``ModePhasesNN.fit``'s analytic-backbone calibration per mode.
 
-    Returns ``(leftover, coeffs)`` where ``coeffs[j] = (a, b, backbone_j)``
-    so the same calibration can be re-applied to a held-out set.
+    Linear fit of ``phi_lm(f0)`` on ``[M_lm, q, Lambda_1, Lambda_2,
+    chi_1, chi_2]`` (see ``ModePhasesNN._backbone_design``); returns
+    ``(leftover, fitters)`` so the same calibration can be re-applied.
     """
     leftover = np.empty_like(phi, dtype=float)
-    coeffs = []
+    fitters = []
     for j, mode in enumerate(modes):
-        backbone = reference_phase_backbone(p, f0_natural, PNMode(mode.l, mode.m))
-        a, b = np.polyfit(backbone, phi[:, j], 1)
-        leftover[:, j] = phi[:, j] - (a * backbone + b)
-        coeffs.append((float(a), float(b)))
-    return leftover, coeffs
+        design = ModePhasesNN._backbone_design(p, (mode.l, mode.m), f0_natural)
+        lr = LinearRegression().fit(design, phi[:, j])
+        leftover[:, j] = phi[:, j] - lr.predict(design)
+        fitters.append(lr)
+    return leftover, fitters
 
 
 def ridge_cv_sweep(train, modes, f0_natural):
