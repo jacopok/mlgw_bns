@@ -764,7 +764,27 @@ def psi_lm(H_lm_callable: H_callable, mode: Mode) -> Callable_Waveform:
         chi_a_z = (params.chi_1 - params.chi_2) / 2
         chi_s_z = (params.chi_1 + params.chi_2) / 2
         H = H_lm_callable(v, params.eta, delta, chi_a_z, chi_s_z)
-        return orbital_phase + np.unwrap(np.angle(H))
+
+        # ``arg H_lm`` is a small PN correction to a leading coefficient that
+        # lies exactly on a real or imaginary axis, but ``np.angle``'s branch
+        # cut sits on the negative real axis --- which is where modes with a
+        # negative real leading coefficient live (e.g. ``H_44``, leading term
+        # ``3*eta - 1 < 0``). As the intrinsic parameters vary, ``Im H_lm``
+        # changes sign there and ``np.angle`` flips by ``2*pi``; ``np.unwrap``
+        # only acts along frequency, so it cannot repair a discontinuity in
+        # parameter space. Snap the frequency-unwrapped angle to the ``2*pi``
+        # branch whose value at the first node matches the (parameter-stable)
+        # argument of the leading coefficient.
+        arg_H = np.unwrap(np.angle(H))
+        lead = H_lm_callable(1e-8, params.eta, delta, chi_a_z, chi_s_z)
+        if lead.real >= abs(lead.imag):
+            lead_arg = 0.0
+        elif lead.real <= -abs(lead.imag):
+            lead_arg = np.pi
+        else:
+            lead_arg = float(np.copysign(np.pi / 2, lead.imag))
+        arg_H += 2 * np.pi * np.round((lead_arg - arg_H[0]) / (2 * np.pi))
+        return orbital_phase + arg_H
 
     return function
 
