@@ -51,9 +51,9 @@ import numpy as np
 import scipy.linalg  # type: ignore
 from importlib.resources import files
 from sklearn.gaussian_process import GaussianProcessRegressor  # type: ignore
-from sklearn.kernel_approximation import RBFSampler  # type: ignore
+from sklearn.kernel_approximation import Nystroem, RBFSampler  # type: ignore
 from sklearn.kernel_ridge import KernelRidge  # type: ignore
-from sklearn.linear_model import Ridge  # type: ignore
+from sklearn.linear_model import LinearRegression, Ridge, RidgeCV  # type: ignore
 from sklearn.neural_network import MLPRegressor  # type: ignore
 from sklearn.pipeline import Pipeline  # type: ignore
 from sklearn.preprocessing import MinMaxScaler, StandardScaler  # type: ignore
@@ -962,6 +962,43 @@ class TimeshiftsNN:
             ]
         )
 
+    #: Ridge penalties scanned by the leave-one-out CV in
+    #: :meth:`make_nystroem_ridge_pipeline`.
+    NYSTROEM_ALPHAS = np.logspace(-10.0, 0.0, 21)
+
+    @staticmethod
+    def make_nystroem_ridge_pipeline(
+        n_components: int = 2500,
+        gamma: float = DEFAULT_GAMMA,
+        random_state: int = DEFAULT_RANDOM_STATE,
+    ) -> Pipeline:
+        r"""Nystroem RBF features + leave-one-out-CV ridge.
+
+        Unlike the random features of :meth:`make_rff_ridge_pipeline`, the
+        ``n_components`` Nystroem landmarks are drawn from the training set,
+        so for a smooth low-dimensional target the kernel approximation is
+        markedly more sample-efficient at equal width. The ridge penalty is
+        chosen per fit by :class:`~sklearn.linear_model.RidgeCV`'s efficient
+        generalised cross-validation over :attr:`NYSTROEM_ALPHAS`.
+
+        Used by :class:`ModePhasesNN`; see the head-to-head in
+        ``compare_phase_regressors.py`` (Nystroem beat RFF on every mode and
+        training-set size, and both MLP variants).
+        """
+        return Pipeline(
+            [
+                (
+                    "nystroem",
+                    Nystroem(
+                        n_components=n_components,
+                        gamma=gamma,
+                        random_state=random_state,
+                    ),
+                ),
+                ("ridge", RidgeCV(alphas=TimeshiftsNN.NYSTROEM_ALPHAS)),
+            ]
+        )
+
     def fit(self) -> "TimeshiftsNN":
         """Fit the RFF + Ridge model on stored training data.
 
@@ -1038,9 +1075,12 @@ class TimeshiftsNN:
 
 
 class ModePhasesNN:
-    """RFF + Ridge surrogate for per-mode reference phases.
+    """Nystroem + CV-ridge surrogate for per-mode reference phases.
 
-    Analogous to :class:`TimeshiftsNN`, but a *multi-output* regressor:
+    Analogous to :class:`TimeshiftsNN`, but a *multi-output* regressor
+    and, since the head-to-head in ``compare_phase_regressors.py``, backed
+    by :meth:`TimeshiftsNN.make_nystroem_ridge_pipeline` (data-adaptive
+    kernel landmarks + GCV ridge) rather than random Fourier features:
     for a given set of intrinsic parameters it predicts the vector
     ``[phi_lm[f0] for lm in modes]`` --- the phase of each spherical
     harmonic mode at the lowest frequency node of the training grid.
@@ -1077,9 +1117,12 @@ class ModePhasesNN:
             ``True`` once the model is ready for :meth:`predict`.
     """
 
-    DEFAULT_N_COMPONENTS = TimeshiftsNN.DEFAULT_N_COMPONENTS
+    #: Number of Nystroem landmarks (see
+    #: :meth:`TimeshiftsNN.make_nystroem_ridge_pipeline`). Fewer than the RFF
+    #: default because the landmarks are data-adaptive.
+    DEFAULT_N_COMPONENTS = 2500
     DEFAULT_GAMMA = TimeshiftsNN.DEFAULT_GAMMA
-    DEFAULT_RIDGE_ALPHA = TimeshiftsNN.DEFAULT_RIDGE_ALPHA
+    DEFAULT_RIDGE_ALPHA = TimeshiftsNN.DEFAULT_RIDGE_ALPHA  # unused: RidgeCV picks alpha
     DEFAULT_RANDOM_STATE = TimeshiftsNN.DEFAULT_RANDOM_STATE
 
     def __init__(
@@ -1091,6 +1134,7 @@ class ModePhasesNN:
         training_params: Optional[np.ndarray] = None,
         training_mode_phases: Optional[np.ndarray] = None,
         f0_natural: Optional[float] = None,
+        relative_to_22: bool = True,
         n_components: int = DEFAULT_N_COMPONENTS,
         gamma: float = DEFAULT_GAMMA,
         ridge_alpha: float = DEFAULT_RIDGE_ALPHA,
@@ -1101,14 +1145,27 @@ class ModePhasesNN:
         self.modes = modes
         self.training_params = training_params
         self.training_mode_phases = training_mode_phases
+        #: When ``True`` (and (2,2) is among ``modes``), every higher-order
+        #: mode is regressed as ``phi_lm(f0) - phi_22(f0)`` rather than
+        #: ``phi_lm(f0)`` directly. The two share a large, strongly curved
+        #: common term --- the merger-time-alignment phase ``2 pi f0 tc``,
+        #: mode-independent (verified: ``roughness(phi_lm - (m/2) phi_22) /
+        #: roughness(phi_lm) = |1 - m/2|`` exactly) --- which the difference
+        #: cancels, leaving only the small smooth per-mode PN structure.
+        #: (2,2) itself keeps its absolute target. Legacy pickles default
+        #: to ``False`` via :meth:`__setstate__`.
+        self.relative_to_22 = relative_to_22
         #: Frequency (natural units) at which the reference phase is
         #: anchored. When set, the huge stationary-phase backbone
         #: ``a * M_lm + b`` is subtracted analytically per mode and only
         #: the smooth leftover is regressed. ``None`` -> plain regressor
         #: on the raw targets (legacy behaviour / old pickles).
         self.f0_natural = f0_natural
-        #: ``(l, m) -> (a, b, f0_natural)`` calibration of the analytic
-        #: backbone, populated by :meth:`fit` when ``f0_natural`` is set.
+        #: ``(l, m) -> (LinearRegression, f0_natural)`` calibration of the
+        #: analytic backbone, populated by :meth:`fit` when ``f0_natural``
+        #: is set: a linear fit of the target on ``[M_lm, q, Lambda_1,
+        #: Lambda_2, chi_1, chi_2]``. Legacy pickles instead hold the
+        #: 3-tuple ``(a, b, f0_natural)`` of the old ``a * M_lm + b`` fit.
         self.analytic_coeffs: dict = {}
         self.n_components = n_components
         self.gamma = gamma
@@ -1120,26 +1177,73 @@ class ModePhasesNN:
         self.__dict__.update(state)
         self.__dict__.setdefault("f0_natural", None)
         self.__dict__.setdefault("analytic_coeffs", {})
+        self.__dict__.setdefault("relative_to_22", False)
 
-    def _analytic_prediction(self, params: np.ndarray) -> np.ndarray:
-        """``a * M_lm(params) + b`` per mode, shape ``(n_samples, n_modes)``."""
+    def _ref_column(self) -> "Optional[int]":
+        """Column index of the (2,2) mode, or ``None`` if it is absent.
+
+        Relative-to-(2,2) targeting is only active when this is not
+        ``None`` and :attr:`relative_to_22` is set.
+        """
+        if not self.relative_to_22 or self.modes is None:
+            return None
+        for i, lm in enumerate(self.modes):
+            if tuple(lm) == (2, 2):
+                return i
+        return None
+
+    @staticmethod
+    def _backbone_design(params: np.ndarray, lm, f0: float) -> np.ndarray:
+        """``[M_lm, q, Lambda_1, Lambda_2, chi_1, chi_2, chi_eff]`` design matrix.
+
+        The analytic-backbone calibration is a plain linear fit on these
+        columns: ``M_lm`` carries the huge stationary-phase dynamic range,
+        the raw intrinsic parameters plus the effective spin
+        ``chi_eff = (chi_1 + q chi_2) / (1 + q)`` carry the per-mode
+        spin/mass-ratio dependence that the ``m/2`` frequency rescaling in
+        :func:`~mlgw_bns.pn_modes.reference_phase_backbone` gets wrong
+        (dominant for the ``m``-odd and high-``ell`` modes).
+        """
         from .pn_modes import Mode, reference_phase_backbone
 
         params = np.asarray(params, dtype=float)
+        m = reference_phase_backbone(params, f0, Mode(*lm))
+        q, chi_1, chi_2 = params[:, 0], params[:, 3], params[:, 4]
+        chi_eff = (chi_1 + q * chi_2) / (1.0 + q)
+        return np.column_stack([m, params, chi_eff])
+
+    def _analytic_prediction(self, params: np.ndarray) -> np.ndarray:
+        """Analytic-backbone calibration per mode, shape ``(n_samples, n_modes)``."""
+        from .pn_modes import Mode, reference_phase_backbone
+
+        params = np.asarray(params, dtype=float)
+        ref = self._ref_column()
         columns = []
-        for lm in self.modes:
-            a, b, f0 = self.analytic_coeffs[lm]
-            m = reference_phase_backbone(params, f0, Mode(*lm))
-            columns.append(a * m + b)
+        for j, lm in enumerate(self.modes):
+            entry = self.analytic_coeffs[lm]
+            if len(entry) == 3:  # legacy (a, b, f0): a * M_lm + b
+                a, b, f0 = entry
+                m = reference_phase_backbone(params, f0, Mode(*lm))
+                columns.append(a * m + b)
+            else:
+                lr, f0 = entry
+                design = self._backbone_design(params, lm, f0)
+                if ref is not None and j != ref:
+                    design = design.copy()
+                    design[:, 0] -= self._backbone_design(
+                        params, self.modes[ref], f0
+                    )[:, 0]
+                columns.append(lr.predict(design))
         return np.stack(columns, axis=1)
 
     def fit(self) -> "ModePhasesNN":
-        """Fit the RFF + Ridge model on stored training data.
+        """Fit the Nystroem + CV-ridge model on stored training data.
 
         When ``f0_natural`` was given, each mode's target is first
         reduced by an analytically-calibrated stationary-phase backbone
-        (``a * M_lm + b``, see
-        :func:`~mlgw_bns.pn_modes.reference_phase_backbone`) and the
+        --- a linear fit on ``[M_lm, q, Lambda_1, Lambda_2, chi_1,
+        chi_2, chi_eff]`` (see :meth:`_backbone_design` and
+        :func:`~mlgw_bns.pn_modes.reference_phase_backbone`) --- and the
         regressor only learns the smooth ``O(10-100 rad)`` leftover.
 
         Raises
@@ -1151,26 +1255,39 @@ class ModePhasesNN:
         if self.training_params is None or self.training_mode_phases is None:
             raise ValueError("Training data not provided.")
 
-        targets = np.asarray(self.training_mode_phases, dtype=float)
+        targets = np.asarray(self.training_mode_phases, dtype=float).copy()
+
+        ref = self._ref_column()
+        if ref is not None:
+            # regress phi_lm - phi_22 for every higher-order mode; (2,2)
+            # keeps its absolute target (column ``ref``).
+            phi22 = targets[:, ref].copy()
+            for j in range(targets.shape[1]):
+                if j != ref:
+                    targets[:, j] -= phi22
 
         if self.f0_natural is not None:
-            from .pn_modes import Mode, reference_phase_backbone
-
             params = np.asarray(self.training_params, dtype=float)
+            f0 = float(self.f0_natural)
             self.analytic_coeffs = {}
             leftover = np.empty_like(targets)
             for j, lm in enumerate(self.modes):
-                m = reference_phase_backbone(params, self.f0_natural, Mode(*lm))
-                a, b = np.polyfit(m, targets[:, j], 1)
-                self.analytic_coeffs[lm] = (float(a), float(b), float(self.f0_natural))
-                leftover[:, j] = targets[:, j] - (a * m + b)
+                design = self._backbone_design(params, lm, f0)
+                if ref is not None and j != ref:
+                    # backbone for the *difference*: M_lm - M_22
+                    design = design.copy()
+                    design[:, 0] -= self._backbone_design(
+                        params, self.modes[ref], f0
+                    )[:, 0]
+                lr = LinearRegression().fit(design, targets[:, j])
+                self.analytic_coeffs[lm] = (lr, f0)
+                leftover[:, j] = targets[:, j] - lr.predict(design)
             targets = leftover
 
         scaled_params = self.scaler.fit_transform(self.training_params)
-        self.regressor = TimeshiftsNN.make_rff_ridge_pipeline(
+        self.regressor = TimeshiftsNN.make_nystroem_ridge_pipeline(
             n_components=self.n_components,
             gamma=self.gamma,
-            ridge_alpha=self.ridge_alpha,
             random_state=self.random_state,
         )
         self.regressor.fit(scaled_params, targets)
@@ -1186,6 +1303,14 @@ class ModePhasesNN:
         prediction = self.regressor.predict(scaled_params)
         if self.analytic_coeffs:
             prediction = prediction + self._analytic_prediction(params)
+
+        ref = self._ref_column()
+        if ref is not None:
+            # invert the phi_lm - phi_22 target transform
+            phi22 = prediction[:, ref].copy()
+            for j in range(prediction.shape[1]):
+                if j != ref:
+                    prediction[:, j] += phi22
         return prediction
 
     def save_model(self, filename: str) -> None:
