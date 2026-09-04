@@ -100,7 +100,14 @@ class PrincipalComponentTraining:
         self.mode_phases_predictor = mode_phases_predictor
         self.mode_index = mode_index
 
-    def train(self, number_of_training_waveforms: int) -> PrincipalComponentData:
+    def train(
+        self, number_of_training_waveforms: int, n_jobs: int = 1
+    ) -> PrincipalComponentData:
+        """Generate a training set and fit the PCA on it.
+
+        ``n_jobs`` is sequential (``1``) by default -- parallelism is
+        opt-in; pass a higher value explicitly to use multiple workers.
+        """
 
         if number_of_training_waveforms < self.pca_model.number_of_components:
             logging.warn(
@@ -123,7 +130,8 @@ class PrincipalComponentTraining:
         freq_downsampled, parameters, residuals = self.dataset.generate_residuals(
             number_of_training_waveforms,
             self.downsampling_indices,
-            flatten_phase=False
+            flatten_phase=False,
+            n_jobs=n_jobs,
         )
 
         return self.train_on(

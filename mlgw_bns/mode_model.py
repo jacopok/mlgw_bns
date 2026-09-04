@@ -543,6 +543,7 @@ class ModeModel:
         training_nn_dataset_size: Optional[int] = 256,
         timeshifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None,
         precomputed_residuals: Optional[tuple] = None,
+        n_jobs: int = 1,
     ) -> None:
         """Generate a new model from scratch.
 
@@ -578,6 +579,11 @@ class ModeModel:
                 shared multi-mode EOB sweep; when given, the per-mode
                 ``Dataset.generate_residuals`` calls for the PCA and NN
                 training sets are skipped.
+        n_jobs : int, optional
+                Number of parallel worker processes for every EOB sweep in
+                this call. Sequential (``1``) by default -- parallelism is
+                opt-in; pass a higher value explicitly to use multiple
+                workers.
 
         """
 
@@ -592,6 +598,7 @@ class ModeModel:
 
         if training_downsampling_dataset_size is not None:
             logging.info("Training the downsampling")
+            self.downsampling_training.n_jobs = n_jobs
             self.downsampling_indices = self.downsampling_training.train(
                 training_downsampling_dataset_size
             )
@@ -625,6 +632,7 @@ class ModeModel:
                         training_nn_dataset_size,
                         self.downsampling_indices,
                         flatten_phase=False,
+                        n_jobs=n_jobs,
                     )
                 )
             frequencies_hz = self.dataset.natural_units_to_hz(freq_downsampled)
@@ -675,7 +683,9 @@ class ModeModel:
                     self.dataset.natural_units_to_hz(freq_ds_pca),
                 )
             else:
-                self.pca_data = self.pca_training.train(training_pca_dataset_size)
+                self.pca_data = self.pca_training.train(
+                    training_pca_dataset_size, n_jobs=n_jobs
+                )
         else:
             assert self.pca_data is not None
 

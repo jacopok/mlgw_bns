@@ -615,6 +615,7 @@ class Model:
         reference_fmax_hz: float = 512.0,
         reference_batch_size: Optional[int] = None,
         seed: int = 0,
+        n_jobs: int = 1,
     ) -> None:
         """Run :meth:`ModeModel.generate` for every mode.
 
@@ -662,6 +663,12 @@ class Model:
             default) runs the whole pre-pass as a single batch.
         seed : int, optional
             Seed for the pre-pass parameter generator. Defaults to 0.
+        n_jobs : int, optional
+            Number of parallel worker processes used for every EOB sweep in
+            this call (the reference pre-pass, the per-mode downsampling
+            training, and the shared PCA/NN sweep). Sequential (``1``) by
+            default -- parallelism is opt-in; pass a higher value
+            explicitly to use multiple workers.
 
         Raises
         ------
@@ -682,6 +689,7 @@ class Model:
                 reference_fmax_hz,
                 seed,
                 reference_batch_size=reference_batch_size,
+                n_jobs=n_jobs,
             )
 
         # Per-mode downsampling indices first: each still trains on its own
@@ -690,6 +698,7 @@ class Model:
             for mode in self.modes:
                 mode_model = self.mode_models[mode]
                 logging.info("Training the downsampling for mode %s", mode)
+                mode_model.downsampling_training.n_jobs = n_jobs
                 mode_model.downsampling_indices = mode_model.downsampling_training.train(
                     training_downsampling_dataset_size
                 )
@@ -699,7 +708,7 @@ class Model:
         precomputed_by_mode: Optional[dict] = None
         if training_pca_dataset_size is not None or training_nn_dataset_size is not None:
             precomputed_by_mode = self._multimode_training_residuals(
-                training_pca_dataset_size, training_nn_dataset_size
+                training_pca_dataset_size, training_nn_dataset_size, n_jobs=n_jobs
             )
 
         for mode in self.modes:
@@ -712,12 +721,14 @@ class Model:
                     None if precomputed_by_mode is None
                     else precomputed_by_mode[mode]
                 ),
+                n_jobs=n_jobs,
             )
 
     def _multimode_training_residuals(
         self,
         training_pca_dataset_size: Optional[int],
         training_nn_dataset_size: Optional[int],
+        n_jobs: int = 1,
     ) -> dict:
         """One multi-mode EOB sweep for the PCA + NN training sets.
 
@@ -727,6 +738,9 @@ class Model:
         returns ``mode -> (freq_downsampled_natural, ParameterSet,
         Residuals)`` shaped exactly like ``Dataset.generate_residuals``'s
         return so :meth:`ModeModel.generate` can consume it directly.
+
+        ``n_jobs`` is sequential (``1``) by default -- parallelism is
+        opt-in; pass a higher value explicitly to use multiple workers.
         """
         size = max(
             s for s in (training_pca_dataset_size, training_nn_dataset_size)
@@ -750,6 +764,7 @@ class Model:
             downsampling_indices_by_mode,
             amplitude_reference_by_mode,
             progress_desc="PCA/NN training sweep",
+            n_jobs=n_jobs,
         )
         if len(parameter_array) < size:
             logging.warning(
@@ -801,6 +816,7 @@ class Model:
         f_ref_natural: np.ndarray,
         batch_size: Optional[int] = None,
         progress_label: str = "Reference pre-pass sweep",
+        n_jobs: int = 1,
     ) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
         r"""Draw ``n_points`` parameters and reduce them to regression targets.
 
@@ -817,6 +833,9 @@ class Model:
 
         Peak memory scales with ``batch_size * len(f_ref_natural)`` rather
         than ``n_points * len(f_ref_natural)``.
+
+        ``n_jobs`` is sequential (``1``) by default -- parallelism is
+        opt-in; pass a higher value explicitly to use multiple workers.
 
         Returns
         -------
@@ -842,6 +861,7 @@ class Model:
                 params_list,
                 f_ref_natural,
                 progress_desc=f"{progress_label} ({n_done}/{n_points})",
+                n_jobs=n_jobs,
             )
             if len(parameter_array) == 0:
                 continue
@@ -876,6 +896,7 @@ class Model:
         reference_fmax_hz: float,
         seed: int,
         reference_batch_size: Optional[int] = None,
+        n_jobs: int = 1,
     ) -> None:
         r"""Fit the shared time-shift and per-mode reference-phase predictors.
 
@@ -904,6 +925,9 @@ class Model:
         (2,2) time shift and each mode's phase residual at :math:`f_0`) and
         then discarded, so peak memory scales with the batch size rather
         than ``reference_dataset_size``.
+
+        ``n_jobs`` is sequential (``1``) by default -- parallelism is
+        opt-in; pass a higher value explicitly to use multiple workers.
         """
         reference_mode = Mode(2, 2)
         if reference_mode not in self.modes:
@@ -925,6 +949,7 @@ class Model:
             grid_hz,
             f_ref_natural,
             batch_size=reference_batch_size,
+            n_jobs=n_jobs,
         )
 
         logging.info(
@@ -955,6 +980,7 @@ class Model:
         downsampling_indices_by_mode: Optional[dict] = None,
         amplitude_reference_by_mode: Optional[dict] = None,
         progress_desc: str = "Multi-mode EOB sweep",
+        n_jobs: int = 1,
     ):
         r"""One EOB call per parameter point, residuals for every mode.
 
@@ -981,6 +1007,10 @@ class Model:
             :meth:`WaveformGenerator.generate_residuals`).
         progress_desc
             Label for the progress reporting of the parallel EOB sweep.
+        n_jobs
+            Number of parallel worker processes for the EOB sweep.
+            Sequential (``1``) by default -- parallelism is opt-in; pass a
+            higher value explicitly to use multiple workers.
 
         Returns
         -------
@@ -1036,7 +1066,7 @@ class Model:
             return out
 
         with joblib_progress(progress_desc, len(params_list)):
-            results = Parallel(n_jobs=16)(delayed(_one)(p) for p in params_list)
+            results = Parallel(n_jobs=n_jobs)(delayed(_one)(p) for p in params_list)
 
         keep = [i for i, r in enumerate(results) if r is not None]
         parameter_array = np.array(
@@ -1125,10 +1155,14 @@ class Model:
                 save_mode(mode)
 
         if self.time_shifts_predictor is not None:
-            self.time_shifts_predictor.save_model(self.filename_timeshifts)
+            self.time_shifts_predictor.save_model(
+                self.filename_timeshifts, include_training_data=include_training_data
+            )
 
         if self.mode_phases_predictor is not None:
-            self.mode_phases_predictor.save_model(self.filename_mode_phases)
+            self.mode_phases_predictor.save_model(
+                self.filename_mode_phases, include_training_data=include_training_data
+            )
 
     def load(
         self,
