@@ -76,6 +76,10 @@ class DownsamplingTraining(ABC):
             Tolerance for amplitude downsampling. If None, uses tol.
     tol_phi : float, optional
             Tolerance for phase downsampling. If None, uses tol.
+    n_jobs : int
+            Number of parallel worker processes for waveform generation.
+            Sequential (``1``) by default -- parallelism is opt-in; pass a
+            higher value explicitly to use multiple workers.
     """
 
     degree: int = 3
@@ -86,7 +90,7 @@ class DownsamplingTraining(ABC):
         tol: float = 1e-4,
         tol_amp: Optional[float] = 8e-4, # 8e-4
         tol_phi: Optional[float] = 3e-4, # was 5e-4; tightened for denser HOM phase nodes at the top edge
-        n_jobs: int = 16,
+        n_jobs: int = 1,
         max_phi_gap_ratio: Optional[float] = None,
     ):
         self.dataset = dataset
@@ -533,6 +537,10 @@ class RDPDownsamplingTraining(DownsamplingTraining):
     max_waveforms : Optional[int]
         Use at most this many waveforms for the index union. If None,
         use all. Subsampling speeds up training. Defaults to 200.
+    n_jobs : int
+        Number of parallel worker processes. Sequential (``1``) by
+        default -- parallelism is opt-in; pass a higher value explicitly
+        to use multiple workers.
     """
 
     def __init__(
@@ -543,7 +551,7 @@ class RDPDownsamplingTraining(DownsamplingTraining):
         tol_phi: Optional[float] = 5e-2,
         grid_step: int = 10,
         max_waveforms: Optional[int] = 200,
-        n_jobs: int = 16,
+        n_jobs: int = 1,
     ):
         super().__init__(
             dataset, tol, tol_amp=tol_amp, tol_phi=tol_phi, n_jobs=n_jobs

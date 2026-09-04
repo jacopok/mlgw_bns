@@ -1377,7 +1377,7 @@ class Dataset:
         downsampling_indices: Optional[DownsamplingIndices] = None,
         flatten_phase: bool = True,
         oversample: float = 1.0,
-        n_jobs: int = 16,
+        n_jobs: int = 1,
     ) -> tuple[np.ndarray, ParameterSet, Residuals]:
         """Generate a set of waveform residuals.
 
@@ -1577,7 +1577,7 @@ class Dataset:
         self,
         parameters: ParameterSet,
         downsampling_indices: Optional[DownsamplingIndices] = None,
-        n_jobs: int = 16,
+        n_jobs: int = 1,
     ) -> FDWaveforms:
         """Generate full effective-one-body waveforms
         at each of the parameters in the given parameter set.
@@ -1589,7 +1589,9 @@ class Dataset:
         downsampling_indices : DownsamplingIndices, optional
             Indices to downsample the waveforms at, by default None
         n_jobs : int
-            Number of parallel jobs for waveform generation. Defaults to 16.
+            Number of parallel jobs for waveform generation. Sequential
+            (``1``) by default -- parallelism is opt-in; pass a higher
+            value explicitly to use multiple worker processes.
 
         Returns
         -------
