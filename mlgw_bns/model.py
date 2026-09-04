@@ -1433,14 +1433,18 @@ class Model:
                     frequencies * params.mass_sum_seconds,
                 )
             else:
+                # `apply_time_shift=False`: the linear-in-frequency phase
+                # trend is applied here, once, from `time_shifts_per_mode`
+                # (which may be user-supplied) --- not a second time inside
+                # `predict_amplitude_phase_optimized`.
                 amp, phase = self.mode_models[mode].predict_amplitude_phase_optimized(
-                    frequencies, params
+                    frequencies, params, apply_time_shift=False
                 )
                 ts = time_shifts_per_mode[idx]
                 # Time shifts are stored in units of the reference total mass
                 # of the dataset, so we rescale to the requested total mass.
                 ts_scaled = ts * (params.total_mass / self.dataset.total_mass)
-                phase += 2 * np.pi * frequencies * ts_scaled
+                phase += 2 * np.pi * (frequencies - frequencies[0]) * ts_scaled
             active_indices.append(idx)
             amps_list.append(amp)
             phases_list.append(phase)
@@ -1664,14 +1668,18 @@ class Model:
                     frequencies * params.mass_sum_seconds,
                 )
             else:
+                # `apply_time_shift=False`: the linear-in-frequency phase
+                # trend is applied here, once, from `time_shifts_per_mode`
+                # --- not a second time inside
+                # `predict_amplitude_phase_optimized`.
                 amp, phase = self.mode_models[mode].predict_amplitude_phase_optimized(
-                    frequencies, params
+                    frequencies, params, apply_time_shift=False
                 )
                 ts = time_shifts_per_mode[idx]
                 # Time shifts are stored in units of the reference total mass
                 # of the dataset, so we rescale to the requested total mass.
                 ts_scaled = ts * (params.total_mass / self.dataset.total_mass)
-                phase += 2 * np.pi * frequencies * ts_scaled
+                phase += 2 * np.pi * (frequencies - frequencies[0]) * ts_scaled
 
             active_indices.append(idx)
             amps_list.append(amp)

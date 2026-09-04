@@ -1256,7 +1256,23 @@ class ModeModel:
         
         return amp, phi
 
-    def predict_amplitude_phase_optimized(self, frequencies: np.ndarray, params: ParametersWithExtrinsic) -> tuple[np.ndarray, np.ndarray]:
+    def predict_amplitude_phase_optimized(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        apply_time_shift: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Amplitude and phase for one mode.
+
+        ``apply_time_shift`` (default ``True``) adds back the
+        linear-in-frequency phase trend that ``remove_linear_trend``
+        stripped from the training residuals, using this model's
+        :attr:`timeshifts_predictor`. :meth:`Model._hpc_waveform` and
+        :meth:`Model._hpc_waveform_per_mode` pass ``False`` because they
+        apply that shift themselves (with the requested time shift, which
+        may be user-supplied, and the total-mass rescaling); passing
+        ``True`` there would apply it twice.
+        """
         # from time import perf_counter
         # t0 = perf_counter()
 
@@ -1337,7 +1353,7 @@ class ModeModel:
         amp_ds = combine_residuals_amp(residuals.amplitude_residuals[0], pn_amp)
         phi_ds = combine_residuals_phi(residuals.phase_residuals[0], pn_phi)
 
-        if self.timeshifts_predictor is not None:
+        if self.timeshifts_predictor is not None and apply_time_shift:
             # add back the linear-in-frequency phase trend that
             # `remove_linear_trend` subtracted from the training residuals
             phase_freqs_hz = freqs_hz[ds.phase_indices]
