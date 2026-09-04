@@ -15,7 +15,11 @@ rather than each waveform's own Post-Newtonian one, which is worth a further
 factor of eighteen on the (3,3). Pass `--legacy` to reproduce the original
 pipeline instead.
 
-Run with: python make_default_dataset.py [--legacy]
+Run with: python make_default_dataset.py [--legacy] [--n-jobs N]
+
+Every EOB sweep in `Model.generate` runs sequentially (`n_jobs=1`) unless
+told otherwise -- parallelism is opt-in, not a hidden default -- so pass
+`--n-jobs` to use multiple worker processes.
 """
 
 import argparse
@@ -35,7 +39,7 @@ TRAINING_BASENAME = MODELS_AVAILABLE[0]
 PACKAGED_BASENAME = f"mlgw_bns/{PRETRAINED_MODEL_FOLDER}{MODELS_AVAILABLE[0]}"
 
 
-def train(legacy: bool = False) -> None:
+def train(legacy: bool = False, n_jobs: int = 1) -> None:
     model = Model(
         modes=list(DEFAULT_MODES),
         filename=TRAINING_BASENAME,
@@ -43,7 +47,24 @@ def train(legacy: bool = False) -> None:
         nn_kind=SklearnNetwork if legacy else KernelRidgeNetwork,
         reference_amplitude=not legacy,
     )
-    model.generate(2**10, 2**15, 2**14, reference_dataset_size=2**15)
+    # Downsampling-index training saturates by ~16-32 waveforms (held-out
+    # reconstruction error and the phase node count are both flat well before
+    # 64; see downsampling_vs_ntrain.py), while generating that many on the
+    # full ~5x10^5-point grid is the single largest memory spike in
+    # `generate` (~17 GB at 1024, ~0.5 GB at 64). 64 keeps the margin.
+    #
+    # The per-mode NN dataset size is capped by KernelRidgeNetwork's exact
+    # RBF solve, whose peak RSS is ~quadratic in its size (measured with
+    # probe_kernel_ridge_memory.py on this 23 GB / ~16 GB-available box:
+    # 8192 -> 1.3 GB, 16384 -> 4.5 GB, 24576 -> 9.8 GB, 32768 timed out,
+    # almost certainly OOM); 24576 leaves a comfortable margin. PCA's
+    # economy SVD is linear in its dataset size, so it can stay large. The
+    # reference (time-shift + mode-phase) pre-pass now also fits an exact
+    # KernelRidge (ModePhasesNN switched off Nystroem, see
+    # compare_mode_phase_regressor.py) and so faces the same quadratic
+    # limit -- kept at 16384, both safe and past the accuracy plateau
+    # (reference-phase-regressor-floor memory note).
+    model.generate(64, 2**15, 24576, reference_dataset_size=16384, n_jobs=n_jobs)
     model.set_hyper_and_train_nn()
     model.save(include_training_data=True)
 
@@ -68,7 +89,13 @@ if __name__ == "__main__":
         action="store_true",
         help="train with the original network and amplitude parametrization",
     )
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=1,
+        help="worker processes for EOB sweeps; sequential (1) unless given",
+    )
     args = parser.parse_args()
 
-    train(legacy=args.legacy)
+    train(legacy=args.legacy, n_jobs=args.n_jobs)
     install()
