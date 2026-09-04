@@ -44,7 +44,7 @@ import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Optional, Union
+from typing import IO, TYPE_CHECKING, Any, Callable, Optional, Union
 
 import joblib  # type: ignore
 import numpy as np
@@ -835,13 +835,19 @@ class TimeshiftsGPR:
         scaled_params = self.scaler.transform(params)
         return self.regressor.predict(scaled_params)
 
-    def save_model(self, filename: str) -> None:
+    def save_model(self, filename: str, include_training_data: bool = True) -> None:
         """Persist the entire object to ``filename`` via joblib.
 
         Parameters
         ----------
         filename : str
                 Destination path.
+        include_training_data : bool, optional
+                Ignored: a Gaussian process needs its training points to
+                :meth:`predict` (they parametrise the posterior), so unlike
+                :class:`TimeshiftsNN`/:class:`ModePhasesNN` there is nothing
+                to strip. Accepted only so :meth:`Model.save` can call every
+                predictor's ``save_model`` uniformly.
         """
         joblib.dump(self, filename)
 
@@ -1055,9 +1061,26 @@ class TimeshiftsNN:
         scaled_params = self.scaler.transform(params)
         return self.regressor.predict(scaled_params)
 
-    def save_model(self, filename: str) -> None:
-        """Persist the entire object to ``filename`` via joblib."""
-        joblib.dump(self, filename)
+    def save_model(self, filename: str, include_training_data: bool = True) -> None:
+        """Persist the entire object to ``filename`` via joblib.
+
+        Parameters
+        ----------
+        include_training_data : bool, optional
+            If ``False``, ``training_params``/``training_timeshifts`` are
+            dropped before pickling (restored on ``self`` afterwards) ---
+            they are only needed to refit, not to :meth:`predict`, and for
+            RFF+Ridge they are the entire footprint of the file.
+        """
+        if include_training_data:
+            joblib.dump(self, filename)
+            return
+        tp, tt = self.training_params, self.training_timeshifts
+        self.training_params = self.training_timeshifts = None
+        try:
+            joblib.dump(self, filename)
+        finally:
+            self.training_params, self.training_timeshifts = tp, tt
 
     @classmethod
     def load_model(cls, filename: str) -> "TimeshiftsNN":
@@ -1075,15 +1098,20 @@ class TimeshiftsNN:
 
 
 class ModePhasesNN:
-    """Nystroem + CV-ridge surrogate for per-mode reference phases.
+    """Kernel-ridge surrogate for per-mode reference phases.
 
-    Analogous to :class:`TimeshiftsNN`, but a *multi-output* regressor
-    and, since the head-to-head in ``compare_phase_regressors.py``, backed
-    by :meth:`TimeshiftsNN.make_nystroem_ridge_pipeline` (data-adaptive
-    kernel landmarks + GCV ridge) rather than random Fourier features:
-    for a given set of intrinsic parameters it predicts the vector
+    Analogous to :class:`TimeshiftsNN`, but a *multi-output* regressor: for
+    a given set of intrinsic parameters it predicts the vector
     ``[phi_lm[f0] for lm in modes]`` --- the phase of each spherical
     harmonic mode at the lowest frequency node of the training grid.
+
+    The regressor is an **exact RBF** :class:`~sklearn.kernel_ridge.KernelRidge`
+    (see :meth:`make_kernel_ridge_pipeline`). The reference dataset is small
+    (~16k), so the exact kernel solve is cheap, and ``compare_mode_phase_regressor.py``
+    found it beats both the Nystroem(2500) landmark approximation (which it
+    replaced) and RFF on every mode and training-set size, while pickling to
+    ~1 MB against Nystroem's ~50 MB ``n_components**2`` normalisation matrix.
+    Pass ``pipeline_factory`` to override.
 
     The relative phases between modes are hard for the per-mode PCA +
     network to learn from the residuals directly; pulling the node-0
@@ -1117,13 +1145,25 @@ class ModePhasesNN:
             ``True`` once the model is ready for :meth:`predict`.
     """
 
-    #: Number of Nystroem landmarks (see
-    #: :meth:`TimeshiftsNN.make_nystroem_ridge_pipeline`). Fewer than the RFF
-    #: default because the landmarks are data-adaptive.
+    #: Kept for the ``pipeline_factory=None`` Nystroem fallback and legacy
+    #: pickles; the default pipeline is exact kernel ridge and ignores it.
     DEFAULT_N_COMPONENTS = 2500
     DEFAULT_GAMMA = TimeshiftsNN.DEFAULT_GAMMA
-    DEFAULT_RIDGE_ALPHA = TimeshiftsNN.DEFAULT_RIDGE_ALPHA  # unused: RidgeCV picks alpha
+    DEFAULT_RIDGE_ALPHA = TimeshiftsNN.DEFAULT_RIDGE_ALPHA
     DEFAULT_RANDOM_STATE = TimeshiftsNN.DEFAULT_RANDOM_STATE
+    #: Ridge penalty for the default exact :class:`~sklearn.kernel_ridge.KernelRidge`
+    #: (:meth:`make_kernel_ridge_pipeline`). Small: the target is smooth and the
+    #: reference dataset noise-free bar TEOB ``tc`` quantisation.
+    DEFAULT_KERNEL_ALPHA = 1e-8
+
+    @staticmethod
+    def make_kernel_ridge_pipeline(
+        gamma: float = DEFAULT_GAMMA, alpha: float = DEFAULT_KERNEL_ALPHA
+    ) -> Pipeline:
+        """Exact RBF kernel ridge --- the default reference-phase regressor."""
+        return Pipeline(
+            [("kernel_ridge", KernelRidge(kernel="rbf", gamma=gamma, alpha=alpha))]
+        )
 
     def __init__(
         self,
@@ -1139,10 +1179,20 @@ class ModePhasesNN:
         gamma: float = DEFAULT_GAMMA,
         ridge_alpha: float = DEFAULT_RIDGE_ALPHA,
         random_state: int = DEFAULT_RANDOM_STATE,
+        pipeline_factory: Optional[Callable[[], Any]] = None,
     ):
         self.regressor = regressor
         self.scaler = scaler if scaler is not None else MinMaxScaler()
         self.modes = modes
+        #: Zero-argument callable returning an unfitted scikit-learn
+        #: estimator/pipeline for the leftover regression. ``None`` (the
+        #: default and what every shipped model uses) means
+        #: :meth:`make_kernel_ridge_pipeline` (exact RBF kernel ridge). Set
+        #: it to swap in a different regressor --- see
+        #: ``compare_mode_phase_regressor.py``. Not persisted (a fitted
+        #: model carries only its ``regressor``); legacy pickles get
+        #: ``None`` via :meth:`__setstate__`.
+        self.pipeline_factory = pipeline_factory
         self.training_params = training_params
         self.training_mode_phases = training_mode_phases
         #: When ``True`` (and (2,2) is among ``modes``), every higher-order
@@ -1173,11 +1223,18 @@ class ModePhasesNN:
         self.random_state = random_state
         self.is_fitted = regressor is not None
 
+    def __getstate__(self):
+        # ``pipeline_factory`` is only consulted at fit time; a fitted model
+        # carries its ``regressor`` and does not need it. Drop it on pickle
+        # so a lambda / local factory does not break serialization.
+        return {k: v for k, v in self.__dict__.items() if k != "pipeline_factory"}
+
     def __setstate__(self, state):
         self.__dict__.update(state)
         self.__dict__.setdefault("f0_natural", None)
         self.__dict__.setdefault("analytic_coeffs", {})
         self.__dict__.setdefault("relative_to_22", False)
+        self.__dict__.setdefault("pipeline_factory", None)
 
     def _ref_column(self) -> "Optional[int]":
         """Column index of the (2,2) mode, or ``None`` if it is absent.
@@ -1237,7 +1294,7 @@ class ModePhasesNN:
         return np.stack(columns, axis=1)
 
     def fit(self) -> "ModePhasesNN":
-        """Fit the Nystroem + CV-ridge model on stored training data.
+        """Fit the kernel-ridge model on stored training data.
 
         When ``f0_natural`` was given, each mode's target is first
         reduced by an analytically-calibrated stationary-phase backbone
@@ -1285,11 +1342,10 @@ class ModePhasesNN:
             targets = leftover
 
         scaled_params = self.scaler.fit_transform(self.training_params)
-        self.regressor = TimeshiftsNN.make_nystroem_ridge_pipeline(
-            n_components=self.n_components,
-            gamma=self.gamma,
-            random_state=self.random_state,
-        )
+        if self.pipeline_factory is not None:
+            self.regressor = self.pipeline_factory()
+        else:
+            self.regressor = self.make_kernel_ridge_pipeline(gamma=self.gamma)
         self.regressor.fit(scaled_params, targets)
         self.is_fitted = True
         return self
@@ -1313,9 +1369,25 @@ class ModePhasesNN:
                     prediction[:, j] += phi22
         return prediction
 
-    def save_model(self, filename: str) -> None:
-        """Persist the entire object to ``filename`` via joblib."""
-        joblib.dump(self, filename)
+    def save_model(self, filename: str, include_training_data: bool = True) -> None:
+        """Persist the entire object to ``filename`` via joblib.
+
+        Parameters
+        ----------
+        include_training_data : bool, optional
+            If ``False``, ``training_params``/``training_mode_phases`` are
+            dropped before pickling (restored on ``self`` afterwards) ---
+            they are only needed to refit, not to :meth:`predict`.
+        """
+        if include_training_data:
+            joblib.dump(self, filename)
+            return
+        tp, tmp = self.training_params, self.training_mode_phases
+        self.training_params = self.training_mode_phases = None
+        try:
+            joblib.dump(self, filename)
+        finally:
+            self.training_params, self.training_mode_phases = tp, tmp
 
     @classmethod
     def load_model(cls, filename: str) -> "ModePhasesNN":
