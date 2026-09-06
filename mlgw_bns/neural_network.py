@@ -472,7 +472,12 @@ class NeuralNetwork(ABC):
         self.hyper = hyper
 
     @abstractmethod
-    def fit(self, x_data: np.ndarray, y_data: np.ndarray) -> None:
+    def fit(
+        self,
+        x_data: np.ndarray,
+        y_data: np.ndarray,
+        sample_weight: Optional[np.ndarray] = None,
+    ) -> None:
         """Fit the network to the given training data.
 
         Parameters
@@ -482,6 +487,14 @@ class NeuralNetwork(ABC):
         y_data : np.ndarray
                 Targets, shape ``(n_samples, n_outputs)`` (or
                 ``(n_samples,)`` for a scalar target).
+        sample_weight : np.ndarray, optional
+                Per-sample weights, shape ``(n_samples,)``. ``None``
+                (the default) means an unweighted fit, and implementations
+                must then not pass the argument on to scikit-learn at all,
+                so that behaviour is unchanged from before weighting
+                existed. Supplied by
+                :meth:`~mlgw_bns.mode_model.ModeModel.train_nn` for odd-``m``
+                modes; see :func:`~mlgw_bns.mode_model.mode_power_weights`.
         """
 
     @abstractmethod
@@ -560,7 +573,12 @@ class SklearnNetwork(NeuralNetwork):
         if param_scaler is not None:
             self.param_scaler: StandardScaler = param_scaler
 
-    def fit(self, x_data: np.ndarray, y_data: np.ndarray) -> None:
+    def fit(
+        self,
+        x_data: np.ndarray,
+        y_data: np.ndarray,
+        sample_weight: Optional[np.ndarray] = None,
+    ) -> None:
         """Fit the scaler and the underlying :class:`MLPRegressor`.
 
         The mini-batch size is temporarily clipped to the number of
@@ -574,6 +592,10 @@ class SklearnNetwork(NeuralNetwork):
         at any training-set size. That is preserved here as an option, for
         reproducing those models exactly; it is not the default, because
         it makes any tuning of ``batch_size`` meaningless.
+
+        ``sample_weight`` is forwarded to ``MLPRegressor.fit`` only when it
+        is not ``None``, so an unweighted call is byte-identical to the
+        one-argument call this method used to make.
         """
         self.param_scaler = StandardScaler().fit(x_data)
 
@@ -591,7 +613,8 @@ class SklearnNetwork(NeuralNetwork):
         self.nn.batch_size = min(self.nn.batch_size, clip_to)
 
         scaled_x = self.param_scaler.transform(x_data)
-        self.nn.fit(scaled_x, y_data)
+        weight_kwargs = {} if sample_weight is None else {"sample_weight": sample_weight}
+        self.nn.fit(scaled_x, y_data, **weight_kwargs)
 
         self.nn.batch_size = old_batch_size
 
@@ -688,7 +711,12 @@ class KernelRidgeNetwork(NeuralNetwork):
         if target_scaler is not None:
             self.target_scaler: StandardScaler = target_scaler
 
-    def fit(self, x_data: np.ndarray, y_data: np.ndarray) -> None:
+    def fit(
+        self,
+        x_data: np.ndarray,
+        y_data: np.ndarray,
+        sample_weight: Optional[np.ndarray] = None,
+    ) -> None:
         """Fit the two scalers and solve the kernel system.
 
         For small ``kernel_gamma`` the RBF Gram matrix is close to
@@ -699,6 +727,14 @@ class KernelRidgeNetwork(NeuralNetwork):
         not wrong) and warns every time it does; that warning is
         expected here rather than a sign of a bad fit, so it is
         silenced.
+
+        ``sample_weight`` reaches the :class:`KernelRidge` solve only.
+        The two scalers are deliberately left *unweighted*: their means
+        and scales set what ``kernel_gamma`` and ``kernel_alpha`` mean,
+        and those are tuned per mode in ``data/kernel_ridge_defaults.json``
+        against the unweighted standardization. Weighting them would
+        silently change the effective kernel width and ridge penalty
+        along with the weights.
         """
         self.param_scaler = StandardScaler().fit(x_data)
         self.target_scaler = StandardScaler().fit(y_data)
@@ -714,9 +750,13 @@ class KernelRidgeNetwork(NeuralNetwork):
                 message="Ill-conditioned matrix.*",
                 category=scipy.linalg.LinAlgWarning,
             )
+            weight_kwargs = (
+                {} if sample_weight is None else {"sample_weight": sample_weight}
+            )
             self.regressor.fit(
                 self.param_scaler.transform(x_data),
                 self.target_scaler.transform(y_data),
+                **weight_kwargs,
             )
 
     def predict(self, x_data: np.ndarray) -> np.ndarray:
