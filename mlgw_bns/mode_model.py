@@ -198,6 +198,80 @@ class ParametersWithExtrinsic:
         # the phase and the time shift to TEOB.
 
 
+def mode_power_weights(
+    amplitude_residuals: np.ndarray,
+    frequencies_hz: np.ndarray,
+    pn_amplitude: Optional[np.ndarray] = None,
+    exponent: float = 1.0,
+) -> np.ndarray:
+    r"""Per-waveform regression weights from the integrated mode power.
+
+    :math:`\omega_i = (P_i / \max_j P_j)^{\text{exponent}}` with
+    :math:`P_i = \int A_i(f)^2 \mathrm{d}f`, so :math:`\omega \in (0, 1]`
+    with a maximum of exactly 1.
+
+    The point is the odd-:math:`m` modes. Their amplitude vanishes
+    identically on the equal-mass, equal-spin locus --- for (2,1) the
+    residual is exactly zero at :math:`q = 1` and grows linearly in
+    :math:`q - 1` --- so the extracted phase there is
+    :math:`\arg(0)`: undefined, and poorly conditioned in a whole
+    neighbourhood of it. A smooth global regressor forced to fit that
+    boundary layer rings across the low-:math:`q` region that does carry
+    power. Weighting by the mode's own power lets the fit relax exactly
+    where the target is ill-conditioned *and* contributes nothing to the
+    summed waveform, without dropping any training data. See
+    `arXiv:2609.03025 <https://arxiv.org/abs/2609.03025>`_, which
+    introduces the same weighting for the same reason.
+
+    Parameters
+    ----------
+    amplitude_residuals : np.ndarray
+        Shape ``(n_waveforms, n_amplitude_nodes)``; the modelled
+        amplitude quantity :math:`A_{\rm EOB} / A_{\rm PN}`.
+    frequencies_hz : np.ndarray
+        The amplitude nodes, in Hz, matching the second axis.
+    pn_amplitude : np.ndarray, optional
+        The fixed :math:`A_{\rm PN}(\theta_{\rm ref})` divisor, which
+        turns the residual back into the physical mode amplitude. This
+        is available whenever the dataset was built with
+        ``reference_amplitude=True`` (every shipped model), since the
+        divisor is then parameter-independent. If ``None``, the power is
+        computed from the bare residual instead --- a proxy, since the
+        per-waveform divisor has not been undone.
+    exponent : float, optional
+        Applied to the normalised power. ``1.0`` (the default) is the
+        plain power weighting; smaller values soften it.
+
+    Returns
+    -------
+    np.ndarray
+        Shape ``(n_waveforms,)``, maximum 1.
+    """
+
+    amplitudes = np.asarray(amplitude_residuals, dtype=np.float64)
+
+    if pn_amplitude is None:
+        logging.warning(
+            "No fixed reference amplitude available (reference_amplitude=False): "
+            "weighting on the bare residual power, which does not undo the "
+            "per-waveform Post-Newtonian divisor."
+        )
+    else:
+        amplitudes = amplitudes * np.asarray(pn_amplitude, dtype=np.float64)[np.newaxis, :]
+
+    power = np.trapezoid(amplitudes ** 2, np.asarray(frequencies_hz), axis=1)
+
+    maximum = np.max(power)
+    if not np.isfinite(maximum) or maximum <= 0.0:
+        logging.warning(
+            "Mode power is degenerate (max = %s); falling back to uniform weights",
+            maximum,
+        )
+        return np.ones(len(power))
+
+    return (power / maximum) ** exponent
+
+
 class ModeModel:
     """``mlgw_bns`` model.
     This class incorporates all the functionality required to
@@ -272,9 +346,21 @@ class ModeModel:
         parameter_generator_class: Optional[Type[ParameterGenerator]] = None,
         mode: Optional[Mode] = None,
         reference_amplitude: bool = False,
+        power_weighting: bool = True,
+        power_weight_exponent: float = 1.0,
     ):
 
         self.reference_amplitude = reference_amplitude
+        #: Whether :meth:`train_nn` weights each training waveform by its
+        #: integrated mode power (see :func:`mode_power_weights`). Only
+        #: odd-``m`` modes are affected --- their amplitude vanishes on
+        #: the equal-mass, equal-spin locus, which is what makes the
+        #: weighting necessary; even-``m`` modes are fit unweighted, and
+        #: so is the (2,2)-only model.
+        self.power_weighting = power_weighting
+        #: Exponent applied to the normalised power in
+        #: :func:`mode_power_weights`.
+        self.power_weight_exponent = power_weight_exponent
         self.filename = filename
 
         if waveform_generator is None:
@@ -377,6 +463,8 @@ class ModeModel:
             'extend_with_zeros_at_high_frequency': self.extend_with_zeros_at_high_frequency,
             'nn_kind': self.nn_kind.__name__,
             'reference_amplitude': self.reference_amplitude,
+            'power_weighting': self.power_weighting,
+            'power_weight_exponent': self.power_weight_exponent,
         }
 
     def _make_dataset(self) -> Dataset:
@@ -905,6 +993,46 @@ class ModeModel:
         return PrincipalComponentAnalysisModel(self.pca_components_number)
 
 
+    def _training_power_weights(self) -> Optional[np.ndarray]:
+        """Power weights for the training set, or ``None`` for a flat fit.
+
+        Returns ``None`` --- meaning "fit unweighted", byte-identical to
+        the behaviour before power weighting existed --- unless
+        :attr:`power_weighting` is set *and* this is an odd-``m`` mode.
+        Even-``m`` modes have no vanishing-amplitude locus, and measuring
+        their weights on the shipped model gives an almost flat
+        distribution (0.42-0.99 for (4,4), 0.73-0.99 for (2,2)), so
+        weighting them would perturb two modes that are already accurate
+        for no benefit. See :func:`mode_power_weights`.
+        """
+
+        if not self.power_weighting or self.mode is None or self.mode.m % 2 == 0:
+            return None
+
+        assert self.training_dataset is not None
+        assert self.downsampling_indices is not None
+
+        amplitude_indices = self.downsampling_indices.amplitude_indices
+
+        # Mirrors `WaveformGenerator.generate_residuals`: with a fixed
+        # amplitude reference the divisor is parameter-independent, so
+        # multiplying it back in recovers the physical mode amplitude.
+        reference = self.dataset.amplitude_reference_parameters
+        pn_amplitude = (
+            None
+            if reference is None
+            else self.dataset.waveform_generator.post_newtonian_amplitude(
+                reference, self.dataset.frequencies[amplitude_indices]
+            )
+        )
+
+        return mode_power_weights(
+            self.training_dataset.amplitude_residuals,
+            self.dataset.frequencies_hz[amplitude_indices],
+            pn_amplitude=pn_amplitude,
+            exponent=self.power_weight_exponent,
+        )
+
     def train_nn(
         self, hyper: Hyperparameters, indices: Union[list[int], slice] = slice(None)
     ) -> NeuralNetwork:
@@ -919,6 +1047,13 @@ class ModeModel:
             Indices used to perform a selection of a subsection
             of the training data; by default ``slice(None)``
             which means all available training data is used.
+
+        Notes
+        -----
+        For odd-``m`` modes the fit is weighted by each waveform's
+        integrated mode power (:meth:`_training_power_weights`), which
+        keeps the near-vanishing-amplitude waveforms around equal mass
+        from distorting it. Every other case fits unweighted.
 
         Returns
         -------
@@ -937,20 +1072,28 @@ class ModeModel:
 
         nn = self.nn_kind(hyper)
 
+        sample_weight = self._training_power_weights()
+        if sample_weight is not None:
+            sample_weight = sample_weight[indices]
+
         start_time = time.time()  # Record the start time
 
         nn.fit(
             self.training_parameters.parameter_array[indices],
             training_residuals[indices],
+            sample_weight=sample_weight,
         )
 
         end_time = time.time()  # Record the end time
 
         training_duration = end_time - start_time  # Compute the duration
         logging.info(
-            "Training the network on %i waveforms took %.2f seconds "
+            "Training the network on %i %s waveforms took %.2f seconds "
             "(peak memory usage so far: %s)",
             len(training_residuals[indices]),
+            "unweighted"
+            if sample_weight is None
+            else f"power-weighted (median omega {np.median(sample_weight):.3g})",
             training_duration,
             format_bytes(peak_memory_usage()),
         )
