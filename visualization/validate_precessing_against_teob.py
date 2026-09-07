@@ -40,25 +40,28 @@ convention. Its frequency-domain output is sky-projected, so it is
 re-run for each inclination.
 
 Findings (12 binaries x 6 orientations, total mass 2.8, |chi_perp| < 0.4,
-seed 20). The ``network`` error is ~1e-6, worst ~1e-4 -- the same as in
+seed 20). The ``network`` error is ~1.5e-6, worst ~6e-5 -- the same as in
 the aligned-spin validation. The trained networks are not what limits a
 precessing waveform; the precession model is, and it climbs with the
 opening angle beta:
 
-               plain          reanchored
-    beta < 0.05 rad :  ~4e-3          ~3e-3
-    0.05 - 0.10     :  ~9e-3          ~5e-3
-    0.10 - 0.20     :  ~3e-2          ~1.3e-2
-    0.20 - 0.30     :  ~1.3e-1        ~5e-2
+                       plain      reanchored   gain
+    beta < 0.05 rad :  4.4e-3     3.5e-3       1.3x
+    0.05 - 0.10     :  8.9e-3     5.9e-3       1.5x
+    0.10 - 0.20     :  3.2e-2     9.3e-3       3.4x
+    0.20 - 0.30     :  1.2e-1     4.7e-2       2.7x
 
 Re-anchoring the Euler-angle lookup to the surrogate's (2,2) phase --
 an EOB-accurate time-frequency map, in place of the 3.5PN one the
-integration uses -- halves the mismatch at moderate-to-large beta.
-The residual still scales with beta (it is still the angles: they were
-*integrated* along the same 3.5PN v(t)), and above it sits a ~3e-3 floor
-from the stationary-phase co-precessing multipoles and the resampling.
-The astrophysically expected BNS range is beta <~ 0.1 rad, where a
-precessing waveform is now good to ~5e-3.
+integration marches with -- cuts the mismatch by ~2x overall and ~3x
+through the mid-beta range where the frequency-map error dominates.
+Below beta ~ 0.05 rad a ~3.5e-3 floor from the stationary-phase
+co-precessing multipoles and the resampling takes over, and it is not
+touched. The residual above the floor still scales with beta: the angles
+were also *integrated* along the same 3.5PN v(t), which a
+frequency-domain re-anchoring cannot undo. The astrophysically expected
+BNS range is beta <~ 0.1 rad, where a precessing waveform is now good to
+~5e-3.
 
 Run with: python visualization/validate_precessing_against_teob.py
 """
