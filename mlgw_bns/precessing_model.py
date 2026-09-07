@@ -59,10 +59,11 @@ vanish; :func:`check_aligned_spin_limit` asserts exactly that.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Callable, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
+from .higher_order_modes import Mode
 from .model import Model
 from .mode_model import ParametersWithExtrinsic
 from .special_func import spinsphericalharm
@@ -341,10 +342,90 @@ def newtonian_time_to_merger(eta: float, momega: float) -> float:
     return 5.0 / (256.0 * eta * momega ** (8.0 / 3.0))
 
 
+def eob_orbital_frequency_rate(
+    frequencies_hz: np.ndarray,
+    reference_mode: np.ndarray,
+    mass_sum_seconds: float,
+) -> Callable[[float], float]:
+    r"""Build :math:`M\Omega_{\rm orb} \mapsto \mathrm{d}(M\Omega_{\rm orb})
+    /\mathrm{d}t` from an accurate :math:`(2, 2)` phase.
+
+    In the stationary-phase approximation the :math:`(2, 2)` multipole
+    reaches GW frequency :math:`f` at :math:`t(f) = (2\pi)^{-1}
+    \mathrm{d}\phi_{22}/\mathrm{d}f`, so :math:`\mathrm{d}f/\mathrm{d}t =
+    2\pi / \phi_{22}''(f)`; with :math:`M\Omega_{\rm orb} = \pi M f` the
+    orbital-frequency rate follows. Feeding this to
+    :func:`euler_angles` marches the precession along the surrogate's
+    (EOB-accurate) orbital-frequency track instead of the PN flux.
+
+    Outside the span of ``frequencies_hz`` the rate is continued as
+    :math:`\propto \Omega^{11/3}` (Newtonian energy balance), matched at
+    the nearer edge: precession barely accumulates below the band, and
+    above merger the twist is only an extrapolation regardless.
+
+    Parameters
+    ----------
+    frequencies_hz : np.ndarray
+        Increasing, positive frequency grid of ``reference_mode``, in Hz.
+    reference_mode : np.ndarray
+        Complex :math:`(2, 2)` multipole on that grid.
+    mass_sum_seconds : float
+        Total mass in seconds.
+
+    Returns
+    -------
+    callable
+        ``omega_dot(Momega) -> dMomega/dt``, geometric units.
+    """
+    frequencies_hz = np.asarray(frequencies_hz, dtype=float)
+    phase = np.unwrap(np.angle(reference_mode))
+    momega = np.pi * mass_sum_seconds * frequencies_hz
+
+    # SPA time of the (2,2): |t(f)| = (1 / 2 pi) |dphi/df|, the time from
+    # frequency f to coalescence. It shrinks monotonically as f grows
+    # through the inspiral, so its f-derivative keeps a constant sign
+    # there; where that sign flips is the noisy low-frequency edge of the
+    # model, or the post-merger, and is dropped.
+    spa_time = np.abs(np.gradient(phase, frequencies_hz)) / (2.0 * np.pi)
+    d_spa = np.gradient(spa_time, frequencies_hz)
+    inspiral_sign = np.sign(np.median(d_spa[: max(4, d_spa.size // 8)]))
+    trusted = np.sign(d_spa) == inspiral_sign
+    turnover = np.argmax(~trusted & (frequencies_hz > frequencies_hz[0] * 2.0))
+    if turnover > 0:
+        trusted[turnover:] = False
+    if trusted.sum() < 8:
+        trusted[:] = True
+
+    # d(M Omega)/dt in *geometric* units (t in units of the total mass):
+    #   M Omega = pi M_sec f,   d(M Omega)/dt = pi M_sec^2 |df/dt_sec|
+    #           = pi M_sec^2 / |dt/df|.
+    rate = np.pi * mass_sum_seconds ** 2 / np.abs(d_spa)
+    # fit log(rate) against log(M Omega), where it is close to the
+    # Newtonian straight line of slope 11/3, so a low-order polynomial
+    # de-noises the twice-differentiated phase without distorting it.
+    coeffs = np.polynomial.polynomial.Polynomial.fit(
+        np.log(momega[trusted]), np.log(rate[trusted]), deg=4
+    )
+
+    lo_o, hi_o = momega[trusted][0], momega[trusted][-1]
+    lo_r, hi_r = np.exp(coeffs(np.log(lo_o))), np.exp(coeffs(np.log(hi_o)))
+
+    def omega_dot(omg: float) -> float:
+        omg = float(omg)
+        if omg <= lo_o:
+            return lo_r * (omg / lo_o) ** (11.0 / 3.0)
+        if omg >= hi_o:
+            return hi_r * (omg / hi_o) ** (11.0 / 3.0)
+        return float(np.exp(coeffs(np.log(omg))))
+
+    return omega_dot
+
+
 def euler_angles(
     params: PrecessingParametersWithExtrinsic,
     initial_frequency_hz: float,
     largest_mode_m: int = 4,
+    omega_dot: Optional["Callable[[float], float]"] = None,
 ) -> EulerAngles:
     r"""Integrate the PN spin-precession dynamics for a given source.
 
@@ -366,6 +447,16 @@ def euler_angles(
         ``initial_frequency_hz`` when the orbit is only at
         :math:`2/m` of the corresponding :math:`(2,2)` frequency, so the
         integration has to start that much earlier. Defaults to 4.
+    omega_dot : callable, optional
+        ``M \Omega_{\rm orb} \mapsto \mathrm{d}(M\Omega_{\rm orb})/
+        \mathrm{d}t`` in geometric units. When given, the precession is
+        integrated *against* orbital frequency, marched along this rate
+        instead of the PN flux -- reproducing the ``SPIN_FLX_EOB``
+        hand-off TEOBResumS does once the spin dynamics reaches the EOB
+        band. Build it from an accurate :math:`(2, 2)` phase with
+        :func:`eob_orbital_frequency_rate`. When ``None`` (default), the
+        integration marches in time with the 3.5PN flux, exactly as
+        TEOBResumS' ``SPIN_FLX_PN`` branch.
 
     Returns
     -------
@@ -386,6 +477,8 @@ def euler_angles(
         chi2vec=params.chi_2_vector,
         f0=initial_frequency_22,
         t_max=2.0 * newtonian_time_to_merger(params.eta, np.pi * initial_frequency_22),
+        independent_variable="time" if omega_dot is None else "orbital_frequency",
+        omega_dot=omega_dot,
     )
 
     return EulerAngles(
@@ -552,6 +645,8 @@ class PrecessingModel:
         self,
         params: PrecessingParametersWithExtrinsic,
         initial_frequency_hz: float,
+        omega_dot: Optional[Callable[[float], float]] = None,
+        anchor_to_reference_phase: bool = False,
     ) -> EulerAngles:
         """The precession angles for a source, from the PN dynamics.
 
@@ -563,14 +658,41 @@ class PrecessingModel:
             Source parameters.
         initial_frequency_hz : float
             Lowest frequency, in Hz, at which the waveform is wanted.
+        omega_dot : callable, optional
+            Orbital-frequency rate to march the precession along; see
+            :func:`euler_angles`.
+        anchor_to_reference_phase : bool
+            If ``True`` (and ``omega_dot`` is not given), build
+            ``omega_dot`` from this model's own aligned-spin :math:`(2,
+            2)` phase for ``params`` -- i.e. integrate the precession
+            along the surrogate's EOB-accurate orbital-frequency track
+            rather than the PN flux. This is the surrogate analogue of
+            TEOBResumS' ``SPIN_FLX_EOB`` hand-off.
 
         Returns
         -------
         EulerAngles
             The angles, tabulated against :math:`M \\Omega_{\\rm orb}`.
         """
+        if omega_dot is None and anchor_to_reference_phase:
+            reference_frequencies = np.geomspace(
+                max(initial_frequency_hz, self.model.dataset.initial_frequency_hz),
+                self.model.dataset.effective_srate_hz / 2.0,
+                1024,
+            )
+            amplitude, phase = self.model.predict_amplitude_phase_mode(
+                Mode(2, 2), reference_frequencies, params.aligned()
+            )
+            omega_dot = eob_orbital_frequency_rate(
+                reference_frequencies,
+                amplitude * np.exp(1j * phase),
+                params.aligned().mass_sum_seconds,
+            )
         return euler_angles(
-            params, initial_frequency_hz, largest_mode_m=self.largest_mode_m
+            params,
+            initial_frequency_hz,
+            largest_mode_m=self.largest_mode_m,
+            omega_dot=omega_dot,
         )
 
     def predict_modes_dict(

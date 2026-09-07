@@ -111,8 +111,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (2,2) phase -- an EOB-accurate map -- which halves the mismatch against
     TEOBResumS at moderate-to-large opening angles (`beta ~ 0.2` rad: `1e-1` to
     `5e-2`), with no effect on the aligned-spin limit and no retrain. The
-    residual still scales with `beta`: the angles were also *integrated* along
-    the same 3.5PN `v(t)`, which a frequency-domain re-anchoring cannot undo.
+    residual still scales with `beta`.
+- `twist_waveform.integrate_pn_spin_precession(independent_variable=
+    "orbital_frequency", omega_dot=...)` and
+    `precessing_model.eob_orbital_frequency_rate` /
+    `PrecessingModel.euler_angles(anchor_to_reference_phase=True)`: march the PN
+    spin precession *against* orbital frequency, along a `dOmega/dt` taken from
+    an accurate `(2,2)` phase rather than the PN flux -- the surrogate analogue
+    of the `SPIN_FLX_EOB` hand-off TEOBResumS does once its spin dynamics
+    reaches the EOB band, and a way to fix the angle *trajectory* rather than
+    just re-label it. Investigated because the `reanchored` residual scales with
+    `beta`; over 10 binaries it came out a wash with `reanchored` (median
+    mismatch `4.2e-3` vs `3.6e-3`), so the orbital-frequency evolution is not
+    what limits a precessing waveform. Kept as an opt-in; all defaults
+    unchanged. The shared PN precession r.h.s. was factored into
+    `_pn_precession_derivatives`, with `_pn_spin_precession_rhs` now a thin
+    time-domain wrapper (no behaviour change).
 - Odd-m mode regressors are now weighted by each training waveform's integrated
     mode power, following arXiv:2609.03025: near equal mass the (2,1) and (3,3)
     amplitude residuals grow linearly out of the odd-m zero, a boundary layer
