@@ -95,17 +95,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `visualization/validate_precessing_against_teob.py`, which closes the loop by
     comparing the full frequency-domain polarizations of
     `PrecessingModel.predict` against the `h+`, `hx` that TEOBResumS returns for
-    the same precessing binary, over random orientations. Running the same
-    comparison with the co-precessing multipoles taken from TEOBResumS instead
-    of the surrogate isolates the cost of *modelling* the precession (the PN
-    angles, the stationary-phase multipoles, the resampling) from the network
-    reconstruction error. The two are equal to 0.1%: the networks add nothing
-    measurable to a precessing waveform (their own co-precessing error stays at
-    ~1e-6). What a precessing waveform costs is the precession model, and it
-    climbs with the opening angle -- median mismatch ~4e-3 below `beta = 0.05`
-    rad, ~1e-2 through the expected BNS range (`beta <~ 0.1`), ~3e-2 by
-    `beta = 0.15` and ~1.3e-1 by `beta = 0.25`, driven by the PN spin-precession
-    angles.
+    the same precessing binary, over random orientations. Feeding the same
+    pipeline TEOBResumS' own co-precessing multipoles instead of the surrogate's
+    isolates the cost of *modelling* the precession (the PN angles, the
+    stationary-phase multipoles, the resampling) from the network reconstruction
+    error, which comes out at ~1e-6: the networks are not what limits a
+    precessing waveform. The precession model is, and it climbs with the opening
+    angle -- driven by the PN spin-precession angles.
+- `PrecessingModel.EulerAngles.reanchored`, and `reanchor=True` (the default) on
+    `PrecessingModel.predict` / `predict_modes_dict`. The Euler angles are
+    integrated against `M Omega_orb` as advanced by a 3.5PN energy-balance
+    `dOmega/dt`, which runs fast through the late inspiral, so the frequency the
+    angles are labelled with drifts from the true one. `reanchored` re-tabulates
+    them against the time-frequency relation carried by the surrogate's own
+    (2,2) phase -- an EOB-accurate map -- which halves the mismatch against
+    TEOBResumS at moderate-to-large opening angles (`beta ~ 0.2` rad: `1e-1` to
+    `5e-2`), with no effect on the aligned-spin limit and no retrain. The
+    residual still scales with `beta`: the angles were also *integrated* along
+    the same 3.5PN `v(t)`, which a frequency-domain re-anchoring cannot undo.
 - Odd-m mode regressors are now weighted by each training waveform's integrated
     mode power, following arXiv:2609.03025: near equal mass the (2,1) and (3,3)
     amplitude residuals grow linearly out of the odd-m zero, a boundary layer
