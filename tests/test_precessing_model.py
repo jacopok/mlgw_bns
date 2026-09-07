@@ -158,3 +158,78 @@ def test_precessing_prediction_is_finite(frequencies, precessing_params):
     assert np.all(np.isfinite(h_plus))
     assert np.all(np.isfinite(h_cross))
     assert np.max(np.abs(h_plus)) > 0.0
+
+
+def test_reanchored_without_time_is_a_no_op():
+    """An ``EulerAngles`` carrying no integration time is returned unchanged."""
+
+    angles = EulerAngles(
+        momega=np.linspace(1e-3, 0.1, 50),
+        alpha=np.linspace(0.0, 3.0, 50),
+        beta=np.full(50, 0.2),
+        gamma=np.linspace(0.0, -2.0, 50),
+    )
+    frequencies = np.linspace(20.0, 1024.0, 128)
+    reference = np.exp(-1j * frequencies**2)  # any chirp-like phase
+
+    assert angles.reanchored(frequencies, reference, 1.0e-5, 20.0) is angles
+
+
+def test_reanchoring_follows_the_reference_phase(frequencies, precessing_params):
+    r"""The re-anchored ``momega`` axis tracks the (2,2) phase's own
+    stationary-phase time-frequency map, not the PN one."""
+
+    model = Model.default_for_testing()
+    precessing = PrecessingModel(model)
+    angles = precessing.euler_angles(precessing_params, float(frequencies[0]))
+
+    coprecessing = model.coprecessing_modes_dict(
+        frequencies, precessing_params.aligned()
+    )
+    mass_sum_seconds = precessing_params.aligned().mass_sum_seconds
+    reanchored = angles.reanchored(
+        frequencies, coprecessing[(2, 2)], mass_sum_seconds, float(frequencies[0])
+    )
+
+    assert reanchored is not angles
+    assert np.all(np.isfinite(reanchored.momega))
+    assert np.all(np.diff(reanchored.momega) >= 0.0)
+    # the angle values are carried over untouched
+    np.testing.assert_array_equal(reanchored.alpha, angles.alpha)
+    np.testing.assert_array_equal(reanchored.beta, angles.beta)
+
+    # the (2,2) angles, looked up at pi M f on the re-anchored axis, must
+    # match the ones the surrogate (2,2) phase implies: at the frequency
+    # where the re-anchored beta peaks, the plain-PN axis puts a
+    # different beta
+    target = np.pi * mass_sum_seconds * frequencies
+    _, beta_anchored, _ = reanchored.at_momega(target)
+    _, beta_plain, _ = angles.at_momega(target)
+    assert np.max(np.abs(beta_anchored - beta_plain)) > 1e-4
+
+
+def test_reanchoring_changes_a_precessing_waveform_but_not_an_aligned_one(
+    frequencies, precessing_params
+):
+    """Re-anchoring moves a precessing waveform and leaves the aligned limit alone."""
+
+    precessing = PrecessingModel(Model.default_for_testing())
+
+    anchored = precessing.predict(frequencies, precessing_params, reanchor=True)
+    plain = precessing.predict(frequencies, precessing_params, reanchor=False)
+    scale = np.max(np.abs(plain[0]))
+    assert np.max(np.abs(anchored[0] - plain[0])) > 1e-3 * scale
+
+    aligned = PrecessingParametersWithExtrinsic(
+        mass_ratio=precessing_params.mass_ratio,
+        lambda_1=precessing_params.lambda_1,
+        lambda_2=precessing_params.lambda_2,
+        chi_1=(0.0, 0.0, precessing_params.chi_1_vector[2]),
+        chi_2=(0.0, 0.0, precessing_params.chi_2_vector[2]),
+        distance_mpc=precessing_params.distance_mpc,
+        inclination=precessing_params.inclination,
+        total_mass=precessing_params.total_mass,
+    )
+    with_reanchor = precessing.predict(frequencies, aligned, reanchor=True)
+    without = precessing.predict(frequencies, aligned, reanchor=False)
+    np.testing.assert_allclose(with_reanchor[0], without[0], rtol=1e-10, atol=0.0)

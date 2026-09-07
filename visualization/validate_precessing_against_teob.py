@@ -16,29 +16,21 @@ polarizations of
 :math:`h_+, h_\times` that TEOBResumS returns for the same precessing
 binary, over random orientations.
 
-To attribute the mismatch it runs the comparison for two sources of the
-co-precessing multipoles:
+It tracks three mismatches per observation:
 
-* ``"surrogate"`` --- the trained networks, twisted along the PN angles
-  integrated here: the whole pipeline;
-* ``"eob"`` --- TEOBResumS' own co-precessing multipoles (its
-  frequency-domain ``hlm``, which carry no precession: TEOBResumS twists
-  them internally and only the summed :math:`h_+, h_\times` see the
-  precession), twisted along the *same* PN angles.
-
-The ``"eob"`` run has the surrogate taken out of the loop entirely, so
-whatever mismatch it still shows against TEOBResumS' :math:`h_+,
-h_\times` is the cost of *modelling* the precession here --- the PN
-spin-precession angles versus TEOBResumS' internal dynamics, the
-stationary-phase co-precessing multipoles versus the Fourier transform
-of the time-domain ones, and the resampling onto the model's grid. The
-``"surrogate"`` run adds the network reconstruction error on top. If the
-two are equal, the networks are not what limits a precessing waveform.
-
-A third number, ``network``, is the mismatch between the two surrogate
-sources directly, on the model grid with no TEOBResumS frequency-domain
-call: the pure co-precessing reconstruction error, the quantity
-:mod:`visualization.precessing_mismatches` measures.
+* ``reanchored`` --- the shipping pipeline:
+  :meth:`~mlgw_bns.precessing_model.PrecessingModel.predict` with the
+  Euler angles re-tabulated against the surrogate's own (2,2) phase (see
+  :meth:`~mlgw_bns.precessing_model.EulerAngles.reanchored`);
+* ``plain`` --- the same with ``reanchor=False``, i.e. the angles looked
+  up against the 3.5PN orbital-frequency track the integration marches
+  with. The gap between the two is what the re-anchoring buys;
+* ``network`` --- ``reanchored`` against the same pipeline fed
+  TEOBResumS' own co-precessing multipoles instead of the surrogate's,
+  on the model grid with no frequency-domain TEOBResumS call: the pure
+  co-precessing reconstruction error, the quantity
+  :mod:`visualization.precessing_mismatches` measures. Sampled once per
+  binary (it barely depends on the line of sight).
 
 TEOBResumS is called in the frequency domain (``domain = 1``) with
 ``df = 1 / 512`` s so the inspiral does not wrap, resampled onto the
@@ -48,29 +40,25 @@ convention. Its frequency-domain output is sky-projected, so it is
 re-run for each inclination.
 
 Findings (12 binaries x 6 orientations, total mass 2.8, |chi_perp| < 0.4,
-seed 20). The ``"surrogate"`` and ``"eob"`` mismatches against
-TEOBResumS' h+, hx agree to 0.1% of each other, observation by
-observation: the trained networks add nothing measurable to a precessing
-waveform. Their own co-precessing reconstruction error (``network``) is
-~1e-6, worst 6e-5 -- the same as in the aligned-spin validation.
+seed 20). The ``network`` error is ~1e-6, worst ~1e-4 -- the same as in
+the aligned-spin validation. The trained networks are not what limits a
+precessing waveform; the precession model is, and it climbs with the
+opening angle beta:
 
-What a precessing waveform costs instead is the precession model, and it
-climbs steeply with the opening angle beta:
+               plain          reanchored
+    beta < 0.05 rad :  ~4e-3          ~3e-3
+    0.05 - 0.10     :  ~9e-3          ~5e-3
+    0.10 - 0.20     :  ~3e-2          ~1.3e-2
+    0.20 - 0.30     :  ~1.3e-1        ~5e-2
 
-    beta < 0.05 rad :  median 4e-3   (2.9e-4 - 1.3e-2)
-    0.05 - 0.10     :  median 9e-3   (2.6e-3 - 5.7e-2)
-    0.10 - 0.20     :  median 3e-2   (2.6e-2 - 2.0e-1)
-    0.20 - 0.30     :  median 1.3e-1 (7.9e-2 - 2.6e-1)
-
-The near-aligned floor (~4e-3, occasionally 3e-4) is the stationary-phase
-co-precessing multipoles versus the Fourier transform of the time-domain
-ones, plus the resampling of TEOBResumS' frequency-domain output onto the
-model grid. On top of that, the mismatch is set by the PN
-spin-precession angles integrated here versus TEOBResumS' internal
-dynamics -- consistent with the per-cent-level beta error that
-validate_twist_against_teob measures. The astrophysically expected BNS
-range is beta <~ 0.1 rad, where a precessing waveform is good to ~1e-2;
-by beta ~ 0.25 rad it is a poor match. None of this is the surrogate.
+Re-anchoring the Euler-angle lookup to the surrogate's (2,2) phase --
+an EOB-accurate time-frequency map, in place of the 3.5PN one the
+integration uses -- halves the mismatch at moderate-to-large beta.
+The residual still scales with beta (it is still the angles: they were
+*integrated* along the same 3.5PN v(t)), and above it sits a ~3e-3 floor
+from the stationary-phase co-precessing multipoles and the resampling.
+The astrophysically expected BNS range is beta <~ 0.1 rad, where a
+precessing waveform is now good to ~5e-3.
 
 Run with: python visualization/validate_precessing_against_teob.py
 """
@@ -214,8 +202,8 @@ def validate(model: Model, n_binaries: int, n_orientations: int):
     parameter_generator = model.dataset.make_parameter_generator(SEED)
 
     keys = (
-        "surrogate_mismatch",
-        "eob_mismatch",
+        "reanchored_mismatch",
+        "plain_mismatch",
         "network_mismatch",
         "inclination",
         "opening_angle",
@@ -258,36 +246,44 @@ def validate(model: Model, n_binaries: int, n_orientations: int):
             strain_teob = f_plus * hp_teob + f_cross * hc_teob
 
             strains = {}
-            for source in ("surrogate", "eob"):
+            for name, kwargs in (
+                ("reanchored", dict(source="surrogate", reanchor=True)),
+                ("plain", dict(source="surrogate", reanchor=False)),
+            ):
                 hp, hc = precessing.predict(
-                    frequencies, precessing_params, source=source, angles=angles
+                    frequencies, precessing_params, angles=angles, **kwargs
                 )
-                strains[source] = (f_plus * hp + f_cross * hc)[inside]
+                strains[name] = (f_plus * hp + f_cross * hc)[inside]
 
             if inside.sum() < 2:
-                surrogate_mismatch = eob_mismatch = network_mismatch = np.nan
+                reanchored_mismatch = plain_mismatch = network_mismatch = np.nan
             else:
                 fb = frequencies[inside]
-                surrogate_mismatch = validator.full_waveform_mismatch(
-                    {(2, 2): strain_teob}, {(2, 2): strains["surrogate"]},
+                reanchored_mismatch = validator.full_waveform_mismatch(
+                    {(2, 2): strain_teob}, {(2, 2): strains["reanchored"]},
                     frequencies=fb,
                 )
-                eob_mismatch = validator.full_waveform_mismatch(
-                    {(2, 2): strain_teob}, {(2, 2): strains["eob"]}, frequencies=fb,
+                plain_mismatch = validator.full_waveform_mismatch(
+                    {(2, 2): strain_teob}, {(2, 2): strains["plain"]}, frequencies=fb,
                 )
                 # The network error barely depends on the line of sight and
                 # is ~1e-6; one sample per binary is enough and the
                 # optimisation is the expensive part of the loop.
                 if orientation_index == 0:
+                    hp_e, hc_e = precessing.predict(
+                        frequencies, precessing_params, source="eob",
+                        angles=angles, reanchor=True,
+                    )
+                    strain_eob = (f_plus * hp_e + f_cross * hc_e)[inside]
                     network_mismatch = validator.full_waveform_mismatch(
-                        {(2, 2): strains["eob"]}, {(2, 2): strains["surrogate"]},
+                        {(2, 2): strain_eob}, {(2, 2): strains["reanchored"]},
                         frequencies=fb,
                     )
                 else:
                     network_mismatch = np.nan
 
-            records["surrogate_mismatch"].append(surrogate_mismatch)
-            records["eob_mismatch"].append(eob_mismatch)
+            records["reanchored_mismatch"].append(reanchored_mismatch)
+            records["plain_mismatch"].append(plain_mismatch)
             records["network_mismatch"].append(network_mismatch)
             records["inclination"].append(iota)
             records["opening_angle"].append(float(angles.beta.max()))
@@ -297,7 +293,8 @@ def validate(model: Model, n_binaries: int, n_orientations: int):
             f"  binary {index + 1}/{n_binaries}: "
             f"max beta {angles.beta.max():.3f} rad, "
             f"in-plane spin {in_plane:.2f}, "
-            f"surrogate median {np.nanmedian(records['surrogate_mismatch']):.2e}, "
+            f"reanchored median {np.nanmedian(records['reanchored_mismatch']):.2e}, "
+            f"plain median {np.nanmedian(records['plain_mismatch']):.2e}, "
             f"network median {np.nanmedian(records['network_mismatch']):.2e}  "
             f"({time.time() - start:.0f}s)",
             flush=True,
@@ -307,8 +304,8 @@ def validate(model: Model, n_binaries: int, n_orientations: int):
 
 
 def plot(records: dict) -> None:
-    surrogate = records["surrogate_mismatch"]
-    eob = records["eob_mismatch"]
+    reanchored = records["reanchored_mismatch"]
+    plain = records["plain_mismatch"]
     network = records["network_mismatch"]
     inclination = records["inclination"]
     opening_angle = records["opening_angle"]
@@ -318,31 +315,34 @@ def plot(records: dict) -> None:
     def clean(values):
         return np.log10(values[np.isfinite(values) & (values > 0)])
 
-    finite = np.concatenate([clean(surrogate), clean(eob), clean(network)])
+    finite = np.concatenate([clean(reanchored), clean(plain), clean(network)])
     bins = np.linspace(np.floor(finite.min()), np.ceil(finite.max()), 44)
     axes[0, 0].hist(clean(network), bins=bins, color="tab:green", alpha=0.7,
                     label=f"network only (median {np.nanmedian(network):.1e})")
-    axes[0, 0].hist(clean(eob), bins=bins, color="tab:orange", alpha=0.5,
-                    label=f"EOB modes + PN twist (median {np.nanmedian(eob):.1e})")
-    axes[0, 0].hist(clean(surrogate), bins=bins, color="tab:blue", alpha=0.5,
-                    label=f"full surrogate (median {np.nanmedian(surrogate):.1e})")
+    axes[0, 0].hist(clean(plain), bins=bins, color="tab:orange", alpha=0.5,
+                    label=f"plain PN angles (median {np.nanmedian(plain):.1e})")
+    axes[0, 0].hist(clean(reanchored), bins=bins, color="tab:blue", alpha=0.5,
+                    label=f"re-anchored (median {np.nanmedian(reanchored):.1e})")
     axes[0, 0].set_xlabel(r"$\log_{10}$ mismatch vs TEOBResumS $h_+, h_\times$")
     axes[0, 0].set_ylabel("count")
     axes[0, 0].legend()
 
-    axes[0, 1].scatter(surrogate, eob, s=16, alpha=0.6, color="tab:blue")
-    lims = [0.5 * min(surrogate.min(), eob.min()), 2 * max(surrogate.max(), eob.max())]
+    axes[0, 1].scatter(plain, reanchored, s=16, alpha=0.6, color="tab:blue")
+    lims = [0.5 * min(plain.min(), reanchored.min()),
+            2 * max(plain.max(), reanchored.max())]
     axes[0, 1].plot(lims, lims, color="grey", lw=0.8, ls="--")
     axes[0, 1].set_xscale("log")
     axes[0, 1].set_yscale("log")
     axes[0, 1].set_xlim(lims)
     axes[0, 1].set_ylim(lims)
-    axes[0, 1].set_xlabel("full surrogate mismatch")
-    axes[0, 1].set_ylabel("EOB modes + PN twist mismatch")
-    axes[0, 1].set_title("the networks add nothing on top of the PN twist")
+    axes[0, 1].set_xlabel("plain PN-angle mismatch")
+    axes[0, 1].set_ylabel("re-anchored mismatch")
+    axes[0, 1].set_title("re-anchoring to the (2,2) phase, per observation")
 
-    axes[1, 0].scatter(opening_angle, surrogate, s=16, alpha=0.6, color="tab:blue",
-                       label="full surrogate vs TEOBResumS")
+    axes[1, 0].scatter(opening_angle, plain, s=16, alpha=0.5, color="tab:orange",
+                       label="plain PN angles")
+    axes[1, 0].scatter(opening_angle, reanchored, s=16, alpha=0.6, color="tab:blue",
+                       label="re-anchored")
     net = np.isfinite(network)
     axes[1, 0].scatter(opening_angle[net], network[net], s=16, alpha=0.6,
                        color="tab:green", label="network only (vs EOB modes)")
@@ -351,10 +351,10 @@ def plot(records: dict) -> None:
     axes[1, 0].set_ylabel("mismatch")
     axes[1, 0].legend()
 
-    axes[1, 1].scatter(inclination, surrogate, s=16, alpha=0.6, color="tab:blue")
+    axes[1, 1].scatter(inclination, reanchored, s=16, alpha=0.6, color="tab:blue")
     axes[1, 1].set_yscale("log")
     axes[1, 1].set_xlabel(r"inclination $\iota$ [rad]")
-    axes[1, 1].set_ylabel("full surrogate mismatch vs TEOBResumS")
+    axes[1, 1].set_ylabel("re-anchored mismatch vs TEOBResumS")
 
     fig.suptitle(
         "Precessing surrogate vs TEOBResumS "
@@ -383,20 +383,19 @@ def main() -> None:
 
     print()
     for label, key in (
-        ("full surrogate", "surrogate_mismatch"),
-        ("EOB modes + PN twist", "eob_mismatch"),
+        ("re-anchored", "reanchored_mismatch"),
+        ("plain PN angles", "plain_mismatch"),
         ("network only", "network_mismatch"),
     ):
         values = records[key]
         print(
-            f"{label:>22}: median {np.nanmedian(values):.3e}, "
+            f"{label:>18}: median {np.nanmedian(values):.3e}, "
             f"90th pct {np.nanpercentile(values, 90):.3e}, "
             f"worst {np.nanmax(values):.3e}"
         )
-    excess = records["surrogate_mismatch"] - records["eob_mismatch"]
+    ratio = records["plain_mismatch"] / records["reanchored_mismatch"]
     print(
-        f"{'surrogate - EOB twist':>22}: median {np.nanmedian(excess):+.2e} "
-        "(the networks' contribution to a precessing waveform)"
+        f"{'re-anchoring gain':>18}: median x{np.nanmedian(ratio):.2f}"
     )
 
     np.savez(DATA_PATH, **records)
