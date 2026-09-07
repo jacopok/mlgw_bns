@@ -41,6 +41,7 @@ optimization_dataset_33.yaml
 optimization_dataset_44.yaml
 unanchored_residual_diagnostic.png
 visualization/precessing_mismatches.npz
+visualization/validate_precessing_against_teob.npz
 retrain_systemd.log
 pathology_systemd.log
 pathology2.log
