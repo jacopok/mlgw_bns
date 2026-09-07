@@ -57,11 +57,25 @@ integration marches with -- cuts the mismatch by ~2x overall and ~3x
 through the mid-beta range where the frequency-map error dominates.
 Below beta ~ 0.05 rad a ~3.5e-3 floor from the stationary-phase
 co-precessing multipoles and the resampling takes over, and it is not
-touched. The residual above the floor still scales with beta: the angles
-were also *integrated* along the same 3.5PN v(t), which a
-frequency-domain re-anchoring cannot undo. The astrophysically expected
-BNS range is beta <~ 0.1 rad, where a precessing waveform is now good to
-~5e-3.
+touched. The astrophysically expected BNS range is beta <~ 0.1 rad,
+where a precessing waveform is now good to ~5e-3.
+
+The residual above the floor still scales with beta. It was tempting to
+blame the angle *trajectory* -- integrated along the PN v(t) even after
+the lookup axis is re-anchored -- so the precession was reworked to
+march against orbital frequency directly, along the surrogate's own
+EOB-accurate dOmega/dt (twist_waveform.integrate_pn_spin_precession with
+independent_variable="orbital_frequency" and an omega_dot from
+precessing_model.eob_orbital_frequency_rate; this is the surrogate
+analogue of TEOBResumS' internal SPIN_FLX_EOB hand-off). Over 10
+binaries x 3 orientations it came out a wash with the re-anchoring:
+median 4.2e-3 vs 3.6e-3, and no better through any beta bin. So the
+orbital-frequency evolution is *not* what limits a precessing waveform
+here. What is left is the frequency-domain stationary-phase twist
+itself, the co-precessing-mode approximation under precession, and the
+N4LO PN precession equations -- consistent with
+validate_twist_against_teob, which isolates the angle error at ~1% in
+beta and finds it insensitive to the ODE tolerance.
 
 Run with: python visualization/validate_precessing_against_teob.py
 """
