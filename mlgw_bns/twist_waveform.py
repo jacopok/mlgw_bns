@@ -215,9 +215,9 @@ def alpha_initial_condition(q, chi1x, chi1y, chi1z, chi2x, chi2y, chi2z, f0):
     return math.atan2(alpha_y_NLO, alpha_x_NLO)
 
 
-def _pn_spin_precession_rhs(nu, q, y):
+def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh):
     """
-    RHS of the PN spin-precession ODE system, EOBPars->spin_flx ==
+    Core of the PN spin-precession ODE system, EOBPars->spin_flx ==
     SPIN_FLX_PN branch: N4LO spin-orbit + spin-spin precession of SA, SB,
     Lhat (arXiv:2005.05338), and 3.5PN energy-balance frequency evolution
     (Eq. A1 of arXiv:1307.4418). Mirrors the SPIN_FLX_PN branch of
@@ -227,9 +227,27 @@ def _pn_spin_precession_rhs(nu, q, y):
     the frequency evolution at 3.5PN even though a[8..11]/b[8..11] and
     beta8A/B are computed) -- those unused terms are simply omitted here.
 
-    State y = [SAx,SAy,SAz, SBx,SBy,SBz, Lx,Ly,Lz, gamma, Momega].
-    (alpha, beta are NOT part of the integrated state here -- see the note
-    in integrate_pn_spin_precession().)
+    Parameters
+    ----------
+    nu, q : symmetric mass ratio and mass ratio MA/MB >= 1.
+    omg : orbital frequency M*Omega_orb.
+    SA, SB, Lh : length-3 arrays, the two spins and the unit orbital
+        angular momentum.
+
+    Returns
+    -------
+    dSA, dSB, dLh : length-3 arrays -- the *time* derivatives dSA/dt etc.
+    dgamma : float -- dgamma/dt.
+    domg : float -- the full 3.5PN dOmega/dt.
+    domg_leading : float -- dOmega/dt truncated at 2PN, i.e. keeping only
+        the flux terms (Newtonian, 1PN, 1.5PN spin-orbit, 2PN spin-spin)
+        that enter the precession angles as functions of orbital
+        frequency at a PN order consistent with the N4LO precession
+        r.h.s. above. This is the denominator used when the system is
+        integrated against orbital frequency rather than time: dividing
+        by the *full* domg would drag the flux model's poorly-controlled
+        2.5-3.5PN behaviour -- the thing that makes alpha(t) -> alpha(f)
+        drift in the late inspiral -- back into alpha(Omega).
     """
     nu2, nu3 = nu * nu, nu ** 3
     Pi = math.pi
@@ -243,10 +261,9 @@ def _pn_spin_precession_rhs(nu, q, y):
     ma_o_mb = MA / MB
     mb_o_ma = MB / MA
 
-    SA = np.asarray(y[0:3], dtype=float)
-    SB = np.asarray(y[3:6], dtype=float)
-    Lh = np.asarray(y[6:9], dtype=float)
-    omg = y[10]
+    SA = np.asarray(SA, dtype=float)
+    SB = np.asarray(SB, dtype=float)
+    Lh = np.asarray(Lh, dtype=float)
 
     lnomg = math.log(omg)
     v = omg ** oothree
@@ -384,16 +401,94 @@ def _pn_spin_precession_rhs(nu, q, y):
     domg += 1.0
     domg *= a[0] * omg ** eleven_o_three
 
+    # Same sum truncated at 2PN (i = 2, 3, 4): Newtonian + 1PN + 1.5PN
+    # spin-orbit + 2PN spin-spin flux. See the docstring for why the
+    # frequency-domain integration divides by this rather than by domg.
+    domg_leading = 0.0
+    for i in (2, 3, 4):
+        domg_leading += (a[i] + b[i] * lnomg) * omg ** (i * oothree)
+    domg_leading += 1.0
+    domg_leading *= a[0] * omg ** eleven_o_three
+
+    return dSA, dSB, dLh, dgamma, domg, domg_leading
+
+
+def _pn_spin_precession_rhs(nu, q, y):
+    """
+    Time-domain r.h.s. of the PN spin-precession system.
+
+    State y = [SAx,SAy,SAz, SBx,SBy,SBz, Lx,Ly,Lz, gamma, Momega].
+    (alpha, beta are NOT part of the integrated state here -- see the note
+    in integrate_pn_spin_precession().)
+    """
+    dSA, dSB, dLh, dgamma, domg, _ = _pn_precession_derivatives(
+        nu, q, y[10], y[0:3], y[3:6], y[6:9]
+    )
     return np.concatenate([dSA, dSB, dLh, [dgamma, domg]])
 
 
+def _pn_spin_precession_rhs_vs_frequency(nu, q, omg, y, omega_dot=None):
+    r"""
+    R.h.s. of the same system with the orbital frequency
+    :math:`M \Omega_{\rm orb}` as the independent variable instead of
+    time: :math:`\mathrm{d}y/\mathrm{d}\Omega = (\mathrm{d}y/\mathrm{d}t)
+    / \dot\Omega`, with :math:`\dot\Omega` truncated at 2PN
+    (``domg_leading``). This is the orbit-averaged / frequency-domain
+    formulation used by the ``precession`` package and by PhenomX's MSA:
+    the Euler angles come out as functions of orbital frequency directly,
+    with no dependence on the 2.5-3.5PN flux terms that make the
+    time-domain :math:`\alpha(t) \to \alpha(f)` map drift.
+
+    State y = [SAx,SAy,SAz, SBx,SBy,SBz, Lx,Ly,Lz, gamma, t]; the last
+    component integrates dt/dMomega = 1/omega_dot so the angles keep a
+    time axis. ``omega_dot`` is a callable Momega -> dMomega/dt; when
+    None the 2PN-truncated PN flux ``domg_leading`` is used.
+    """
+    dSA, dSB, dLh, dgamma, _, domg_leading = _pn_precession_derivatives(
+        nu, q, omg, y[0:3], y[3:6], y[6:9]
+    )
+    rate = domg_leading if omega_dot is None else float(omega_dot(omg))
+    inv = 1.0 / rate
+    return np.concatenate([dSA * inv, dSB * inv, dLh * inv, [dgamma * inv, inv]])
+
+
 def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step=None,
-                                 refinement=32, rtol=1.0e-11, atol=1.0e-13):
+                                 refinement=32, rtol=1.0e-9, atol=1.0e-11,
+                                 independent_variable="time", omega_dot=None):
     """
     Integrate the closed PN spin-precession ODE system that TEOBResumS
     solves in eob_spin_dyn()/eob_spin_dyn_integrate() for
     EOBPars->use_spins == MODE_SPINS_GENERIC, EOBPars->project_spins == 0
     (the default) and EOBPars->spin_flx == SPIN_FLX_PN (the default).
+
+    ``independent_variable`` selects what the system is marched against:
+
+    * ``"time"`` (default) reproduces TEOBResumS' ``SPIN_FLX_PN`` branch
+      -- state ``[SA, SB, Lh, gamma, Momega]``, ``Momega`` advanced by
+      the 3.5PN energy-balance flux. The Euler angles are accurate as
+      functions of time, but the orbital frequency they end up labelled
+      with drifts from the true one through the late inspiral, because
+      the PN flux runs fast there. In the C code this is why, once the
+      spin dynamics reaches the EOB band, TEOBResumS stops using the PN
+      flux and drives ``Momega`` from the EOB dynamics instead (the
+      ``SPIN_FLX_EOB`` hand-off in ``eob_spin_dyn_integrate``). ``'t'``
+      in the returned dict is the integration time.
+    * ``"orbital_frequency"`` marches against ``Momega`` itself --
+      ``dy/dMomega = (dy/dt) / omega_dot``. This is what reproduces the
+      ``SPIN_FLX_EOB`` hand-off: pass ``omega_dot`` as a callable
+      ``Momega -> dMomega/dt`` taken from an accurate (EOB / surrogate)
+      ``(2,2)`` phase and the angles come out both integrated along and
+      labelled by the true orbital frequency. With ``omega_dot=None`` the
+      2PN-truncated PN flux ``domg_leading`` is used instead, which on
+      its own barely differs from the ``"time"`` result. ``'t'`` is
+      reconstructed by quadrature of ``dt/dMomega`` alongside the angles.
+
+    omega_dot : callable or None
+        Only used when ``independent_variable == "orbital_frequency"``.
+        ``omega_dot(Momega) -> dMomega/dt`` in geometric units; supplies
+        the orbital-frequency evolution the precession is marched along,
+        in place of the PN flux. Must be positive and defined over
+        ``[pi*f0, omg_stop]``.
 
     Note on alpha, beta: in the C code these are formally ODE state
     variables, but their r.h.s. is identically zero (see the "alpha and
@@ -426,11 +521,18 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
         evaluations, no extra right-hand sides.
     rtol, atol : float
         Tolerances passed to the integrator.
+    independent_variable : {"time", "orbital_frequency"}
+        What the system is marched against; see the discussion above.
+    omega_dot : callable or None
+        Orbital-frequency rate for the ``"orbital_frequency"`` branch;
+        see above.
 
     Returns
     -------
     dict with keys 't', 'alpha', 'beta', 'gamma', 'Momega', 'SA', 'SB', 'Lh'
-    (ndarrays; SA/SB/Lh have shape (N,3)).
+    (ndarrays; SA/SB/Lh have shape (N,3)). In the ``"orbital_frequency"``
+    branch ``'Momega'`` is the (exact) integration grid and ``'t'`` its
+    quadrature; in the ``"time"`` branch it is the reverse.
     """
     MA = nu_to_X1(nu)
     MB = 1.0 - MA
@@ -445,28 +547,45 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
     gamma0 = alpha_initial_condition(q, *chi1vec, *chi2vec, f0)  # == alpha0 in the C code
     Momg0 = math.pi * f0
 
-    y0 = np.concatenate([SA0, SB0, Lh0, [gamma0, Momg0]])
-
     omg_stop = 1.1 * eob_mrg_momg(nu, MA, MB, chi1vec[2], chi2vec[2])
+    max_step = max_step if max_step is not None else np.inf
 
-    def rhs(t, y):
-        return _pn_spin_precession_rhs(nu, q, y)
+    if independent_variable == "time":
+        y0 = np.concatenate([SA0, SB0, Lh0, [gamma0, Momg0]])
 
-    def event_reach_merger(t, y):
-        return y[10] - omg_stop
-    event_reach_merger.terminal = True
-    event_reach_merger.direction = 1
+        def rhs(t, y):
+            return _pn_spin_precession_rhs(nu, q, y)
 
-    def event_domega_negative(t, y):
-        return _pn_spin_precession_rhs(nu, q, y)[10]
-    event_domega_negative.terminal = True
-    event_domega_negative.direction = -1
+        def event_reach_merger(t, y):
+            return y[10] - omg_stop
+        event_reach_merger.terminal = True
+        event_reach_merger.direction = 1
 
-    sol = solve_ivp(rhs, (0.0, t_max), y0, method="DOP853",
-                     rtol=rtol, atol=atol,
-                     events=[event_reach_merger, event_domega_negative],
-                     dense_output=True,
-                     max_step=(max_step if max_step is not None else np.inf))
+        def event_domega_negative(t, y):
+            return _pn_spin_precession_rhs(nu, q, y)[10]
+        event_domega_negative.terminal = True
+        event_domega_negative.direction = -1
+
+        sol = solve_ivp(rhs, (0.0, t_max), y0, method="DOP853",
+                         rtol=rtol, atol=atol,
+                         events=[event_reach_merger, event_domega_negative],
+                         dense_output=True, max_step=max_step)
+        independent = None
+    elif independent_variable == "orbital_frequency":
+        y0 = np.concatenate([SA0, SB0, Lh0, [gamma0, 0.0]])
+
+        def rhs(omg, y):
+            return _pn_spin_precession_rhs_vs_frequency(nu, q, omg, y, omega_dot)
+
+        sol = solve_ivp(rhs, (Momg0, omg_stop), y0, method="DOP853",
+                         rtol=rtol, atol=atol, dense_output=True,
+                         max_step=max_step)
+        independent = "Momega"
+    else:
+        raise ValueError(
+            "independent_variable must be 'time' or 'orbital_frequency', "
+            f"got {independent_variable!r}"
+        )
 
     if not sol.success:
         raise RuntimeError(f"PN spin-precession integration failed: {sol.message}")
@@ -474,13 +593,18 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
     if refinement > 1 and sol.t.size > 1:
         steps = np.diff(sol.t)[:, np.newaxis]
         offsets = np.arange(refinement)[np.newaxis, :] / refinement
-        t = np.append((sol.t[:-1, np.newaxis] + steps * offsets).ravel(), sol.t[-1])
-        y = sol.sol(t)
+        grid = np.append((sol.t[:-1, np.newaxis] + steps * offsets).ravel(), sol.t[-1])
+        y = sol.sol(grid)
     else:
-        t, y = sol.t, sol.y
+        grid, y = sol.t, sol.y
 
     SA, SB, Lh = y[0:3].T, y[3:6].T, y[6:9].T
-    gamma, Momega = y[9], y[10]
+    gamma = y[9]
+
+    if independent is None:
+        t, Momega = grid, y[10]
+    else:
+        t, Momega = y[10], grid
 
     alpha = np.arctan2(Lh[:, 1], Lh[:, 0])
     beta = np.arccos(np.clip(Lh[:, 2], -1.0, 1.0))

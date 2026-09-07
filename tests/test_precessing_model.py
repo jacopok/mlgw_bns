@@ -16,12 +16,13 @@ from mlgw_bns.precessing_model import (
     PrecessingModel,
     PrecessingParametersWithExtrinsic,
     check_aligned_spin_limit,
+    eob_orbital_frequency_rate,
     newtonian_time_to_merger,
     twist_modes_frequency_domain,
 )
 from mlgw_bns.special_func import spinsphericalharm, wigner_d_function
 from mlgw_bns.spherical_harmonics import Y_2_pos_2, spin_weighted_harmonic
-from mlgw_bns.twist_waveform import twist_modes
+from mlgw_bns.twist_waveform import integrate_pn_spin_precession, twist_modes
 
 
 @pytest.fixture(name="frequencies")
@@ -138,6 +139,94 @@ def test_euler_angles_cover_the_whole_inspiral(precessing_params):
     assert angles.momega[-1] > 0.1
     assert np.all(np.diff(angles.momega) > 0)
     assert angles.beta.max() > 0.0
+
+
+def test_orbital_frequency_integration_covers_the_inspiral(precessing_params):
+    """Marching the precession against Momega must reach merger with a
+    strictly increasing frequency grid, a real opening angle, and a time
+    axis reconstructed by quadrature."""
+
+    kwargs = dict(
+        nu=precessing_params.eta,
+        chi1vec=precessing_params.chi_1_vector,
+        chi2vec=precessing_params.chi_2_vector,
+        f0=2.0 * 20.0 * precessing_params.total_mass * 4.925e-6 / 4.0,
+    )
+    in_freq = integrate_pn_spin_precession(
+        **kwargs, independent_variable="orbital_frequency"
+    )
+
+    assert np.all(np.diff(in_freq["Momega"]) > 0)
+    assert in_freq["Momega"][0] < 1e-3
+    assert in_freq["Momega"][-1] > 0.1
+    assert in_freq["beta"].max() > 0.0
+    assert in_freq["t"] is not None
+    assert np.all(np.diff(in_freq["t"]) > 0)
+
+
+def test_eob_orbital_frequency_rate_is_positive_and_climbing(precessing_params):
+    """The rate built from a (2,2) phase must be positive over the band
+    and climb with frequency at close to the Newtonian slope of 11/3."""
+
+    model = Model.default_for_testing()
+    reference_frequencies = np.geomspace(20.0, 2000.0, 400)
+    amplitude, phase = model.predict_amplitude_phase_mode(
+        Mode(2, 2), reference_frequencies, precessing_params.aligned()
+    )
+    mass_sum_seconds = precessing_params.aligned().mass_sum_seconds
+    rate = eob_orbital_frequency_rate(
+        reference_frequencies, amplitude * np.exp(1j * phase), mass_sum_seconds
+    )
+
+    momega = np.pi * mass_sum_seconds * reference_frequencies
+    values = np.array([rate(m) for m in momega])
+    assert np.all(values > 0)
+    assert values[-1] > values[0]
+    slope = np.polyfit(np.log(momega), np.log(values), 1)[0]
+    assert 2.5 < slope < 4.5  # Newtonian energy balance gives 11/3
+
+
+def test_anchoring_to_the_reference_phase_moves_only_precessing_waveforms(
+    frequencies, precessing_params
+):
+    """Integrating the angles along the surrogate's orbital-frequency
+    track changes a precessing waveform but leaves the aligned limit
+    exactly where it was."""
+
+    precessing = PrecessingModel(Model.default_for_testing())
+
+    plain = precessing.euler_angles(precessing_params, float(frequencies[0]))
+    anchored = precessing.euler_angles(
+        precessing_params, float(frequencies[0]), anchor_to_reference_phase=True
+    )
+    hp_plain, _ = precessing.predict(
+        frequencies, precessing_params, angles=plain, reanchor=False
+    )
+    hp_anchored, _ = precessing.predict(
+        frequencies, precessing_params, angles=anchored, reanchor=False
+    )
+    scale = np.max(np.abs(hp_plain))
+    assert np.max(np.abs(hp_anchored - hp_plain)) > 1e-3 * scale
+
+    aligned = PrecessingParametersWithExtrinsic(
+        mass_ratio=precessing_params.mass_ratio,
+        lambda_1=precessing_params.lambda_1,
+        lambda_2=precessing_params.lambda_2,
+        chi_1=(0.0, 0.0, precessing_params.chi_1_vector[2]),
+        chi_2=(0.0, 0.0, precessing_params.chi_2_vector[2]),
+        distance_mpc=precessing_params.distance_mpc,
+        inclination=precessing_params.inclination,
+        total_mass=precessing_params.total_mass,
+    )
+    with_anchor = precessing.predict(
+        frequencies, aligned,
+        angles=precessing.euler_angles(
+            aligned, float(frequencies[0]), anchor_to_reference_phase=True
+        ),
+        reanchor=False,
+    )
+    without = precessing.predict(frequencies, aligned, reanchor=False)
+    np.testing.assert_allclose(with_anchor[0], without[0], rtol=1e-8, atol=0.0)
 
 
 def test_aligned_spin_limit_of_the_twist(frequencies, precessing_params):
