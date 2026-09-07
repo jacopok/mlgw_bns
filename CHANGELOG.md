@@ -80,6 +80,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scripts under `visualization/` to validate a trained model and the time-shift
     predictor, and to inspect the TEOBResumS modes, their PN residuals and the
     parameters discarded during training.
+- `visualization/validate_extrinsic_against_teob.py`, which varies *every*
+    parameter --- intrinsic plus inclination, total mass, distance, reference
+    phase and a random detector projection --- and compares `Model.predict`
+    against an independent TEOBResumS `h_+, h_\times` call, to check that the
+    `Y_{lm}(iota)` projection and the total-mass/distance scaling are treated
+    the same way on both sides. Over 300 waveforms the per-mode on-grid mismatch
+    stays at its ~6e-6 floor with no inclination trend, and the aligning time
+    shift is sub-sample; they agree.
 
 ### Changed
 
