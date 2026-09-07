@@ -61,3 +61,5 @@ visualization/validate_genuine.py
 visualization/validate_mode_phases_predictor.py
 pw_off_*.yaml
 pw_on_*.yaml
+visualization/validate_extrinsic_against_teob.npz
+visualization/validate_extrinsic_against_teob.png
