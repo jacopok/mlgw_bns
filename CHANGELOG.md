@@ -40,6 +40,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     a factor of two and a half; on the (2,2), whose PN amplitude has no such
     minimum, it is a 3% improvement, and on (4,4) an 8% degradation, since it
     is applied per-dataset rather than per-mode. Off by default.
+- Odd-`m` mode regressors are weighted by each training waveform's integrated
+    mode power, following arXiv:2609.03025 (DANSur_HM). At exactly `q = 1` the
+    odd-`m` amplitude vanishes identically, so the (2,1)/(3,3) amplitude residual
+    grows linearly out of zero through a `q <~ 1.15` boundary layer far too steep
+    for the global-RBF `KernelRidgeNetwork`, which rings across the `q ~ 1.2-1.5`
+    region that carries the mode's power. Weighting by
+    `(int A_i^2 df / max_j P_j) ** beta` for odd `m` only (`power_weighting`,
+    `power_weight_exponent` on `ModeModel`, on by default, recorded in the
+    metadata; `sample_weight` threaded through both network backends and passed
+    to scikit-learn only when set, so even-`m` and legacy fits stay
+    bit-identical). The shipped `default_hom` model is retrained accordingly:
+    same training data and PCA basis, odd-`m` regressor re-fit only. Median
+    mismatch over 200 waveforms: (2,1) optimised per-mode 4.5e-4 -> 2.0e-5
+    (22x), (3,3) 3.9e-6 -> 4.5e-7 (8.7x), (2,2) and (4,4) bit-identical, full
+    waveform 1.9e-7 -> 6.5e-8 (2.9x).
 - Per-mode defaults for `KernelRidgeNetwork`, in
     `mlgw_bns/data/kernel_ridge_defaults.json`, read by
     `Hyperparameters.default_kernel_ridge` and written by
