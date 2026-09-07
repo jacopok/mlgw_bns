@@ -23,5 +23,7 @@ parameter_ranges:
   - 1.0
   - 3.0
 pca_components_number: 30
+power_weight_exponent: 1.0
+power_weighting: true
 reference_amplitude: true
 srate_hz: 4096.0
