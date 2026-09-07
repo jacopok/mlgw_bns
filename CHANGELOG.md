@@ -92,6 +92,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     exact, and the recovered angles agree with the ones integrated here to
     8e-06 rad in the combination the multipoles constrain sharply and to 3e-04
     rad in the opening angle.
+- `visualization/validate_precessing_against_teob.py`, which closes the loop by
+    comparing the full frequency-domain polarizations of
+    `PrecessingModel.predict` against the `h+`, `hx` that TEOBResumS returns for
+    the same precessing binary, over random orientations. Running the same
+    comparison with the co-precessing multipoles taken from TEOBResumS instead
+    of the surrogate isolates the cost of *modelling* the precession (the PN
+    angles, the stationary-phase multipoles, the resampling) from the network
+    reconstruction error. The two are equal to 0.1%: the networks add nothing
+    measurable to a precessing waveform (their own co-precessing error stays at
+    ~1e-6). What a precessing waveform costs is the precession model, and it
+    climbs with the opening angle -- median mismatch ~4e-3 below `beta = 0.05`
+    rad, ~1e-2 through the expected BNS range (`beta <~ 0.1`), ~3e-2 by
+    `beta = 0.15` and ~1.3e-1 by `beta = 0.25`, driven by the PN spin-precession
+    angles.
+- Odd-m mode regressors are now weighted by each training waveform's integrated
+    mode power, following arXiv:2609.03025: near equal mass the (2,1) and (3,3)
+    amplitude residuals grow linearly out of the odd-m zero, a boundary layer
+    the global-RBF kernel cannot resolve and rings across. Weighting by
+    `(int A^2 df / max)^beta` for odd m only (`power_weighting`,
+    `power_weight_exponent` on `ModeModel`, on by default, recorded in the
+    metadata) improves the (2,1) optimised per-mode mismatch by 23x and (3,3) by
+    11x on `default_hom`, with (2,2) and (4,4) bit-identical.
 
 ### Changed
 
