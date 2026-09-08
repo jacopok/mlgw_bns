@@ -94,9 +94,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `visualization/mismatch_vs_total_mass.py`, sweeping the multi-mode mismatch
     across the total-mass axis (with an optional `--baseline` overlay for a
     before/after figure), and `visualization/teob_hom_start_frequency.py`, a
-    self-contained reproducer showing that a multi-mode TEOBResumS
-    frequency-domain waveform depends on `initial_frequency` at the ~1e-3 level
-    (the `(2,2)` alone does not) --- for reporting upstream.
+    self-contained check of how a multi-mode TEOBResumS frequency-domain
+    waveform depends on `initial_frequency`. Under a single global phase the
+    summed HOM waveform moves by ~1e-3; once each mode is rotated by
+    `exp(i m phi_c)` this drops to ~7e-8, so it is a coalescence-phase
+    convention that tracks the start frequency, not an inconsistency. Only the
+    `(4,4)` carries a genuine sub-1e-4 phase-shape change.
 
 ### Changed
 
