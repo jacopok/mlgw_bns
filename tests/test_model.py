@@ -186,6 +186,45 @@ def test_default_model_full_waveform_mismatch(default_model):
     assert np.median(mismatches) < DEFAULT_MODEL_MEDIAN_MISMATCH
 
 
+@pytest.mark.parametrize("total_mass", [2.2, 2.8, 3.6])
+def test_full_waveform_mismatch_is_flat_in_total_mass(default_model, total_mass):
+    """The multi-mode mismatch must not jump when the total mass crosses
+    the dataset reference (2.8): below it the rescaled grid dips under
+    ``effective_initial_frequency_hz`` and the PN low-frequency extension
+    fires, which used to overwrite each mode's inter-mode phase constant
+    with the PN one and mis-phase the HOM modes by ~1e-4."""
+
+    validator = ValidateModel(default_model.mode_models[Mode(2, 2)])
+    frequencies = validator.frequencies
+    band = (frequencies >= 20.0) & (frequencies <= 2048.0)
+    parameter_generator = default_model.dataset.make_parameter_generator(seed=7)
+
+    mismatches = []
+    for _ in range(8):
+        intrinsic = next(parameter_generator)
+        params = ParametersWithExtrinsic(
+            mass_ratio=intrinsic.mass_ratio,
+            lambda_1=intrinsic.lambda_1,
+            lambda_2=intrinsic.lambda_2,
+            chi_1=intrinsic.chi_1,
+            chi_2=intrinsic.chi_2,
+            distance_mpc=100.0,
+            inclination=1.0,
+            total_mass=total_mass,
+        )
+        predicted = default_model.predict_modes_dict(frequencies, params)
+        true = default_model.get_teob_modes_dict(frequencies, params)
+        mismatches.append(
+            validator.full_waveform_mismatch(
+                {k: v[band] for k, v in true.items()},
+                {k: v[band] for k, v in predicted.items()},
+                frequencies=frequencies[band],
+            )
+        )
+
+    assert np.median(mismatches) < 1e-5
+
+
 def test_model_generate_sets_availability_flags(generated_model):
     assert generated_model.auxiliary_data_available
     assert generated_model.training_dataset_available
