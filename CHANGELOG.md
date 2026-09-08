@@ -88,6 +88,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the same way on both sides. Holding each varied parameter fixed in turn
     found the `total_mass < 2.8` PN-extension bug (see *Fixed*); after it, the
     per-mode on-grid mismatch is ~3e-7 and flat in every extrinsic parameter.
+    The coalescence-phase marginalisation rotates each mode by `exp(i m phi_c)`
+    (an earlier revision optimised a single global phase, inflating the
+    independent-TEOBResumS FD mismatch median from ~5.6e-4 to ~3e-3).
 - `visualization/mismatch_vs_total_mass.py`, sweeping the multi-mode mismatch
     across the total-mass axis (with an optional `--baseline` overlay for a
     before/after figure), and `visualization/teob_hom_start_frequency.py`, a
