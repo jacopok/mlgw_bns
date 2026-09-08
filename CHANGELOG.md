@@ -125,6 +125,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ParametersWithExtrinsic.reference_phase` is the coalescence phase, so
+    shifting it by `phi_c` must rotate the `(l, m)` mode by `exp(i m phi_c)`;
+    `ModeModel.predict_amplitude_phase{,_optimized}` added the *same*
+    `reference_phase` to every mode instead. For a single-mode `(2,2)` model
+    this was a harmless convention (a factor of two on a rarely-used
+    parameter); for a multi-mode waveform a flat phase is not a physical
+    rotation, so `reference_phase` did not do what it says. Now applied as
+    `m * reference_phase` (a mode-less model is the `(2,2)`, so `m = 2`).
+    `time_shift`, a genuine time-domain shift, stays the same for every mode.
+    **Breaking** for anyone who passed a non-zero `reference_phase` to a
+    `(2,2)` `ModeModel` and expected it verbatim --- multiply by two.
 - The post-Newtonian low-frequency extension in
     `ModeModel.predict_amplitude_phase{,_optimized}` glued the model band onto
     the PN segment by shifting the *band* to match the PN phase at the

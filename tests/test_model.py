@@ -225,6 +225,26 @@ def test_full_waveform_mismatch_is_flat_in_total_mass(default_model, total_mass)
     assert np.median(mismatches) < 1e-5
 
 
+def test_reference_phase_is_a_coalescence_phase(default_model):
+    """Shifting ``reference_phase`` by ``phi_c`` must rotate the ``(l, m)``
+    mode by ``exp(i m phi_c)`` --- not the same phase for every mode."""
+
+    frequencies = np.linspace(30.0, 1500.0, 400)
+    phi_c = 0.37
+    base = ParametersWithExtrinsic(
+        mass_ratio=1.6, lambda_1=500.0, lambda_2=500.0, chi_1=0.1, chi_2=0.05,
+        distance_mpc=100.0, inclination=1.1, total_mass=2.8, reference_phase=0.0,
+    )
+    shifted = dataclasses.replace(base, reference_phase=phi_c)
+
+    modes_base = default_model.predict_modes_dict(frequencies, base)
+    modes_shifted = default_model.predict_modes_dict(frequencies, shifted)
+
+    for (l, m), array in modes_base.items():
+        ratio = modes_shifted[(l, m)] / array
+        np.testing.assert_allclose(ratio, np.exp(1j * m * phi_c), rtol=1e-6)
+
+
 def test_model_generate_sets_availability_flags(generated_model):
     assert generated_model.auxiliary_data_available
     assert generated_model.training_dataset_available
