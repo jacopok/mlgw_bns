@@ -85,9 +85,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     phase and a random detector projection --- and compares `Model.predict`
     against an independent TEOBResumS `h_+, h_\times` call, to check that the
     `Y_{lm}(iota)` projection and the total-mass/distance scaling are treated
-    the same way on both sides. Over 300 waveforms the per-mode on-grid mismatch
-    stays at its ~6e-6 floor with no inclination trend, and the aligning time
-    shift is sub-sample; they agree.
+    the same way on both sides. Holding each varied parameter fixed in turn
+    found the `total_mass < 2.8` PN-extension bug (see *Fixed*); after it, the
+    per-mode on-grid mismatch is ~3e-7 and flat in every extrinsic parameter.
+- `visualization/mismatch_vs_total_mass.py`, sweeping the multi-mode mismatch
+    across the total-mass axis (with an optional `--baseline` overlay for a
+    before/after figure), and `visualization/teob_hom_start_frequency.py`, a
+    self-contained reproducer showing that a multi-mode TEOBResumS
+    frequency-domain waveform depends on `initial_frequency` at the ~1e-3 level
+    (the `(2,2)` alone does not) --- for reporting upstream.
 
 ### Changed
 

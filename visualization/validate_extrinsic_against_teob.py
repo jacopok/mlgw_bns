@@ -46,27 +46,39 @@ mismatches are plotted against inclination and total mass.
 
 Findings (300 waveforms, seed 4, all parameters drawn over the
 ``default_hom`` training ranges plus total mass 2-4 Msun, isotropic
-inclination, a random detector projection):
+inclination, a random detector projection; after commit 528c828):
 
-    on-grid per-mode mismatch : median 6.2e-6, 90th pct 2.1e-4
-    FD mismatch (time + phase) : median 2.6e-3, 90th pct 2.6e-2
+    on-grid per-mode mismatch : median 2.9e-7, 90th pct 2.6e-5
+    FD mismatch (time + phase) : median 3.0e-3, 90th pct 2.5e-2
     aligning time shift        : median +1e-6 s, |median| 5e-6 s
     aligning phase shift       : median ~0, spread ~uniform on (-pi, pi]
 
 The extrinsic treatment agrees with TEOBResumS. The on-grid per-mode
 mismatch --- which exercises the Y_lm(iota) projection, the m<0
-reconstruction and the total-mass/distance scaling, and has a ~1e-6
-floor --- stays at ~6e-6 and is flat in inclination (correlation
-r ~ 0.1); its only trend is a mild decrease with total mass (r ~ -0.7),
-which is the physical "fewer cycles in band, easier to model", not a
-treatment error, since the number itself never leaves the 1e-6 floor.
+reconstruction and the total-mass/distance scaling, with a ~1e-7 floor
+--- is flat in every extrinsic parameter (|correlation| < 0.3). Holding
+each varied parameter fixed in turn (see the sweep below) turned up one
+real bug, now fixed (528c828): for ``total_mass`` below the dataset
+reference (2.8 Msun) the post-Newtonian low-frequency extension fired
+and overwrote each mode's inter-mode phase constant, a ~50x median
+degradation with a step exactly at 2.8. That step, and the strong
+``total_mass`` correlation it produced (r ~ -0.7), are gone;
+``mismatch_vs_total_mass.py`` plots the before/after. The residual tail
+(worst ~8e-4) is high mass-ratio + high spin intrinsic modelling
+difficulty, not extrinsic treatment.
 
-The frequency-domain comparison against an independent TEOBResumS call
-sits at 2.6e-3 -- three orders of magnitude above the on-grid number for
-the *same* parameters -- because it is dominated by the resampling of a
-fast chirp onto the ~1 Hz decimated model grid, the same floor
-``validate_precessing_against_teob`` and the Request-B investigation
-found. It too is flat in inclination.
+The frequency-domain comparison against an *independent* TEOBResumS call
+sits at ~3e-3 -- four orders of magnitude above the on-grid number for
+the *same* parameters. That gap is NOT the surrogate: it is (i) the
+single-global-phase mismatch metric, which cannot align a multi-mode
+waveform and costs ~1.2e-3 (per-mode marginalisation, as here for the
+on-grid number, removes it), and (ii) TEOBResumS not being invariant to
+its own configuration -- its ``all_modes_amplitude_phase`` path starts
+the (2,2) ODE integration near 1.8 Hz where a plain
+``EOBRunPy(initial_frequency=15)`` starts at 15 Hz, and the higher-mode
+phases depend on that at ~1e-3 (see
+``teob_hom_start_frequency.py`` for a minimal reproducer). Both are flat
+in inclination.
 
 The aligning time shift is sub-sample (5e-6 s) with no parameter trend,
 so the merger-time convention matches. The aligning phase is uniform on
