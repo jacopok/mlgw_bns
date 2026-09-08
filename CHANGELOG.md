@@ -81,29 +81,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     predictor, and to inspect the TEOBResumS modes, their PN residuals and the
     parameters discarded during training.
 - `visualization/validate_extrinsic_against_teob.py`, which varies *every*
-    parameter --- intrinsic plus inclination, total mass, distance, reference
-    phase and a random detector projection --- and compares `Model.predict`
-    against an independent TEOBResumS `h_+, h_\times` call, to check that the
-    `Y_{lm}(iota)` projection and the total-mass/distance scaling are treated
-    the same way on both sides. Holding each varied parameter fixed in turn
-    found the `total_mass < 2.8` PN-extension bug (see *Fixed*); after it, the
-    per-mode on-grid mismatch is ~3e-7 and flat in every extrinsic parameter.
-    The coalescence-phase marginalisation rotates each mode by `exp(i m phi_c)`
-    (an earlier revision optimised a single global phase, inflating the
-    independent-TEOBResumS FD mismatch median to ~3e-3). The remaining FD number
-    (~4e-4) is neither the surrogate nor resampling: restricted to a band where
-    every mode has full support, the surrogate matches an independent
-    `EOBRunPy(initial_frequency=15)` hflm reconstruction to ~3e-6. The wide-band
-    number is band-edge support --- a 15 Hz start only gives the `(3,3)` above
-    22.5 Hz and the `(4,4)` above 30 Hz, whereas the surrogate trains from
-    `all_modes_amplitude_phase` (ODE from ~1.8 Hz) and has the higher modes down
-    to 20 Hz, so the [20, ~30] Hz slice compares real content against a missing
-    reference. The trustworthy surrogate-accuracy number is the on-grid per-mode
-    one (~3e-7).
+    parameter --- intrinsic plus inclination, total mass, distance and reference
+    phase --- and compares the surrogate's full strain against an independent
+    TEOBResumS call, to check that the `Y_{lm}(iota)` projection and the
+    total-mass/distance scaling are treated the same way on both sides. Holding
+    each varied parameter fixed in turn found the `total_mass < 2.8`
+    PN-extension bug (see *Fixed*). After it, and with the coalescence phase
+    marginalised per mode (`exp(i m phi_c)`, not a single global phase --- that
+    alone inflates the median to ~3e-3), the surrogate's full reconstructed
+    strain agrees with an independent EOB call to ~3e-7 median over
+    [20, 2048] Hz --- the same floor as the on-grid per-mode check, tail and
+    all. The long-standing "FD floor" (~4e-4 median, growing with mass
+    ratio) turned out to be the *reference*, not the surrogate: a bare
+    `EOBRunPy(initial_frequency=15)` call integrates the early inspiral from
+    too high a frequency and its higher-mode phasing drifts from the
+    `all_modes_amplitude_phase` generator, which lowers the ODE start by
+    `initial_frequency_scaling`. `probe_teob_config_gap.py` pins the whole gap
+    to that one knob with no surrogate in the loop; the script now applies the
+    same scaling to its reference. Reaching a clean number also needed the
+    reference strain reconstructed from the `hflm` multipoles (TEOBResumS' own
+    pre-summed output is undersampled at the inter-mode beat on a coarse grid)
+    and a dense frequency grid.
 - `visualization/fd_grid_convergence.py`, which reruns the surrogate-vs-TEOBResumS
     FD mismatch on a ladder of frequency grids (df 0.5 down to 0.03 Hz) to show
     it is flat under refinement --- the FD validation gap is not a quadrature or
     interpolation artefact of the decimated model grid.
+- `visualization/probe_teob_config_gap.py`, which mismatches the reference
+    constructions of `validate_extrinsic_against_teob.py` against each other ---
+    no surrogate --- as a function of mass ratio, pinning the "FD floor" to the
+    reference's TEOBResumS ODE start frequency (`initial_frequency_scaling`).
 - `visualization/mismatch_vs_total_mass.py`, sweeping the multi-mode mismatch
     across the total-mass axis (with an optional `--baseline` overlay for a
     before/after figure), and `visualization/teob_hom_start_frequency.py`, a
