@@ -1404,9 +1404,14 @@ class ModeModel:
             / params.distance_mpc
         )
 
+        # `reference_phase` is the coalescence phase: shifting it by phi_c
+        # rotates the (l, m) mode by exp(i m phi_c). A mode-less model is the
+        # (2,2). `time_shift` is a genuine time-domain shift, the same for
+        # every mode.
+        m_mode = 2 if self.mode is None else self.mode.m
         phi = (
             resampled_phi
-            + params.reference_phase
+            + m_mode * params.reference_phase
             + (2 * np.pi * params.time_shift) * frequencies # TODO: changed `+` to `-`
         )
         
@@ -1583,9 +1588,14 @@ class ModeModel:
         pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
         amp = resampled_amp * pre / params.distance_mpc
 
+        # `reference_phase` is the coalescence phase: shifting it by phi_c
+        # rotates the (l, m) mode by exp(i m phi_c). A mode-less model is the
+        # (2,2). `time_shift` is a genuine time-domain shift, the same for
+        # every mode.
+        m_mode = 2 if self.mode is None else self.mode.m
         phi = (
             resampled_phi
-            + params.reference_phase
+            + m_mode * params.reference_phase
             + (2 * np.pi * params.time_shift) * frequencies
         )
 
