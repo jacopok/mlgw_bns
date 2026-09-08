@@ -90,12 +90,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     per-mode on-grid mismatch is ~3e-7 and flat in every extrinsic parameter.
     The coalescence-phase marginalisation rotates each mode by `exp(i m phi_c)`
     (an earlier revision optimised a single global phase, inflating the
-    independent-TEOBResumS FD mismatch median from ~5.6e-4 to ~3e-3). That
-    residual ~5.6e-4 is neither the surrogate nor resampling (see
-    `fd_grid_convergence.py`): it is a frequency-dependent 0.1--0.35 rad phase
-    difference in the `(3,3)`/`(4,4)` modes between TEOBResumS's per-mode `hflm`
-    arrays and its internally summed `h_+, h_\times`. The `(2,2)` agrees between
-    the two to 1e-8.
+    independent-TEOBResumS FD mismatch median to ~3e-3). The remaining FD number
+    (~4e-4) is neither the surrogate nor resampling: restricted to a band where
+    every mode has full support, the surrogate matches an independent
+    `EOBRunPy(initial_frequency=15)` hflm reconstruction to ~3e-6. The wide-band
+    number is band-edge support --- a 15 Hz start only gives the `(3,3)` above
+    22.5 Hz and the `(4,4)` above 30 Hz, whereas the surrogate trains from
+    `all_modes_amplitude_phase` (ODE from ~1.8 Hz) and has the higher modes down
+    to 20 Hz, so the [20, ~30] Hz slice compares real content against a missing
+    reference. The trustworthy surrogate-accuracy number is the on-grid per-mode
+    one (~3e-7).
 - `visualization/fd_grid_convergence.py`, which reruns the surrogate-vs-TEOBResumS
     FD mismatch on a ladder of frequency grids (df 0.5 down to 0.03 Hz) to show
     it is flat under refinement --- the FD validation gap is not a quadrature or
@@ -104,11 +108,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     across the total-mass axis (with an optional `--baseline` overlay for a
     before/after figure), and `visualization/teob_hom_start_frequency.py`, a
     self-contained check of how a multi-mode TEOBResumS frequency-domain
-    waveform depends on `initial_frequency`. Under a single global phase the
-    summed HOM waveform moves by ~1e-3; once each mode is rotated by
-    `exp(i m phi_c)` this drops to ~7e-8, so it is a coalescence-phase
-    convention that tracks the start frequency, not an inconsistency. Only the
-    `(4,4)` carries a genuine sub-1e-4 phase-shape change.
+    waveform depends on `initial_frequency`. Most of it (~2e-3 under a single
+    global phase) is a coalescence-phase convention that `exp(i m phi_c)`
+    marginalisation removes (down to ~5e-6); TEOBResumS computes each multipole
+    independently and is self-consistent for HOM. The only residual is a fixed
+    ~1e-4 phase-shape offset in the `(4,4)` (the same at every start frequency).
 
 ### Changed
 

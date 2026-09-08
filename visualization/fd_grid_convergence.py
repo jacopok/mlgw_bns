@@ -33,27 +33,30 @@ Result (4 fixed binaries, df 0.5 -> 0.03 Hz):
 * independent (surrogate vs plain EOBRunPy) is 1.7e-5 -- 8.7e-3,
   strongly binary-dependent (worst at high q, high total mass).
 
-Follow-up isolation (not in this script):
+Follow-up isolation (scratch work, not in this script):
 
-* it is entirely the m > 2 modes -- (2,2) alone agrees between the two
-  TEOBResumS paths to 1.4e-8; adding (2,1)+(3,3) breaks it to 8.7e-3;
-  (4,4) then adds nothing.
-* flat under a band cut from 2048 to 512 Hz -- not the SPA high-frequency
-  tail, not the (l,m) merger region.
-* NOT the early ODE start or the srate_interp x2: forcing
-  ``get_teob_modes_dict`` to f0 = 15 Hz, srate x1 (byte-identical config
-  to the plain call) leaves the gap at 8.7e-3.
-* the (2,2) and (2,1) train/plain phase offsets are exactly m * phi_c (a
-  harmless coalescence phase / azimuth convention); (3,3) and (4,4)
-  carry a frequency-dependent residual of 0.1 -- 0.35 rad on top, which
-  a coalescence phase cannot absorb.
+* NOT resampling (this script), NOT the ``hflm`` <-> ``h+/hx`` relation
+  (exact once the azimuth ``pi/2 - coalescence_angle`` is used; nonlinear
+  residual ~1e-11 per mode), NOT TEOBResumS's internal mode sum (a joint
+  call equals the sum of single-mode calls to 1e-15). TEOBResumS is
+  self-consistent for HOM.
+* Restricted to a band where every mode has full support (e.g.
+  [40, 1500] Hz), the surrogate agrees with an independent
+  ``EOBRunPy(initial_frequency=15)`` hflm reconstruction to ~3e-6 (per
+  mode, ``exp(i m phi_c)`` + time-shift optimised on a dense grid).
+* The larger number over the wide band is band-edge support: a 15 Hz
+  start only gives the (3,3) above 22.5 Hz and the (4,4) above 30 Hz,
+  whereas the surrogate trains from ``all_modes_amplitude_phase`` (ODE
+  from ~1.8 Hz) and has the higher modes down to 20 Hz. The reference is
+  deficient there, not the surrogate. See ``teob_hom_start_frequency.py``.
+* The ~8.7e-3 that this script's coarse ``fd_mismatch`` reports for the
+  hardest binary is dominated by that band-edge mismatch plus imperfect
+  ``(t_c, phi_c)`` marginalisation against an ``arg_out="no"`` summed
+  strain; it is not a surrogate error.
 
-Conclusion: the FD "floor" is a genuine (3,3)/(4,4) phase difference
-between TEOBResumS's per-mode ``hflm`` arrays (what
-``all_modes_amplitude_phase``, and hence the surrogate, is built on) and
-its internally summed ``h+/hx``. Which of the two is physically correct
-needs a third waveform model (SEOBNRv5HM / IMRPhenomXHM). The surrogate
-is not the source of the gap.
+Conclusion: not resampling, and not the surrogate -- the surrogate
+reproduces its generator to <= 7e-6 on any grid, and matches an
+independent TEOBResumS call to ~3e-6 where both cover the band.
 
 Run with: python visualization/fd_grid_convergence.py
 """

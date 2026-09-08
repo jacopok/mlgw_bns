@@ -53,9 +53,11 @@ inclination, a random detector projection; after commits 528c828 +
 6fa0282 and the per-mode ``exp(i m phi_c)`` marginalisation here):
 
     on-grid per-mode mismatch : median 3.0e-7, 90th pct 1.3e-5
-    FD mismatch (time + phase) : median 5.6e-4, 90th pct 2.6e-2
-    aligning time shift        : |median| 3e-6 s, no parameter trend
-    aligning phase shift       : |median| 1.5 rad (phase-origin convention)
+    FD mismatch (time + phase) : median ~4e-4  (band-edge HOM support of
+                                 the 15 Hz reference; ~3e-6 where both
+                                 cover the band -- see the note below)
+    aligning time shift        : |median| 2e-6 s, no parameter trend
+    aligning phase shift       : spreads over (-pi, pi] (phase-origin conv.)
 
 The extrinsic treatment agrees with TEOBResumS. The on-grid per-mode
 mismatch --- which exercises the Y_lm(iota) projection, the m<0
@@ -73,21 +75,24 @@ per-mode mismatch is now flat in every extrinsic parameter; its tail
 difficulty, not extrinsic treatment.
 
 The frequency-domain comparison against an *independent* TEOBResumS call
-sits at ~5.6e-4 -- three orders of magnitude above the on-grid number
+sits near ~4e-4 -- three orders of magnitude above the on-grid number
 for the *same* parameters. This is **not** the surrogate and **not**
-resampling: ``fd_grid_convergence.py`` shows both mismatches flat to
-three significant figures across a 16x refinement of the frequency
-spacing. It is a genuine (3,3)/(4,4) phase difference between
-TEOBResumS's per-mode ``hflm`` arrays -- which ``all_modes_amplitude_phase``,
-and hence the surrogate, is built on -- and the code's internally summed
-``h+/hx``. The (2,2) alone agrees between the two paths to 1.4e-8;
-adding (2,1)+(3,3) opens the gap to as much as 8.7e-3; it survives
-matching the two call configurations exactly and a band cut to 512 Hz,
-and it is a frequency-dependent 0.1--0.35 rad residual that ``exp(i m
-phi_c)`` cannot absorb. The mass-ratio trend (r ~ 0.5) is this effect,
-not modelling error. An earlier revision of this script optimised a
-single global phase rather than ``exp(i m phi_c)`` per mode, which alone
-inflated the median to ~3e-3. Everything here is flat in inclination.
+resampling (``fd_grid_convergence.py``: flat under a 16x grid
+refinement). Restricted to a band where every mode has full support the
+surrogate agrees with an independent ``EOBRunPy(initial_frequency=15)``
+hflm reconstruction to ~3e-6. The wide-band number is band-edge support:
+a 15 Hz start only produces the (3,3) above 22.5 Hz and the (4,4) above
+30 Hz, whereas the surrogate trains from ``all_modes_amplitude_phase``
+(ODE from ~1.8 Hz) and has the higher modes down to 20 Hz -- so the
+[20, ~30] Hz slice compares real surrogate content against a missing (or
+barely-supported) reference. It grows with mass ratio because the higher
+modes carry more relative power there. Plus imperfect ``(t_c, phi_c)``
+marginalisation against the ``arg_out="no"`` summed strain (which
+carries a per-mode ``exp(i m pi/2)`` azimuth and a large merger-time
+offset). An earlier revision optimised a single global phase rather than
+``exp(i m phi_c)`` per mode, which alone inflated the median to ~3e-3.
+The trustworthy surrogate-accuracy number is the on-grid per-mode one
+(~3e-7, flat in every extrinsic parameter).
 
 The aligning time shift is sub-sample (3e-6 s) with no parameter trend,
 so the merger-time convention matches. The aligning phase spreads over
@@ -129,7 +134,6 @@ LAMBDA_RANGE = (5.0, 5000.0)
 TOTAL_MASS_RANGE = (2.0, 4.0)
 DISTANCE_RANGE = (40.0, 400.0)
 
-DF = 1.0 / 512.0
 F0_TEOB = 15.0
 BAND_LO = 20.0
 BAND_HI = 2048.0
@@ -141,21 +145,18 @@ FIGURE_PATH = "visualization/validate_extrinsic_against_teob.png"
 DATA_PATH = "visualization/validate_extrinsic_against_teob.npz"
 
 
-def interp_fd(target_frequencies, frequencies, series):
-    """Resample a frequency series through its amplitude and unwrapped phase."""
-    amplitude = np.interp(target_frequencies, frequencies, np.abs(series))
-    phase = np.interp(target_frequencies, frequencies, np.unwrap(np.angle(series)))
-    return amplitude * np.exp(1j * phase)
-
-
 def teob_polarizations(params: ParametersWithExtrinsic, frequencies):
     r"""TEOBResumS :math:`h_+, h_\times` for one aligned-spin source.
 
-    Returned on the sub-grid of ``frequencies`` that TEOBResumS covers,
-    in the ``mlgw_bns`` Fourier convention, with the boolean mask of that
-    sub-grid.
+    Returned *directly* on the sub-grid of ``frequencies`` inside the band
+    (via ``interp_freqs``/``freqs``, so TEOBResumS does its own internal
+    interpolation and there is no resampling on our side), in the
+    ``mlgw_bns`` Fourier convention, with the boolean mask of that sub-grid.
     """
     from EOBRun_module import EOBRunPy
+
+    inside = (frequencies >= BAND_LO) & (frequencies <= BAND_HI)
+    target = frequencies[inside]
 
     par = dict(
         q=params.mass_ratio,
@@ -169,32 +170,26 @@ def teob_polarizations(params: ParametersWithExtrinsic, frequencies):
         initial_frequency=F0_TEOB,
         srate_interp=SRATE_HZ,
         use_geometric_units="no",
-        interp_uniform_grid="yes",
         domain=1,
-        df=DF,
+        interp_freqs="yes",
+        freqs=list(target),
         # mlgw_bns adds `reference_phase` to every mode's phase; TEOBResumS
         # rotates the (l, m) mode by exp(i m * coalescence_angle), and for
         # the phase convention of compute_hpc that azimuth is
         # pi/2 - coalescence_angle. Setting reference_phase = 0 on the
         # surrogate side and the default coalescence_angle here leaves only
-        # a constant offset, which the phase optimisation absorbs.
+        # a per-mode exp(i m pi/2), which the coalescence-phase optimisation
+        # absorbs.
         coalescence_angle=0.0,
         output_hpc="no",
         arg_out="no",
         use_spins=1,
         use_mode_lm=sorted({mode_to_k(mode) for mode in MODES}),
     )
-    f, real_hp, imag_hp, real_hc, imag_hc = EOBRunPy(par)
-    f = np.asarray(f)
+    _f, real_hp, imag_hp, real_hc, imag_hc = EOBRunPy(par)
     hp = np.conj(np.asarray(real_hp) + 1j * np.asarray(imag_hp))
     hc = np.conj(np.asarray(real_hc) + 1j * np.asarray(imag_hc))
-
-    inside = (frequencies >= max(BAND_LO, f[0])) & (frequencies <= min(BAND_HI, f[-1]))
-    return (
-        interp_fd(frequencies[inside], f, hp),
-        interp_fd(frequencies[inside], f, hc),
-        inside,
-    )
+    return hp, hc, inside
 
 
 def optimised_mismatches(reference, mode_arrays, m_values, frequencies, psd,
@@ -230,21 +225,20 @@ def optimised_mismatches(reference, mode_arrays, m_values, frequencies, psd,
             return 0.0
         return np.abs(np.sum(ref_weighted * h2)) / (norm1 * n2)
 
-    phi_grid = np.linspace(-np.pi, np.pi, 61)
-    t_grid = np.linspace(-max_delta_t, max_delta_t, 201)
+    phi_grid = np.linspace(-np.pi, np.pi, 721)
+    t_grid = np.linspace(-max_delta_t, max_delta_t, 4001)
+    t_kernels = np.exp(2j * np.pi * np.outer(t_grid, frequencies))
 
     best_phase_only = max(match(0.0, phi) for phi in phi_grid)
 
-    # coarse 2-D grid, then a local Nelder-Mead refinement
+    # exhaustive 2-D grid (t_c via the kernel bank, per phi_c), then a local
+    # Nelder-Mead polish. The dense phi_c grid matters: the m > 2 modes make
+    # the overlap sharp in phi_c, and a coarse grid leaves a ~1e-3 floor.
     coarse_best, coarse_arg = -1.0, (0.0, 0.0)
     for phi_c in phi_grid:
         h2 = combined(phi_c)
-        overlaps = np.exp(2j * np.pi * np.outer(t_grid, frequencies)) @ (
-            ref_weighted * h2
-        )
-        norms = np.sqrt(np.abs(
-            np.sum((np.abs(h2) ** 2) * weight)
-        ))  # |h2| is t-shift invariant
+        overlaps = t_kernels @ (ref_weighted * h2)
+        norms = np.sqrt(np.abs(np.sum((np.abs(h2) ** 2) * weight)))
         k = int(np.argmax(np.abs(overlaps)))
         value = np.abs(overlaps[k]) / (norm1 * norms)
         if value > coarse_best:
