@@ -67,25 +67,27 @@ reference (2.8 Msun) the post-Newtonian low-frequency extension fired
 and overwrote each mode's inter-mode phase constant, a ~50x median
 degradation with a step exactly at 2.8. That step, and the strong
 ``total_mass`` correlation it produced (r ~ -0.7), are gone;
-``mismatch_vs_total_mass.py`` plots the before/after. The residual tail
-(worst ~8e-4) is high mass-ratio + high spin intrinsic modelling
+``mismatch_vs_total_mass.py`` plots the before/after. The on-grid
+per-mode mismatch is now flat in every extrinsic parameter; its tail
+(worst ~3e-3) is high mass-ratio + high spin intrinsic modelling
 difficulty, not extrinsic treatment.
 
 The frequency-domain comparison against an *independent* TEOBResumS call
 sits at ~5.6e-4 -- three orders of magnitude above the on-grid number
-for the *same* parameters. The gap is (i) the resampling of the fine
-``EOBRunPy(initial_frequency=15)`` FD output onto the ~2000-point model
-grid, (ii) that call's configuration differing from the
-``all_modes_amplitude_phase`` path used for the on-grid ground truth
-(which starts the (2,2) ODE near 1.8 Hz and doubles ``srate_interp``) --
-a difference that is almost entirely a per-mode coalescence-phase
-convention, ``exp(i m phi_c)``, marginalised here, leaving only a
-sub-1e-4 (4,4) phase-shape change (see ``teob_hom_start_frequency.py``),
-and (iii) genuine surrogate error, which is what makes the FD mismatch
-trend with mass ratio (r ~ 0.5). An earlier revision of this script
-optimised a single global phase on the summed strain rather than
-``exp(i m phi_c)`` per mode; that alone inflated the median to ~3e-3.
-Everything here is flat in inclination.
+for the *same* parameters. This is **not** the surrogate and **not**
+resampling: ``fd_grid_convergence.py`` shows both mismatches flat to
+three significant figures across a 16x refinement of the frequency
+spacing. It is a genuine (3,3)/(4,4) phase difference between
+TEOBResumS's per-mode ``hflm`` arrays -- which ``all_modes_amplitude_phase``,
+and hence the surrogate, is built on -- and the code's internally summed
+``h+/hx``. The (2,2) alone agrees between the two paths to 1.4e-8;
+adding (2,1)+(3,3) opens the gap to as much as 8.7e-3; it survives
+matching the two call configurations exactly and a band cut to 512 Hz,
+and it is a frequency-dependent 0.1--0.35 rad residual that ``exp(i m
+phi_c)`` cannot absorb. The mass-ratio trend (r ~ 0.5) is this effect,
+not modelling error. An earlier revision of this script optimised a
+single global phase rather than ``exp(i m phi_c)`` per mode, which alone
+inflated the median to ~3e-3. Everything here is flat in inclination.
 
 The aligning time shift is sub-sample (3e-6 s) with no parameter trend,
 so the merger-time convention matches. The aligning phase spreads over
