@@ -1,32 +1,34 @@
-r"""Minimal example: TEOBResumS higher-mode phases depend on the ODE
+r"""Check: how a TEOBResumS multi-mode FD waveform depends on the ODE
 integration start frequency, in a band far above every mode's onset.
 
-This is a self-contained reproducer for upstream (only ``EOBRun_module``).
-
-Two frequency-domain TEOBResumS calls are made, *identical except for*
-``initial_frequency``, and both are asked (via ``interp_freqs``/``freqs``)
-to return the waveform on the same explicit 40--1500 Hz grid -- so there
-is no interpolation on our side and every :math:`(\ell, m)` up to
-:math:`(4,4)` has full support across the whole comparison band.
+Self-contained (only ``EOBRun_module``). Two frequency-domain calls,
+*identical except for* ``initial_frequency``, both asked (via
+``interp_freqs``/``freqs``) to return the waveform on the same explicit
+40--1500 Hz grid -- no interpolation on our side, and every
+:math:`(\ell, m)` up to :math:`(4,4)` has full support across the band.
 
 Findings for a q = 1.6, M = 2.8 :math:`M_\odot` BNS:
 
 * the :math:`(2,2)`-only waveform is start-frequency independent to a
-  mismatch of ``~3e-8`` (i.e. numerical noise);
-* switching the higher modes on, the two waveforms differ by a mismatch
-  of ``~1e-3`` -- which, for the *same* physical source evaluated in the
-  *same* band, should be zero;
-* taken one mode at a time, the effect is a start-frequency-dependent
-  *per-mode phase offset*: each higher mode alone still matches itself
-  under a time-and-phase shift (``mm ~ 1e-7``), but the offset differs
-  between modes, so a single coalescence phase cannot absorb it once
-  they are summed. The :math:`(4,4)` additionally shows a small genuine
-  phase-shape change.
+  mismatch of ``~3e-8`` (numerical noise);
+* with the higher modes on, the *summed* waveform depends on the start
+  frequency at ``~1e-3`` if you only allow a single global phase and a
+  time shift -- but this is **not** a genuine inconsistency. A
+  coalescence-phase change rotates mode :math:`(\ell, m)` by
+  :math:`e^{i m \phi_c}`, and once that per-mode rotation is allowed the
+  mismatch drops back to ``~7e-8``. TEOBResumS simply assigns a
+  different coalescence-phase zero depending on ``initial_frequency``
+  (the extra :math:`(2,2)` phase accumulated down to the lower start),
+  which is a convention every parameter-estimation pipeline marginalises
+  away, not a bug.
+* the only genuine residual is a sub-:math:`10^{-4}` phase-shape change
+  in the :math:`(4,4)` alone (``mm ~ 2e-4`` per mode, 20 vs 12 Hz),
+  negligible once summed.
 
-The practical consequence is that a multi-mode TEOBResumS FD waveform is
-only self-consistent at a fixed ``initial_frequency``; ``mlgw_bns``
-sidesteps this by generating all of its training data from one low,
-fixed start frequency and by carrying an explicit per-mode phase
+Nothing here needs reporting upstream. The practical note for
+``mlgw_bns`` still stands: to keep a single consistent inter-mode phase
+convention across the training set it generates every waveform from one
+low, fixed start frequency and carries an explicit per-mode phase
 constant through the surrogate.
 
 Run with: python visualization/teob_hom_start_frequency.py
@@ -84,6 +86,34 @@ def mismatch(a: np.ndarray, b: np.ndarray) -> float:
     return 1.0 - np.max(np.abs(overlaps)) / norm
 
 
+def mismatch_coalescence(
+    ref_modes: dict[tuple[int, int], np.ndarray],
+    modes: dict[tuple[int, int], np.ndarray],
+) -> float:
+    r"""Mismatch of the summed waveform, maximised over a time shift *and*
+    a genuine coalescence-phase shift --- mode :math:`(\ell, m)` rotated by
+    :math:`e^{i m \phi_c}`, not a single global phase.
+
+    The start-frequency dependence is only a different coalescence-phase
+    convention, so this drives the mismatch from ``~1e-3`` back down to
+    the ``(2,2)``-only floor (``~7e-8``).
+    """
+    m_values = np.array([m for (_, m) in modes])
+    ref = sum(ref_modes.values())
+    stack = np.stack([modes[k] for k in modes])  # (n_modes, n_freq)
+    ref_norm_sq = np.abs(np.vdot(ref, ref))
+
+    time_shifts = np.linspace(-0.02, 0.02, 4001)
+    time_kernels = np.exp(2j * np.pi * np.outer(time_shifts, GRID))
+    best = 0.0
+    for phi_c in np.linspace(-np.pi, np.pi, 361):
+        trial = (stack * np.exp(1j * m_values[:, None] * phi_c)).sum(axis=0)
+        norm = np.sqrt(ref_norm_sq * np.abs(np.vdot(trial, trial)))
+        overlaps = np.abs(time_kernels @ (np.conj(ref) * trial)) / norm
+        best = max(best, np.max(overlaps))
+    return 1.0 - best
+
+
 def main() -> None:
     for label, modes in (
         ("(2,2) only", [(2, 2)]),
@@ -100,6 +130,15 @@ def main() -> None:
     for mode in ((2, 1), (3, 3), (4, 4)):
         a, b = teob(20.0, [mode]), teob(12.0, [mode])
         print(f"   {mode} :  {mismatch(a, b):.2e}")
+
+    all_modes = [(2, 2), (2, 1), (3, 3), (4, 4)]
+    ref_modes = {m: teob(20.0, [m]) for m in all_modes}
+    print("\nsummed HOM waveform, 20 Hz vs lower start, maximised over a time "
+          "shift and a *coalescence phase* (per-mode e^{i m phi_c}):")
+    for start in (18.0, 15.0, 12.0, 10.0):
+        trial_modes = {m: teob(start, [m]) for m in all_modes}
+        mm = mismatch_coalescence(ref_modes, trial_modes)
+        print(f"   initial_frequency = {start:4.1f} Hz :  {mm:.2e}")
 
 
 if __name__ == "__main__":

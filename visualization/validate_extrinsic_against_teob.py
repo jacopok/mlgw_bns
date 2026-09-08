@@ -73,18 +73,19 @@ difficulty, not extrinsic treatment.
 
 The frequency-domain comparison against an *independent* TEOBResumS call
 sits at ~5.6e-4 -- three orders of magnitude above the on-grid number
-for the *same* parameters. That gap is NOT the surrogate: it is
-TEOBResumS not being invariant to its own configuration -- its
-``all_modes_amplitude_phase`` path (the on-grid ground truth) starts the
-(2,2) ODE integration near 1.8 Hz where the plain
-``EOBRunPy(initial_frequency=15)`` used for this FD comparison starts at
-15 Hz, and the higher-mode phases depend on that at ~1e-3 (see
-``teob_hom_start_frequency.py`` for a minimal reproducer), plus the
-resampling of that FD call onto the model grid. An earlier revision of
-this script optimised a single global phase on the summed strain rather
-than ``exp(i m phi_c)`` per mode; that alone inflated the median to
-~3e-3. Both effects are flat in inclination. The FD mismatch now trends
-with mass ratio (r ~ 0.5), the intrinsic high-q modelling difficulty.
+for the *same* parameters. The gap is (i) the resampling of the fine
+``EOBRunPy(initial_frequency=15)`` FD output onto the ~2000-point model
+grid, (ii) that call's configuration differing from the
+``all_modes_amplitude_phase`` path used for the on-grid ground truth
+(which starts the (2,2) ODE near 1.8 Hz and doubles ``srate_interp``) --
+a difference that is almost entirely a per-mode coalescence-phase
+convention, ``exp(i m phi_c)``, marginalised here, leaving only a
+sub-1e-4 (4,4) phase-shape change (see ``teob_hom_start_frequency.py``),
+and (iii) genuine surrogate error, which is what makes the FD mismatch
+trend with mass ratio (r ~ 0.5). An earlier revision of this script
+optimised a single global phase on the summed strain rather than
+``exp(i m phi_c)`` per mode; that alone inflated the median to ~3e-3.
+Everything here is flat in inclination.
 
 The aligning time shift is sub-sample (3e-6 s) with no parameter trend,
 so the merger-time convention matches. The aligning phase spreads over
