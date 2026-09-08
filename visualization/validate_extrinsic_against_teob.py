@@ -87,23 +87,30 @@ Two real problems were found and fixed along the way:
   Fixed by shifting the PN segment to the band rather than the band to
   the PN (528c828); ``mismatch_vs_total_mass.py`` plots the before/after.
 
-* The "FD floor": for a long time the full-strain FD comparison sat at
-  ~4e-4 median and grew with mass ratio (r ~ 0.5, worst ~0.5), while the
-  on-grid per-mode check was at ~3e-7. This was **not** the surrogate. It
-  was the reference: a bare ``EOBRunPy(initial_frequency = 15)`` call
-  integrates the early inspiral from too high a frequency, and its
-  higher-mode phasing drifts from the well-conditioned
-  ``all_modes_amplitude_phase`` generator (which lowers the ODE start by
-  ``initial_frequency_scaling``, x0.5 for ``m_max = 4``) by an amount
-  that grows with mass ratio --- the "~1e-3 ODE-start sensitivity" of
-  TEOBResumS. ``probe_teob_config_gap.py`` isolates it with no surrogate
-  in the loop: the entire ~4e-4 gap is that one knob, dropping to ~3e-6
-  once the reference's ODE start is matched (the ``srate_interp_scaling``
-  x2 is irrelevant at these total masses). An earlier "band-edge HOM
-  support" explanation (that a 15 Hz start lacks the (3,3)/(4,4) below
-  ~30 Hz) was wrong: restricting to [40, 2048] Hz did not help, because
-  the drift spans the whole band. Fixed here by lowering the reference's
-  ODE start; the FD floor is now ~4e-7.
+* The "FD floor": for a long time the full-strain FD comparison over
+  [20, 2048] Hz sat at ~4e-4 median and grew with mass ratio, while the
+  on-grid per-mode check was at ~3e-7. Not the surrogate --- the
+  reference. ``initial_frequency`` in TEOBResumS is the *(2,2)* GW
+  frequency at the ODE start, and the :math:`(\ell, m)` multipole is
+  identically zero below :math:`(m/2) f_0`; a bare
+  ``EOBRunPy(initial_frequency = 15)`` call has the (3,3) only above
+  22.5 Hz and the (4,4) only above 30 Hz, so [20, 30] Hz of the
+  surrogate's strain (which has every mode down to 20 Hz) was compared
+  against a reference with no higher-mode support there.
+  ``probe_teob_config_gap.py --ladder`` removes the surrogate and sweeps
+  ``f0``: over [40, 2048] Hz the FD multi-mode waveform is
+  self-consistent to ~1e-9 median / ~1e-7 worst, *completely independent*
+  of ``f0`` from 3 to 18 Hz; over [20, 2048] Hz that same ~5e-9 floor
+  holds only for ``f0 <= 7`` Hz, climbing to ~2e-6 at ``f0 = 13`` and
+  ~8e-5 at ``f0 = 15`` as each mode's kinematic cutoff crosses the band
+  edge. So there is no phase drift and no imprecision: the ``b6ec1d1``
+  "band-edge HOM support" reading was right, and a later revision that
+  walked it back ("the drift spans the whole band") was wrong. Fixed by
+  lowering the reference's ODE start with
+  ``initial_frequency_scaling(MODES)`` (x0.5), exactly as
+  ``all_modes_amplitude_phase`` does; the FD [20, 2048] floor is then
+  ~3e-7, matching on-grid. (``srate_interp_scaling`` x2 is a no-op at
+  these total masses --- the (3,3)/(4,4) mergers sit above 2048 Hz.)
 
 Getting a clean number also required reconstructing the reference strain
 from the ``hflm`` multipoles rather than TEOBResumS' own pre-summed
@@ -180,13 +187,17 @@ def teob_independent_modes(params: ParametersWithExtrinsic, frequencies):
     The ODE start is lowered by :func:`initial_frequency_scaling` of the
     requested mode set (x0.5 for :math:`m_{\max} = 4`), exactly as
     :meth:`~mlgw_bns.higher_order_modes.TEOBResumSModeGenerator.all_modes_amplitude_phase`
-    does. This is *not* cosmetic: a bare ``initial_frequency = 15`` Hz call
-    integrates the early inspiral from too high a frequency and its
-    higher-mode phasing drifts from the well-conditioned generator by an
-    amount that grows with mass ratio (``probe_teob_config_gap.py``: the
-    whole ~4e-4 "FD floor" is this one knob, ~3e-6 once it is matched). It
-    stays an *independent* call --- a fresh EOB evaluation, not the trained
-    network.
+    does. This is *not* cosmetic: ``initial_frequency`` is the *(2,2)* GW
+    frequency at the ODE start, and the :math:`(\ell, m)` multipole is
+    identically zero below :math:`(m/2) f_0`, so a bare
+    ``initial_frequency = 15`` Hz call has no (3,3) below 22.5 Hz and no
+    (4,4) below 30 Hz --- the surrogate's [20, 30] Hz higher-mode content
+    then has nothing to compare against. ``probe_teob_config_gap.py
+    --ladder``: over [40, 2048] Hz the FD waveform is ``f0``-independent to
+    ~1e-9; the [20, 2048] "FD floor" (~4e-4, growing with mass ratio) is
+    entirely this band-edge cutoff and vanishes once the start is lowered.
+    It stays an *independent* call --- a fresh EOB evaluation, not the
+    trained network.
 
     Comparing *per mode* -- rather than against the code's summed
     ``h_+, h_\times`` -- keeps the sparse decimated grid from undersampling

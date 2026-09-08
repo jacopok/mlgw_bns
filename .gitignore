@@ -65,3 +65,5 @@ visualization/validate_extrinsic_against_teob.npz
 visualization/validate_extrinsic_against_teob.png
 visualization/mismatch_vs_total_mass.npz
 visualization/mismatch_vs_total_mass.png
+visualization/teob_self_consistency_*.npz
+visualization/teob_self_consistency_*.png

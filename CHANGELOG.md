@@ -91,34 +91,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     alone inflates the median to ~3e-3), the surrogate's full reconstructed
     strain agrees with an independent EOB call to ~3e-7 median over
     [20, 2048] Hz --- the same floor as the on-grid per-mode check, tail and
-    all. The long-standing "FD floor" (~4e-4 median, growing with mass
-    ratio) turned out to be the *reference*, not the surrogate: a bare
-    `EOBRunPy(initial_frequency=15)` call integrates the early inspiral from
-    too high a frequency and its higher-mode phasing drifts from the
-    `all_modes_amplitude_phase` generator, which lowers the ODE start by
-    `initial_frequency_scaling`. `probe_teob_config_gap.py` pins the whole gap
-    to that one knob with no surrogate in the loop; the script now applies the
-    same scaling to its reference. Reaching a clean number also needed the
-    reference strain reconstructed from the `hflm` multipoles (TEOBResumS' own
-    pre-summed output is undersampled at the inter-mode beat on a coarse grid)
-    and a dense frequency grid.
+    all. The long-standing "FD floor" (~4e-4 median over [20, 2048] Hz,
+    growing with mass ratio) turned out to be the *reference*, not the
+    surrogate: `initial_frequency` in TEOBResumS is the (2,2) GW frequency at
+    the ODE start, and the `(l, m)` multipole is identically zero below
+    `(m/2) f0`, so a bare `EOBRunPy(initial_frequency=15)` call has no (3,3)
+    below 22.5 Hz and no (4,4) below 30 Hz --- the surrogate's [20, 30] Hz
+    higher-mode content had nothing to compare against.
+    `probe_teob_config_gap.py --ladder` (no surrogate) shows the FD multi-mode
+    waveform is self-consistent to ~1e-9 over [40, 2048] Hz and *independent*
+    of the ODE start from 3 to 18 Hz; the [20, 2048] number is flat only for
+    `f0 <= 7` Hz. The script now lowers its reference's ODE start by
+    `initial_frequency_scaling`, exactly as `all_modes_amplitude_phase` does.
+    Reaching a clean number also needed the reference strain reconstructed
+    from the `hflm` multipoles (TEOBResumS' own pre-summed output is
+    undersampled at the inter-mode beat on a coarse grid) and a dense grid.
 - `visualization/fd_grid_convergence.py`, which reruns the surrogate-vs-TEOBResumS
     FD mismatch on a ladder of frequency grids (df 0.5 down to 0.03 Hz) to show
     it is flat under refinement --- the FD validation gap is not a quadrature or
     interpolation artefact of the decimated model grid.
-- `visualization/probe_teob_config_gap.py`, which mismatches the reference
-    constructions of `validate_extrinsic_against_teob.py` against each other ---
-    no surrogate --- as a function of mass ratio, pinning the "FD floor" to the
-    reference's TEOBResumS ODE start frequency (`initial_frequency_scaling`).
+- `visualization/probe_teob_config_gap.py`, which mismatches TEOBResumS
+    against itself --- no surrogate. `--ladder` (default) sweeps the ODE start
+    frequency and shows the FD multi-mode waveform is self-consistent to
+    ~1e-9 (median) / ~1e-7 (worst, high mass ratio) over [40, 2048] Hz and
+    independent of the start from 3 to 18 Hz; the [20, 2048] excess at higher
+    starts is the `(m/2) f0` kinematic mode cutoff. `--abc` runs the original
+    config probe (bare `f0=15` vs the library's `initial_frequency_scaling`).
 - `visualization/mismatch_vs_total_mass.py`, sweeping the multi-mode mismatch
     across the total-mass axis (with an optional `--baseline` overlay for a
     before/after figure), and `visualization/teob_hom_start_frequency.py`, a
     self-contained check of how a multi-mode TEOBResumS frequency-domain
     waveform depends on `initial_frequency`. Most of it (~2e-3 under a single
     global phase) is a coalescence-phase convention that `exp(i m phi_c)`
-    marginalisation removes (down to ~5e-6); TEOBResumS computes each multipole
-    independently and is self-consistent for HOM. The only residual is a fixed
-    ~1e-4 phase-shape offset in the `(4,4)` (the same at every start frequency).
+    marginalisation removes; TEOBResumS computes each multipole independently
+    and is self-consistent for HOM. The residual it reports over [20, 2048] Hz
+    is the low-frequency `(m/2) f0` mode cutoff (see
+    `probe_teob_config_gap.py --ladder`, which shows ~1e-9 self-consistency
+    over [40, 2048] Hz independent of the start frequency).
 
 ### Changed
 
