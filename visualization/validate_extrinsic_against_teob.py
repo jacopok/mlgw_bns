@@ -20,26 +20,35 @@ treat the extrinsic parameters the same way, the mismatch stays at the
 intrinsic-modelling floor and the time/phase shifts needed to align the
 two waveforms stay near zero and uncorrelated with any parameter.
 
-The comparison is between the full complex ``sum_lm S_lm = h_+ - i h_x``
-of the two codes (no detector projection --- the mismatch is invariant
-under it and carries both polarisations already). Every marginalisation
-here rotates mode ``m`` by ``exp(i m phi_c)``, the actual effect of a
-coalescence-phase change, using the surrogate's per-mode decomposition.
+The comparison is between the full complex strain ``sum_lm S_lm``, of the
+surrogate and of an independent TEOBResumS call (no detector projection
+--- the mismatch is invariant under it). Both are optimised over a time
+shift and a coalescence phase, the latter rotating mode ``m`` by
+``exp(i m phi_c)`` (its actual effect), which needs the per-mode split
+even though the metric is on the summed strain.
+
+The independent TEOBResumS strain is reconstructed by projecting and
+summing each ``hflm`` multipole (``arg_out="yes"``,
+:math:`{}_{-2}Y_{\ell m}(\iota, 0)`) rather than taking the code's own
+pre-summed ``h_+, h_\times``: on a coarse grid the summed output, which
+oscillates at the inter-mode beat, is undersampled by TEOBResumS'
+internal interpolation, while each multipole's amplitude and phase are
+smooth. The two agree to ~1e-11 on a dense grid. The independent call
+also lowers the ODE start by ``initial_frequency_scaling(MODES)`` (x0.5
+here), matching ``all_modes_amplitude_phase`` --- see
+``teob_independent_modes`` and the note below.
 
 Three mismatches per draw:
 
-* ``phase`` --- surrogate vs the independent TEOBResumS FD call,
-  optimised over the coalescence phase only (no time shift);
-* ``time_phase`` --- the same, over both a time shift and the
-  coalescence phase (the standard detection-pipeline mismatch);
+* ``time_phase`` --- full strain over the whole band [20, 2048] Hz;
+* ``inband`` --- full strain over [40, 2048] Hz (kept as a cross-check;
+  now that the reference's ODE start is lowered, every mode has support
+  across the full band and the two agree);
 * ``on_grid`` --- surrogate per-mode contributions vs the TEOBResumS
-  per-mode contributions on the model's own frequency grid (no
-  frequency-domain TEOBResumS call, no resampling), through
+  per-mode contributions on the model's own frequency grid, through
   :meth:`~mlgw_bns.model_validation.ValidateModel.full_waveform_mismatch`.
-  This has a ~1e-7 floor and is the sensitive check that the
-  :math:`Y_{\ell m}(\iota)` projection and total-mass scaling stay
-  internally consistent across the parameter space; ``time_phase`` is
-  the check that they agree with an *independent* TEOBResumS call.
+  This has a ~1e-7 floor and checks that the :math:`Y_{\ell m}(\iota)`
+  projection and total-mass scaling stay internally consistent.
 
 A ``time_phase`` optimum that sits at a systematically non-zero time or
 phase, or any mismatch that trends with total mass or inclination, is
@@ -49,58 +58,67 @@ inclination and total mass.
 
 Findings (300 waveforms, seed 4, all parameters drawn over the
 ``default_hom`` training ranges plus total mass 2-4 Msun, isotropic
-inclination, a random detector projection; after commits 528c828 +
-6fa0282 and the per-mode ``exp(i m phi_c)`` marginalisation here):
+inclination; full-strain FD comparison on a dense 0.5 Hz grid, per-mode
+``exp(i m phi_c)`` marginalisation):
 
-    on-grid per-mode mismatch : median 3.0e-7, 90th pct 1.3e-5
-    FD mismatch (time + phase) : median ~4e-4  (band-edge HOM support of
-                                 the 15 Hz reference; ~3e-6 where both
-                                 cover the band -- see the note below)
-    aligning time shift        : |median| 2e-6 s, no parameter trend
-    aligning phase shift       : spreads over (-pi, pi] (phase-origin conv.)
+    on-grid per-mode mismatch   : median 3.0e-7, 90th pct 1.3e-5, worst 2.9e-3
+    FD full strain [20,2048] Hz : median 3.0e-7, 90th pct 1.1e-5, worst 3.1e-3
+    FD full strain [40,2048] Hz : median 3.8e-7, 90th pct 1.5e-5, worst 3.4e-3
+    aligning time shift         : |median| 3.6e-5 s (sub-sample)
+    aligning phase shift        : spreads over (-pi, pi] (phase-origin conv.)
 
-The extrinsic treatment agrees with TEOBResumS. The on-grid per-mode
-mismatch --- which exercises the Y_lm(iota) projection, the m<0
-reconstruction and the total-mass/distance scaling, with a ~1e-7 floor
---- is flat in every extrinsic parameter (|correlation| < 0.3). Holding
-each varied parameter fixed in turn (see the sweep below) turned up one
-real bug, now fixed (528c828): for ``total_mass`` below the dataset
-reference (2.8 Msun) the post-Newtonian low-frequency extension fired
-and overwrote each mode's inter-mode phase constant, a ~50x median
-degradation with a step exactly at 2.8. That step, and the strong
-``total_mass`` correlation it produced (r ~ -0.7), are gone;
-``mismatch_vs_total_mass.py`` plots the before/after. The on-grid
-per-mode mismatch is now flat in every extrinsic parameter; its tail
-(worst ~3e-3) is high mass-ratio + high spin intrinsic modelling
-difficulty, not extrinsic treatment.
+The extrinsic treatment agrees with TEOBResumS. All three mismatch
+metrics sit at the same floor, distribution for distribution: the full
+reconstructed strain compared against a fresh, independent EOB call
+matches the surrogate's own per-mode-on-its-grid consistency check ---
+same median, same tail, same (weak) parameter correlations (each tracks
+inclination at r ~ 0.31 on log10, identically, from the Y_lm projection
+sampling; |r| < 0.22 for mass ratio and total mass). The floor and its
+~3e-3 tail (shared by the on-grid check) are intrinsic modelling
+difficulty at high mass ratio + high spin, the same the fixed-extrinsic
+scripts see; not extrinsic handling.
 
-The frequency-domain comparison against an *independent* TEOBResumS call
-sits near ~4e-4 -- three orders of magnitude above the on-grid number
-for the *same* parameters. This is **not** the surrogate and **not**
-resampling (``fd_grid_convergence.py``: flat under a 16x grid
-refinement). Restricted to a band where every mode has full support the
-surrogate agrees with an independent ``EOBRunPy(initial_frequency=15)``
-hflm reconstruction to ~3e-6. The wide-band number is band-edge support:
-a 15 Hz start only produces the (3,3) above 22.5 Hz and the (4,4) above
-30 Hz, whereas the surrogate trains from ``all_modes_amplitude_phase``
-(ODE from ~1.8 Hz) and has the higher modes down to 20 Hz -- so the
-[20, ~30] Hz slice compares real surrogate content against a missing (or
-barely-supported) reference. It grows with mass ratio because the higher
-modes carry more relative power there. Plus imperfect ``(t_c, phi_c)``
-marginalisation against the ``arg_out="no"`` summed strain (which
-carries a per-mode ``exp(i m pi/2)`` azimuth and a large merger-time
-offset). An earlier revision optimised a single global phase rather than
-``exp(i m phi_c)`` per mode, which alone inflated the median to ~3e-3.
-The trustworthy surrogate-accuracy number is the on-grid per-mode one
-(~3e-7, flat in every extrinsic parameter).
+Two real problems were found and fixed along the way:
 
-The aligning time shift is sub-sample (3e-6 s) with no parameter trend,
-so the merger-time convention matches. The aligning phase spreads over
-(-pi, pi] because mlgw_bns anchors the phase at the first grid node
-while TEOBResumS anchors at merger, and the (2,2) phase accumulated
-between the two wraps many times over; this is a phase-origin
-convention, marginalised away in any real use (and in the on-grid
-per-mode number), not an inconsistency.
+* ``total_mass`` below the dataset reference (2.8 Msun) fired the
+  post-Newtonian low-frequency extension, which overwrote each mode's
+  inter-mode phase constant --- a ~50x median degradation with a step
+  exactly at 2.8, and a strong ``total_mass`` correlation (r ~ -0.7).
+  Fixed by shifting the PN segment to the band rather than the band to
+  the PN (528c828); ``mismatch_vs_total_mass.py`` plots the before/after.
+
+* The "FD floor": for a long time the full-strain FD comparison sat at
+  ~4e-4 median and grew with mass ratio (r ~ 0.5, worst ~0.5), while the
+  on-grid per-mode check was at ~3e-7. This was **not** the surrogate. It
+  was the reference: a bare ``EOBRunPy(initial_frequency = 15)`` call
+  integrates the early inspiral from too high a frequency, and its
+  higher-mode phasing drifts from the well-conditioned
+  ``all_modes_amplitude_phase`` generator (which lowers the ODE start by
+  ``initial_frequency_scaling``, x0.5 for ``m_max = 4``) by an amount
+  that grows with mass ratio --- the "~1e-3 ODE-start sensitivity" of
+  TEOBResumS. ``probe_teob_config_gap.py`` isolates it with no surrogate
+  in the loop: the entire ~4e-4 gap is that one knob, dropping to ~3e-6
+  once the reference's ODE start is matched (the ``srate_interp_scaling``
+  x2 is irrelevant at these total masses). An earlier "band-edge HOM
+  support" explanation (that a 15 Hz start lacks the (3,3)/(4,4) below
+  ~30 Hz) was wrong: restricting to [40, 2048] Hz did not help, because
+  the drift spans the whole band. Fixed here by lowering the reference's
+  ODE start; the FD floor is now ~4e-7.
+
+Getting a clean number also required reconstructing the reference strain
+from the ``hflm`` multipoles rather than TEOBResumS' own pre-summed
+``h_+, h_\times`` (undersampled at the inter-mode beat on a coarse grid),
+a dense frequency grid, and a per-mode ``exp(i m phi_c)`` marginalisation
+(a single global phase alone inflates the median to ~3e-3). The FD floor
+is not resampling (``fd_grid_convergence.py``).
+
+The aligning time shift is sub-sample (~3.6e-5 s) --- it carries a mild
+``total_mass`` trend (r ~ 0.37) but stays ~7x below one sample at
+4096 Hz. The
+aligning phase spreads over (-pi, pi] because mlgw_bns anchors the phase
+at the first grid node while TEOBResumS anchors at merger, and the (2,2)
+phase accumulated between the two wraps many times over; a phase-origin
+convention, marginalised away in any real use, not an inconsistency.
 
 Run with: python visualization/validate_extrinsic_against_teob.py
 """
@@ -114,7 +132,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import minimize
 
-from mlgw_bns.higher_order_modes import Mode, mode_to_k
+from mlgw_bns.higher_order_modes import (
+    Mode,
+    initial_frequency_scaling,
+    mode_to_k,
+)
 from mlgw_bns.model import Model
 from mlgw_bns.model_validation import ValidateModel
 from mlgw_bns.mode_model import ParametersWithExtrinsic
@@ -145,51 +167,66 @@ FIGURE_PATH = "visualization/validate_extrinsic_against_teob.png"
 DATA_PATH = "visualization/validate_extrinsic_against_teob.npz"
 
 
-def teob_polarizations(params: ParametersWithExtrinsic, frequencies):
-    r"""TEOBResumS :math:`h_+, h_\times` for one aligned-spin source.
+#: One solar mass in seconds, for the geometric -> SI merger time.
+_MSUN_SECONDS = 4.925490947e-6
 
-    Returned *directly* on the sub-grid of ``frequencies`` inside the band
-    (via ``interp_freqs``/``freqs``, so TEOBResumS does its own internal
-    interpolation and there is no resampling on our side), in the
-    ``mlgw_bns`` Fourier convention, with the boolean mask of that sub-grid.
+
+def teob_independent_modes(params: ParametersWithExtrinsic, frequencies):
+    r"""Per-mode observer-frame contributions :math:`h_{\ell m}(f)\,
+    {}_{-2}Y_{\ell m}(\iota, 0)` from an *independent* TEOBResumS call
+    (``arg_out="yes"``), returned directly on the in-band sub-grid of
+    ``frequencies`` (no resampling on our side).
+
+    The ODE start is lowered by :func:`initial_frequency_scaling` of the
+    requested mode set (x0.5 for :math:`m_{\max} = 4`), exactly as
+    :meth:`~mlgw_bns.higher_order_modes.TEOBResumSModeGenerator.all_modes_amplitude_phase`
+    does. This is *not* cosmetic: a bare ``initial_frequency = 15`` Hz call
+    integrates the early inspiral from too high a frequency and its
+    higher-mode phasing drifts from the well-conditioned generator by an
+    amount that grows with mass ratio (``probe_teob_config_gap.py``: the
+    whole ~4e-4 "FD floor" is this one knob, ~3e-6 once it is matched). It
+    stays an *independent* call --- a fresh EOB evaluation, not the trained
+    network.
+
+    Comparing *per mode* -- rather than against the code's summed
+    ``h_+, h_\times`` -- keeps the sparse decimated grid from undersampling
+    the inter-mode beat: each mode's amplitude and phase are smooth, their
+    sum on a coarse grid is not. Each ``hflm`` phase is re-referenced to
+    the merger (``- 2 pi t_c f``). The remaining per-mode offset relative
+    to ``mlgw_bns`` (which builds the modes at azimuth 0) is a constant
+    ``exp(-i m pi/2)`` -- the ``pi/2 - coalescence_angle`` convention of
+    TEOBResumS' ``compute_hpc`` -- absorbed by the coalescence-phase
+    optimisation.
     """
     from EOBRun_module import EOBRunPy
+    from mlgw_bns.special_func import spinsphericalharm
 
     inside = (frequencies >= BAND_LO) & (frequencies <= BAND_HI)
     target = frequencies[inside]
 
     par = dict(
-        q=params.mass_ratio,
-        LambdaAl2=params.lambda_1,
-        LambdaBl2=params.lambda_2,
-        chi1=params.chi_1,
-        chi2=params.chi_2,
-        M=params.total_mass,
-        distance=params.distance_mpc,
-        inclination=params.inclination,
-        initial_frequency=F0_TEOB,
-        srate_interp=SRATE_HZ,
-        use_geometric_units="no",
-        domain=1,
-        interp_freqs="yes",
-        freqs=list(target),
-        # mlgw_bns adds `reference_phase` to every mode's phase; TEOBResumS
-        # rotates the (l, m) mode by exp(i m * coalescence_angle), and for
-        # the phase convention of compute_hpc that azimuth is
-        # pi/2 - coalescence_angle. Setting reference_phase = 0 on the
-        # surrogate side and the default coalescence_angle here leaves only
-        # a per-mode exp(i m pi/2), which the coalescence-phase optimisation
-        # absorbs.
-        coalescence_angle=0.0,
-        output_hpc="no",
-        arg_out="no",
-        use_spins=1,
+        q=params.mass_ratio, LambdaAl2=params.lambda_1, LambdaBl2=params.lambda_2,
+        chi1=params.chi_1, chi2=params.chi_2, M=params.total_mass,
+        distance=params.distance_mpc, inclination=params.inclination,
+        initial_frequency=F0_TEOB * initial_frequency_scaling(MODES),
+        srate_interp=SRATE_HZ, use_geometric_units="no",
+        domain=1, interp_freqs="yes", freqs=list(target), coalescence_angle=0.0,
+        output_hpc="no", arg_out="yes", use_spins=1,
         use_mode_lm=sorted({mode_to_k(mode) for mode in MODES}),
     )
-    _f, real_hp, imag_hp, real_hc, imag_hc = EOBRunPy(par)
-    hp = np.conj(np.asarray(real_hp) + 1j * np.asarray(imag_hp))
-    hc = np.conj(np.asarray(real_hc) + 1j * np.asarray(imag_hc))
-    return hp, hc, inside
+    f_spa, *_, hflm, htlm, dyn = EOBRunPy(par)
+    f_spa = np.asarray(f_spa)
+    tc = float(dyn["tc"]) if "tc" in dyn else float(np.asarray(htlm["t"])[-1])
+    tc_s = tc * params.total_mass * _MSUN_SECONDS
+
+    modes: dict[tuple[int, int], np.ndarray] = {}
+    for mode in MODES:
+        amp = np.asarray(hflm[str(mode_to_k(mode))][0])
+        phase = np.asarray(hflm[str(mode_to_k(mode))][1]) - 2 * np.pi * tc_s * f_spa
+        yr, yi = spinsphericalharm(-2, mode.l, mode.m, 0.0, params.inclination)
+        # conjugate to match mlgw_bns' exp(-i phase) mode convention
+        modes[(mode.l, mode.m)] = amp * np.exp(-1j * phase) * (yr + 1j * yi)
+    return modes, inside
 
 
 def optimised_mismatches(reference, mode_arrays, m_values, frequencies, psd,
@@ -266,11 +303,15 @@ def optimised_mismatches(reference, mode_arrays, m_values, frequencies, psd,
 def validate(model: Model, n_waveforms: int) -> dict:
     validator = ValidateModel(model.mode_models[Mode(2, 2)])
     frequencies = validator.frequencies
+    #: The FD strain comparison is done on a dense uniform grid, not the
+    #: model's decimated one --- the summed strain oscillates at the
+    #: inter-mode beat and needs finer sampling than any single mode.
+    fd_frequencies = np.arange(BAND_LO, BAND_HI, 0.5)
     rng = np.random.default_rng(SEED)
 
     keys = (
-        "mismatch_phase", "mismatch_time_phase", "mismatch_on_grid",
-        "time_shift", "phase_shift",
+        "mismatch_phase", "mismatch_time_phase", "mismatch_inband",
+        "mismatch_on_grid", "time_shift", "phase_shift",
         "inclination", "total_mass", "mass_ratio", "chi_eff", "distance_mpc",
     )
     records: dict = {key: [] for key in keys}
@@ -293,33 +334,49 @@ def validate(model: Model, n_waveforms: int) -> dict:
             reference_phase=0.0,
         )
         try:
-            hp_t, hc_t, inside = teob_polarizations(params, frequencies)
+            teob_modes_ind, inside = teob_independent_modes(params, fd_frequencies)
         except Exception as error:  # noqa: BLE001
             logging.warning("TEOBResumS failed for draw %d: %s", index, error)
             continue
         if inside.sum() < 16:
             continue
 
-        fb = frequencies[inside]
+        fb = fd_frequencies[inside]
         psd = validator.psd_at_frequencies(fb)
-        teob_strain = (hp_t - 1j * hc_t)  # sum_lm S_lm, on the TEOB sub-grid
+        teob_strain = sum(teob_modes_ind.values())  # full strain, per-mode sourced
 
-        surrogate_modes = model.predict_modes_dict(frequencies, params)
-        mode_arrays = [surrogate_modes[(mode.l, mode.m)][inside] for mode in MODES]
+        surrogate_fd = model.predict_modes_dict(fd_frequencies, params)
+        mode_arrays = [surrogate_fd[(mode.l, mode.m)][inside] for mode in MODES]
         m_values = [mode.m for mode in MODES]
         mm_p, mm_tp, t_shift, phase_shift = optimised_mismatches(
             teob_strain, mode_arrays, m_values, fb, psd
         )
 
+        # Cross-check on [40, 2048] Hz. With the reference's ODE start
+        # lowered by initial_frequency_scaling every mode now has support
+        # across the whole band, so this should track ``mm_tp``; kept as a
+        # guard against a band-edge regression.
+        band = fb >= 40.0
+        if band.sum() >= 16:
+            _, mm_inband, _, _ = optimised_mismatches(
+                teob_strain[band], [a[band] for a in mode_arrays],
+                m_values, fb[band], psd[band],
+            )
+        else:
+            mm_inband = np.nan
+
+        surrogate_modes = model.predict_modes_dict(frequencies, params)
+        og = (frequencies >= BAND_LO) & (frequencies <= BAND_HI)
         teob_modes = model.get_teob_modes_dict(frequencies, params)
         mm_grid = validator.full_waveform_mismatch(
-            {k: v[inside] for k, v in teob_modes.items()},
-            {k: v[inside] for k, v in surrogate_modes.items()},
-            frequencies=fb,
+            {k: v[og] for k, v in teob_modes.items()},
+            {k: v[og] for k, v in surrogate_modes.items()},
+            frequencies=frequencies[og],
         )
 
         records["mismatch_phase"].append(mm_p)
         records["mismatch_time_phase"].append(mm_tp)
+        records["mismatch_inband"].append(mm_inband)
         records["mismatch_on_grid"].append(mm_grid)
         records["time_shift"].append(t_shift)
         records["phase_shift"].append(phase_shift)
@@ -353,14 +410,15 @@ def plot(records: dict) -> None:
         v = values[np.isfinite(values) & (values > 0)]
         return np.log10(v)
 
-    allv = np.concatenate([logclean(mm_p), logclean(mm_tp), logclean(mm_grid)])
+    mm_ib = records["mismatch_inband"]
+    allv = np.concatenate([logclean(mm_ib), logclean(mm_tp), logclean(mm_grid)])
     bins = np.linspace(np.floor(allv.min()), np.ceil(allv.max()), 44)
     axes[0, 0].hist(logclean(mm_grid), bins=bins, alpha=0.6, color="tab:green",
                     label=f"on-grid per-mode (median {np.nanmedian(mm_grid):.1e})")
-    axes[0, 0].hist(logclean(mm_p), bins=bins, alpha=0.6, color="tab:orange",
-                    label=f"FD, phase only (median {np.nanmedian(mm_p):.1e})")
     axes[0, 0].hist(logclean(mm_tp), bins=bins, alpha=0.6, color="tab:blue",
-                    label=f"FD, time + phase (median {np.nanmedian(mm_tp):.1e})")
+                    label=f"FD [20,2048], t+phase (median {np.nanmedian(mm_tp):.1e})")
+    axes[0, 0].hist(logclean(mm_ib), bins=bins, alpha=0.6, color="tab:red",
+                    label=f"FD [40,2048], t+phase (median {np.nanmedian(mm_ib):.1e})")
     axes[0, 0].set_xlabel(r"$\log_{10}$ mismatch vs TEOBResumS")
     axes[0, 0].set_ylabel("count")
     axes[0, 0].legend()
@@ -387,7 +445,9 @@ def plot(records: dict) -> None:
         (axes[1, 2], "mass_ratio", "mass ratio $q$"),
     ):
         ax.scatter(records[key][finite], mm_tp[finite], s=14, alpha=0.6,
-                   color="tab:blue", label="FD, time + phase")
+                   color="tab:blue", label="FD [20,2048]")
+        ax.scatter(records[key][finite], mm_ib[finite], s=14, alpha=0.6,
+                   color="tab:red", label="FD [40,2048]")
         ax.scatter(records[key][finite], mm_grid[finite], s=14, alpha=0.6,
                    color="tab:green", label="on-grid per-mode")
         ax.set_yscale("log")
@@ -421,8 +481,8 @@ def main() -> None:
 
     print()
     for label, key in (
-        ("FD mismatch (phase only)", "mismatch_phase"),
-        ("FD mismatch (time+phase)", "mismatch_time_phase"),
+        ("FD [20,2048] (time+phase)", "mismatch_time_phase"),
+        ("FD [40,2048] (time+phase)", "mismatch_inband"),
         ("on-grid per-mode mismatch", "mismatch_on_grid"),
     ):
         v = records[key]
@@ -436,7 +496,8 @@ def main() -> None:
     # a treatment mismatch shows up as an aligning shift, or a mismatch,
     # that trends with an extrinsic parameter -- a non-zero correlation
     finite = np.isfinite(records["mismatch_time_phase"])
-    for key in ("time_shift", "phase_shift", "mismatch_time_phase", "mismatch_on_grid"):
+    for key in ("time_shift", "phase_shift", "mismatch_time_phase",
+                "mismatch_inband", "mismatch_on_grid"):
         values = records[key][finite]
         if key.startswith("mismatch"):
             values = np.log10(np.clip(values, 1e-12, None))
