@@ -1374,14 +1374,17 @@ class ModeModel:
                 low_freqs,
             )
 
-            # Glue the model-band phase onto the end of the low-frequency PN
-            # segment by matching the value at the connection frequency. The
-            # explicit `- resampled_phi[0]` makes this correct whether the PN
-            # phase is anchored at f0 or carries the absolute stationary-phase
-            # backbone (in which case a bare `+ low_f_phi[-1]` would double it).
+            # Glue the PN segment onto the *bottom* of the model band, shifting
+            # the PN piece to match the band at the connection frequency --- not
+            # the band to match the PN, which would overwrite the band's
+            # per-mode phase constant (`_predicted_mode_phase0`, carrying the
+            # inter-mode alignment) with the PN one and mis-phase the HOM modes
+            # relative to each other for every `total_mass` below the dataset
+            # reference. `- low_f_phi[-1]` zeroes the PN phase at the connection
+            # first, so this is correct for an absolute-backbone PN phase too.
             resampled_phi = np.concatenate((
-                low_f_phi[:-1],
-                resampled_phi[1:] - resampled_phi[0] + low_f_phi[-1]
+                low_f_phi[:-1] - low_f_phi[-1] + resampled_phi[0],
+                resampled_phi[1:]
             ))
 
         # Anchor the phase to zero at the first node so that `reference_phase`
@@ -1543,10 +1546,17 @@ class ModeModel:
             low_amp[mask] += smoothing_func(zero_to_one) * amp_diff
 
             resampled_amp = np.concatenate((low_amp[:-1], resampled_amp[1:]))
-            # See the note in `predict_amplitude_phase`: match at the connection
-            # frequency so this is correct for an absolute PN phase too.
+            # Glue the PN segment onto the *bottom* of the model band, shifting
+            # the PN piece to match the band at the connection frequency --- not
+            # the other way round. Shifting the band would overwrite its
+            # per-mode phase constant (`_predicted_mode_phase0`, which carries
+            # the inter-mode alignment) with the PN one, mis-phasing the HOM
+            # modes relative to each other for every `total_mass` below the
+            # dataset reference (the only regime in which `extend_with_pn` fires).
+            # `- low_phi[-1]` zeroes the PN phase at the connection first, so
+            # this is correct for an absolute-backbone PN phase too.
             resampled_phi = np.concatenate(
-                (low_phi[:-1], resampled_phi[1:] - resampled_phi[0] + low_phi[-1])
+                (low_phi[:-1] - low_phi[-1] + resampled_phi[0], resampled_phi[1:])
             )
 
         # Anchor to zero at the first node for non-HOM models so that

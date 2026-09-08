@@ -119,6 +119,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The post-Newtonian low-frequency extension in
+    `ModeModel.predict_amplitude_phase{,_optimized}` glued the model band onto
+    the PN segment by shifting the *band* to match the PN phase at the
+    connection, which overwrote each mode's per-mode phase constant
+    (`_predicted_mode_phase0`, carrying the inter-mode alignment) with the PN
+    one. For a higher-order-mode waveform this mis-phased the modes relative to
+    each other by a constant that is not of the form `m * phi_c`, so the
+    coalescence-phase-marginalised full-waveform mismatch could not remove it:
+    a ~1000x degradation (`7e-8` -> `1e-4`) for every `total_mass` below the
+    dataset reference (2.8 Msun), the only regime in which the extension fires.
+    The `(2,2)` mode and `total_mass >= 2.8` were unaffected. The fix shifts the
+    PN *segment* to match the band instead, leaving the band's phase --- and its
+    per-mode constant --- untouched. Found by holding each extrinsic parameter
+    fixed in turn while validating against TEOBResumS
+    (`visualization/validate_extrinsic_against_teob.py`).
 - `Model.predict` did not rescale the mode time shifts, which are stored in
     units of the reference total mass of the dataset, to the total mass being
     requested, while `Model.predict_modes_dict` did: the two therefore
