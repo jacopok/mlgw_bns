@@ -90,7 +90,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     per-mode on-grid mismatch is ~3e-7 and flat in every extrinsic parameter.
     The coalescence-phase marginalisation rotates each mode by `exp(i m phi_c)`
     (an earlier revision optimised a single global phase, inflating the
-    independent-TEOBResumS FD mismatch median from ~5.6e-4 to ~3e-3).
+    independent-TEOBResumS FD mismatch median from ~5.6e-4 to ~3e-3). That
+    residual ~5.6e-4 is neither the surrogate nor resampling (see
+    `fd_grid_convergence.py`): it is a frequency-dependent 0.1--0.35 rad phase
+    difference in the `(3,3)`/`(4,4)` modes between TEOBResumS's per-mode `hflm`
+    arrays and its internally summed `h_+, h_\times`. The `(2,2)` agrees between
+    the two to 1e-8.
+- `visualization/fd_grid_convergence.py`, which reruns the surrogate-vs-TEOBResumS
+    FD mismatch on a ladder of frequency grids (df 0.5 down to 0.03 Hz) to show
+    it is flat under refinement --- the FD validation gap is not a quadrature or
+    interpolation artefact of the decimated model grid.
 - `visualization/mismatch_vs_total_mass.py`, sweeping the multi-mode mismatch
     across the total-mass axis (with an optional `--baseline` overlay for a
     before/after figure), and `visualization/teob_hom_start_frequency.py`, a
