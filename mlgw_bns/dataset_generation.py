@@ -1175,7 +1175,13 @@ class Dataset:
 
         return self._frequencies()
 
-    @lru_cache(maxsize=1)
+    # `maxsize=None`, not 1: a multi-mode `Model` holds one `Dataset` per
+    # mode, the cache is keyed on `self`, and every mode's dataset shares
+    # the same ~519k-point grid. `maxsize=1` made the modes evict each
+    # other, so `predict` reconverted the grid to natural units once per
+    # mode on every call. The number of live `Dataset` objects is small
+    # and they outlive any single prediction.
+    @lru_cache(maxsize=None)
     def _frequencies(self):
         if self.waveform_generator.frequencies is not None:
             return self.waveform_generator.frequencies
@@ -1189,7 +1195,7 @@ class Dataset:
         """
         return self._frequencies_hz()
 
-    @lru_cache(maxsize=1)
+    @lru_cache(maxsize=None)  # keyed on `self`; see `_frequencies` above
     def _frequencies_hz(self):
 
         if self.waveform_generator.frequencies is not None:

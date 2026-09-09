@@ -141,18 +141,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `Model.predict` is roughly a third faster at the fixed (grid-size
-    independent) cost, which dominates for the frequency grids used in
-    parameter estimation. Two changes, both bit-for-bit identical in output:
-    the shared per-mode reference-phase predictor
-    (`ModeModel._predicted_mode_phase0`) was being evaluated once per mode
-    even though one call returns every mode's phase --- it is now cached and
-    evaluated once per waveform; and `ModeModel.predict_amplitude_phase`
-    / `predict_amplitude_phase_optimized` now run their scikit-learn
-    `predict` calls under `assume_finite` / `skip_parameter_validation`,
-    since the input is a single already-clean parameter row and the default
-    per-call validation cost more than the regression it guards. The
-    scikit-learn config change is scoped to the call.
+- `Model.predict` is about 2.5x faster at the fixed (grid-size independent)
+    cost, which dominates for the frequency grids used in parameter
+    estimation (~20 ms down to ~8 ms for the shipped four-mode model). Four
+    changes, all bit-for-bit identical in output:
+    - the shared per-mode reference-phase predictor
+        (`ModeModel._predicted_mode_phase0`) was evaluated once per mode even
+        though one call returns every mode's phase --- it is now cached on
+        the shared predictor and evaluated once per waveform;
+    - `ModeModel.predict_amplitude_phase{,_optimized}` run their
+        scikit-learn `predict` calls under `assume_finite` /
+        `skip_parameter_validation` (scoped to the call), since the input is
+        a single already-clean parameter row and the default per-call
+        validation cost more than the regression it guards;
+    - `KernelRidgeNetwork.predict` (the parameters-to-coefficients map, run
+        once per mode) evaluates the fitted RBF kernel and the two
+        standardizations directly instead of through
+        `sklearn.kernel_ridge.KernelRidge.predict`, which re-validates the
+        whole training matrix on every call; the floating-point operation
+        order is matched to scikit-learn's so the result is unchanged;
+    - `Dataset._frequencies` / `_frequencies_hz` are cached with
+        `maxsize=None` rather than `maxsize=1`: a multi-mode `Model` holds
+        one `Dataset` per mode and they were evicting each other, so the
+        ~519k-point grid was reconverted to natural units once per mode on
+        every call.
 - **Breaking**: `Model` is now the multi-mode surrogate, holding one `ModeModel`
     per spherical-harmonic mode. What used to be called `Model` --- the single-mode
     workhorse --- is now `ModeModel`, and lives in `mlgw_bns.mode_model`.
