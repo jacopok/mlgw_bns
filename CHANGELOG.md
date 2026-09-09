@@ -110,6 +110,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     FD mismatch on a ladder of frequency grids (df 0.5 down to 0.03 Hz) to show
     it is flat under refinement --- the FD validation gap is not a quadrature or
     interpolation artefact of the decimated model grid.
+- `visualization/validate_low_frequency_pn.py`, which exercises the per-mode
+    TaylorF2 low-frequency extension (the splice below
+    `effective_initial_frequency_hz` ~ 3.57 Hz, untouched by the 20 Hz-start
+    validation scripts) by requesting from 2 Hz and comparing per mode against
+    an independent low-start `EOBRunPy` call. The extension matches EOB to
+    ~1.7e-7 mismatch in the pure-PN band and to ~0.006 rad ((2,2)) .. 0.04 rad
+    ((4,4)) per-mode phase over [2, 20] Hz, joins the model band without a
+    kink, and is self-consistent with pure TaylorF2 below the connection to
+    ~1e-9. `EOBRunPy` is kept memory-safe (~1 GB peak) with a bounded
+    `interp_freqs` grid.
 - `visualization/probe_teob_config_gap.py`, which mismatches TEOBResumS
     against itself --- no surrogate. `--ladder` (default) sweeps the ODE start
     frequency and shows the FD multi-mode waveform is self-consistent to
