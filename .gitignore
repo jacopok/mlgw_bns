@@ -67,3 +67,5 @@ visualization/mismatch_vs_total_mass.npz
 visualization/mismatch_vs_total_mass.png
 visualization/teob_self_consistency_*.npz
 visualization/teob_self_consistency_*.png
+visualization/validate_low_frequency_pn.npz
+visualization/validate_low_frequency_pn.png
