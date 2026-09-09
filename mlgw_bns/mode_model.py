@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
@@ -10,11 +11,33 @@ import time
 import h5py
 import joblib  # type: ignore
 import numpy as np
+import sklearn
 from numpy.ma import indices
 import yaml
 from dacite import from_dict
 from numba import njit  # type: ignore
 from scipy.interpolate import interp1d
+
+
+def _with_fast_sklearn_config(func):
+    """Run ``func`` with scikit-learn's per-call input validation disabled.
+
+    Every ``predict`` here feeds a single, already-clean parameter row to
+    fitted ``KernelRidge`` / ``MLPRegressor`` estimators. scikit-learn's
+    default ``check_array`` finiteness scan and ``@validate_params``
+    introspection then cost more than the linear algebra they guard. The
+    context manager is scoped to the call, so it never leaks to a caller
+    that uses scikit-learn itself.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with sklearn.config_context(
+            assume_finite=True, skip_parameter_validation=True
+        ):
+            return func(*args, **kwargs)
+
+    return wrapper
 
 from .data_management import (
     array_memory,
@@ -615,14 +638,27 @@ class ModeModel:
         :class:`~mlgw_bns.neural_network.ModePhasesNN` prediction of
         :math:`\\phi_{\\ell m}(f_0)` from the training residuals; this
         returns the very same prediction so it cancels.
+
+        The predictor is shared across every mode of a :class:`Model` and
+        returns all modes' phases at once, so a summed waveform would call
+        it once per mode with identical parameters. A one-entry cache on
+        the (shared) predictor object collapses those to a single
+        evaluation, which is worth roughly a quarter of ``predict``'s
+        fixed cost on the four-mode model.
         """
-        if self.mode_phases_predictor is None or self.mode_phases_index is None:
+        predictor = self.mode_phases_predictor
+        if predictor is None or self.mode_phases_index is None:
             return 0.0
-        return float(
-            self.mode_phases_predictor.predict([intrinsic_params.array])[0][
-                self.mode_phases_index
-            ]
-        )
+        param_array = np.asarray(intrinsic_params.array)
+        key = param_array.tobytes()
+        cached = getattr(predictor, "_phase0_cache", None)
+        if cached is None or cached[0] != key:
+            phases = np.asarray(
+                predictor.predict([param_array])[0], dtype=float
+            )
+            cached = (key, phases)
+            predictor._phase0_cache = cached
+        return float(cached[1][self.mode_phases_index])
 
     def generate(
         self,
@@ -1205,6 +1241,7 @@ class ModeModel:
 
         return waveforms
 
+    @_with_fast_sklearn_config
     def predict_amplitude_phase(
         self, frequencies: np.ndarray, params: ParametersWithExtrinsic
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -1417,6 +1454,7 @@ class ModeModel:
         
         return amp, phi
 
+    @_with_fast_sklearn_config
     def predict_amplitude_phase_optimized(
         self,
         frequencies: np.ndarray,

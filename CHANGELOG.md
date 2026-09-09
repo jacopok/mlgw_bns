@@ -141,6 +141,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Model.predict` is roughly a third faster at the fixed (grid-size
+    independent) cost, which dominates for the frequency grids used in
+    parameter estimation. Two changes, both bit-for-bit identical in output:
+    the shared per-mode reference-phase predictor
+    (`ModeModel._predicted_mode_phase0`) was being evaluated once per mode
+    even though one call returns every mode's phase --- it is now cached and
+    evaluated once per waveform; and `ModeModel.predict_amplitude_phase`
+    / `predict_amplitude_phase_optimized` now run their scikit-learn
+    `predict` calls under `assume_finite` / `skip_parameter_validation`,
+    since the input is a single already-clean parameter row and the default
+    per-call validation cost more than the regression it guards. The
+    scikit-learn config change is scoped to the call.
 - **Breaking**: `Model` is now the multi-mode surrogate, holding one `ModeModel`
     per spherical-harmonic mode. What used to be called `Model` --- the single-mode
     workhorse --- is now `ModeModel`, and lives in `mlgw_bns.mode_model`.
