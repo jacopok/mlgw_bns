@@ -710,6 +710,9 @@ class KernelRidgeNetwork(NeuralNetwork):
             self.param_scaler: StandardScaler = param_scaler
         if target_scaler is not None:
             self.target_scaler: StandardScaler = target_scaler
+        #: Cached row norms of ``regressor.X_fit_`` for the lean RBF
+        #: evaluation in :meth:`predict` (filled on first use).
+        self._xfit_sqnorm: Optional[np.ndarray] = None
 
     def fit(
         self,
@@ -760,8 +763,55 @@ class KernelRidgeNetwork(NeuralNetwork):
             )
 
     def predict(self, x_data: np.ndarray) -> np.ndarray:
-        scaled_x = self.param_scaler.transform(x_data)
-        return self.target_scaler.inverse_transform(self.regressor.predict(scaled_x))
+        """Parameters to component coefficients.
+
+        This is a lean re-implementation of
+        ``target_scaler.inverse_transform(regressor.predict(
+        param_scaler.transform(x)))`` for the fitted RBF
+        :class:`~sklearn.kernel_ridge.KernelRidge` and the two
+        :class:`~sklearn.preprocessing.StandardScaler` objects. It is
+        called once per mode on a single already-clean parameter row, and
+        scikit-learn's ``KernelRidge.predict`` re-validates the whole
+        ``(n_train, n_features)`` training matrix through ``check_array``
+        on every call --- which, for ``n_train`` in the thousands, costs
+        several times the actual kernel evaluation. The maths is
+        identical: ``K_ij = exp(-gamma ||x_i - X_fit_j||^2)`` and the
+        prediction is ``K @ dual_coef_``, de-standardized.
+
+        The floating-point operation order matches
+        :func:`sklearn.metrics.pairwise.euclidean_distances` /
+        ``rbf_kernel`` exactly (accumulate ``-2 X Y^T``, then add the two
+        squared-norm vectors, then ``exp`` in place), so the output is
+        bit-for-bit identical to the scikit-learn path --- which matters
+        because the small ``kernel_alpha`` makes ``dual_coef_`` large and
+        alternating, so ``K @ dual_coef_`` is a cancelling sum sensitive
+        to the summation order.
+        """
+        regressor = self.regressor
+        x_fit = regressor.X_fit_
+        params = np.asarray(x_data, dtype=float)
+        scaled_x = (params - self.param_scaler.mean_) / self.param_scaler.scale_
+
+        sq_norm = self._xfit_sqnorm
+        if sq_norm is None or sq_norm.shape[0] != x_fit.shape[0]:
+            sq_norm = np.einsum("ij,ij->i", x_fit, x_fit)
+            self._xfit_sqnorm = sq_norm
+
+        gamma = regressor.gamma
+        if gamma is None:
+            gamma = 1.0 / x_fit.shape[1]
+
+        sq_dist = -2.0 * (scaled_x @ x_fit.T)
+        sq_dist += np.einsum("ij,ij->i", scaled_x, scaled_x)[:, None]
+        sq_dist += sq_norm[None, :]
+        np.maximum(sq_dist, 0.0, out=sq_dist)
+        sq_dist *= -gamma
+        np.exp(sq_dist, out=sq_dist)
+
+        scaled_prediction = sq_dist @ regressor.dual_coef_
+        return (
+            scaled_prediction * self.target_scaler.scale_ + self.target_scaler.mean_
+        )
 
     def save(self, filename: str) -> None:
         """Pickle ``(hyper, regressor, param_scaler, target_scaler)`` via joblib."""
