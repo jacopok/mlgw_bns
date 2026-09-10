@@ -79,6 +79,12 @@ def random_parameters(model: Model, seed: int) -> ParametersWithExtrinsic:
 
 class Approximant(ABC):
     name: str = ""
+    #: number of waveforms produced per `calculate()` call; `TestCase`
+    #: divides the measured time by this to report a per-waveform cost.
+    n_waveforms: int = 1
+    #: grid sizes above this are skipped for this approximant (the batched
+    #: JAX path needs O(batch * n_points) memory).
+    max_points: float = float("inf")
 
     def __init__(self, model_name: str = "default_hom"):
         self.model = Model.default_for_testing(model_name)
@@ -113,6 +119,111 @@ class MlgwBns(Approximant):
 
     def calculate(self) -> None:
         self.model.predict(self.frequencies, self.params)
+
+
+class MlgwBnsJax(Approximant):
+    """`mlgw_bns.jax_predict.model_to_jax_waveform`, JIT-compiled, one waveform."""
+
+    name = "mlgw_bns (JAX)"
+
+    def __init__(self, model_name: str = "default_hom") -> None:
+        super().__init__(model_name)
+        import jax
+
+        from mlgw_bns.jax_predict import model_to_jax_waveform
+
+        self._jax = jax
+        self._predict = jax.jit(model_to_jax_waveform(self.model))
+        self._warm: set[int] = set()
+
+    def _pack(self, seed: int, n_points: int):
+        import jax.numpy as jnp
+
+        params = random_parameters(self.model, seed)
+        freqs = jnp.asarray(
+            np.linspace(
+                float(np.min(self.dataset.frequencies_hz)),
+                float(np.max(self.dataset.frequencies_hz)) - 1,
+                num=n_points,
+            )
+        )
+        args = (
+            jnp.asarray(
+                [params.mass_ratio, params.lambda_1, params.lambda_2,
+                 params.chi_1, params.chi_2]
+            ),
+            freqs,
+            jnp.asarray(params.total_mass),
+            jnp.asarray(params.distance_mpc),
+            jnp.asarray(params.inclination),
+            jnp.asarray(params.reference_phase),
+        )
+        return args
+
+    def setup(self, seed: int, n_points: int) -> None:
+        self.args = self._pack(seed, n_points)
+        if n_points not in self._warm:  # compile once per grid size
+            self._jax.block_until_ready(self._predict(*self.args))
+            self._warm.add(n_points)
+
+    def calculate(self) -> None:
+        self._jax.block_until_ready(self._predict(*self.args))
+
+
+class MlgwBnsJaxBatch(Approximant):
+    """`model_to_jax_waveform` under `jax.vmap`, `batch` waveforms per call;
+    the reported time is divided by `batch` to give a per-waveform cost."""
+
+    def __init__(self, batch: int = 1024, model_name: str = "default_hom") -> None:
+        super().__init__(model_name)
+        import jax
+
+        from mlgw_bns.jax_predict import model_to_jax_waveform
+
+        self._jax = jax
+        self.batch = batch
+        self.n_waveforms = batch
+        self.max_points = 20_000  # O(batch * n_points) memory
+        self.name = f"mlgw_bns (JAX, batch {batch})"
+        self._predict = jax.jit(
+            jax.vmap(
+                model_to_jax_waveform(self.model),
+                in_axes=(0, None, None, None, None, None),
+            )
+        )
+        self._rng = np.random.default_rng(0)
+        self._warm: set[int] = set()
+
+    def setup(self, seed: int, n_points: int) -> None:
+        import jax.numpy as jnp
+
+        centre = random_parameters(self.model, seed)
+        base = np.array(
+            [centre.mass_ratio, centre.lambda_1, centre.lambda_2,
+             centre.chi_1, centre.chi_2]
+        )
+        params = base * (1.0 + 0.05 * self._rng.standard_normal((self.batch, 5)))
+        freqs = jnp.asarray(
+            np.linspace(
+                float(np.min(self.dataset.frequencies_hz)),
+                float(np.max(self.dataset.frequencies_hz)) - 1,
+                num=n_points,
+            )
+        )
+        self.args = (
+            jnp.asarray(params),
+            freqs,
+            jnp.asarray(centre.total_mass),
+            jnp.asarray(centre.distance_mpc),
+            jnp.asarray(centre.inclination),
+            jnp.asarray(centre.reference_phase),
+        )
+        if n_points not in self._warm:  # compile once per grid size
+            self._jax.block_until_ready(self._predict(*self.args))
+            self._warm.add(n_points)
+
+    def calculate(self) -> None:
+        self._jax.block_until_ready(self._predict(*self.args))
 
 
 class TEOBResumSPA(Approximant):
@@ -195,7 +306,8 @@ class TestCase:
         self.approximant.setup(self.seed, self.n_points)
         start = perf_counter()
         self.approximant.calculate()
-        self.times_ms.append((perf_counter() - start) * 1e3)
+        elapsed_ms = (perf_counter() - start) * 1e3
+        self.times_ms.append(elapsed_ms / self.approximant.n_waveforms)
 
 
 def make_test_cases(
@@ -211,6 +323,7 @@ def make_test_cases(
     return [
         TestCase(approximant=approx, seed=int(seed), n_points=int(n_points))
         for approx, seed, n_points in product(approximants, seeds, n_points_list)
+        if n_points <= approx.max_points
     ]
 
 
@@ -276,21 +389,20 @@ def make_figure(
 
     plt.figure(figsize=(7, 4.5))
     for approximant, color in zip(approximants, colors):
+        points = [n for n in n_points_list if n <= approximant.max_points]
         times = get_attribute_by_n_points_for_approx(
             tests, approximant, "avg_time", np.average
         )
-        popt = linear_constant_fit(np.array(n_points_list, dtype=float), np.array(times))
+        popt = linear_constant_fit(np.array(points, dtype=float), np.array(times))
         model = lambda x, c1, c2: c1 + x * c2
         plt.loglog(
-            n_points_list,
-            model(np.array(n_points_list), *popt),
+            points,
+            model(np.array(points), *popt),
             c=color,
             lw=0.9,
             label=format_popt(popt),
         )
-        plt.scatter(
-            n_points_list, times, s=3.0, color=color, label=approximant.name
-        )
+        plt.scatter(points, times, s=3.0, color=color, label=approximant.name)
 
     plt.grid(True, which="both", lw=0.3)
     plt.gca().set_axisbelow(True)
@@ -319,6 +431,12 @@ def main() -> None:
     )
     parser.add_argument("--no-lal", action="store_true", help="skip LAL approximants")
     parser.add_argument(
+        "--jax",
+        action="store_true",
+        help="also benchmark the JAX port (single call + a batch under jax.vmap)",
+    )
+    parser.add_argument("--jax-batch", type=int, default=1024)
+    parser.add_argument(
         "--out",
         type=Path,
         default=Path(__file__).with_name("benchmark_evaluation_time"),
@@ -328,13 +446,16 @@ def main() -> None:
     logging.basicConfig(level=logging.WARNING)
 
     if args.fast:
-        args.seeds, args.epochs, args.n_grid = 3, 2, 12
+        args.seeds, args.epochs, args.n_grid, args.log_max = 3, 2, 10, 4.0
 
     n_points_list = sorted(
         {int(x) for x in np.logspace(2, args.log_max, num=args.n_grid, dtype=int)}
     )
 
     approximants: list[Approximant] = [MlgwBns(), TEOBResumSPA()]
+    if args.jax:
+        approximants.append(MlgwBnsJax())
+        approximants.append(MlgwBnsJaxBatch(batch=args.jax_batch))
     if _HAVE_LAL and not args.no_lal:
         for approx_name in ("SEOBNRv4_ROM_NRTidalv2", "SEOBNRv4T_surrogate"):
             try:
