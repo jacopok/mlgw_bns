@@ -49,7 +49,10 @@ torch = [
 pycbc = [
     "pycbc>=2.11.0", # requires Python>=3.11
 ]
- 
+jax = [
+    "jax>=0.7,<0.12", # experimental JAX port of the prediction inner loop
+]
+
 [dependency-groups]
 dev = [
     "teobresums>=4.4.1",
