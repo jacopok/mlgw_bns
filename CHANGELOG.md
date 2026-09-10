@@ -71,18 +71,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `experiments/`, the study behind the two changes above: cached residuals, a
     surrogate whose every stage is a knob, and the sweeps that measured them.
     Nothing there is imported by the package.
-- `mlgw_bns.jax_predict`, an experimental JAX port of the prediction inner
-    loop (`jax` optional-dependency extra), adapted from Saulo Albuquerque's
-    `mlgw-bns-jax` (see `jax_reference/`). So far it covers the per-mode
-    parameters-to-residuals regression (`mode_model_to_jax_residuals`:
-    RBF kernel ridge + PCA reconstruction) and a JIT/`vmap`-able cubic-spline
-    evaluator. On a single waveform JAX is no faster than the numpy path
-    (dispatch overhead), but batched with `jax.vmap` it reaches ~3.5x on the
-    regression and ~30x on the spline resampling --- the interesting regime
-    for parameter estimation, which evaluates thousands of waveforms.
-    `visualization/benchmark_jax_prediction.py` runs the comparison. The
-    per-mode PN expansions, the reference predictors and the `Y_lm`
-    projection are not ported yet, so it is not a `Model.predict` replacement.
+- `mlgw_bns.jax_predict`, an experimental JAX port of the prediction pipeline
+    (`jax` optional-dependency extra), adapted from Saulo Albuquerque's
+    `mlgw-bns-jax` (see `jax_reference/`). `model_to_jax_waveform(model)`
+    returns a pure, `jax.jit` / `jax.vmap`-able function that reproduces the
+    full four-mode `Model.predict` --- the RBF kernel-ridge + PCA residuals,
+    the per-mode TaylorF2 expansions (ports of `pn_modes` / `taylorf2`), the
+    `ModePhasesNN` / `TimeshiftsNN` reference predictors, a not-a-knot
+    cubic-spline resampler, and the `Y_lm` mode sum. It agrees with the numpy
+    pipeline to ~1e-4 relative (XLA's reduction order on the ill-conditioned
+    kernel-ridge sum, not a modelling difference); the low-frequency TaylorF2
+    splice and the HF zero-padding are not ported, so keep the query grid
+    inside the trained band. On a single waveform JAX is ~1.5x faster than
+    numpy; batched with `jax.vmap` (the parameter-estimation regime) it is
+    5--15x faster per waveform. `visualization/benchmark_jax_prediction.py`
+    and `benchmark_evaluation_time.py --jax` run the comparisons.
 
 - Higher-order-mode support: the model shipped with the package now reconstructs
     the (2,2), (2,1), (3,3) and (4,4) modes and sums them into the observer-frame
