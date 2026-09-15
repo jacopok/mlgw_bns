@@ -418,6 +418,7 @@ def model_to_jax_waveform(model: "Model") -> Callable:
     modes = [tuple(m) for m in model.modes]
     m_ref = float(dataset.total_mass)
     mass_sum_seconds = float(dataset.mass_sum_seconds)
+    eff_fmin_hz = float(dataset.effective_initial_frequency_hz)
 
     ref_params = dataset.amplitude_reference_parameters
     if ref_params is None:
@@ -532,6 +533,12 @@ def model_to_jax_waveform(model: "Model") -> Callable:
         ts_scaled = time_shift * (total_mass / m_ref)
         mode_phase0 = mode_phases_fn(params)  # (n, n_modes)
         rescaled = freqs[None, :] * (total_mass / m_ref)  # (n, k)
+        # Fixed anchor for the time-shift phase trend below (see the
+        # matching fix/comment in Model._hpc_waveform_per_mode): using
+        # freqs[0] made the phase depend on wherever the caller's query
+        # grid started, which only matched Model.predict's convention by
+        # accident when frequencies[0] == effective_initial_frequency_hz.
+        reference_frequency_hz = eff_fmin_hz * (m_ref / total_mass)
 
         pre = total_mass**2 / _AMP_SI_BASE * eta / distance_mpc  # (n,)
 
@@ -564,7 +571,7 @@ def model_to_jax_waveform(model: "Model") -> Callable:
             phi = (
                 phi_rs
                 + m * reference_phase
-                + 2 * math.pi * (freqs[None, :] - freqs[0]) * ts_scaled[:, None]
+                + 2 * math.pi * (freqs[None, :] - reference_frequency_hz) * ts_scaled[:, None]
             )
 
             yr = _ylm_real(l, m, inclination)

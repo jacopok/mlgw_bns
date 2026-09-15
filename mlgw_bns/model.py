@@ -1454,6 +1454,20 @@ class Model:
         amps_list: list[np.ndarray] = []
         phases_list: list[np.ndarray] = []
         dataset = self.dataset
+        # Fixed anchor for the time-shift phase trend below, in the same
+        # (observer-frame Hz) units as `frequencies`: the dataset's own
+        # first downsampling node (`effective_initial_frequency_hz`, at
+        # `dataset.total_mass`), rescaled to `params.total_mass`. Must be
+        # independent of `frequencies` itself --- using `frequencies[0]`
+        # made the reconstructed phase depend on wherever the caller's own
+        # query grid happened to start, invisible as long as every caller
+        # queried from the trained band's edge; the post-Newtonian
+        # low-frequency extension is the one case where `frequencies[0]`
+        # legitimately varies per call, and it exposed this as a
+        # call-dependent phase offset shared by every mode.
+        reference_frequency_hz = dataset.effective_initial_frequency_hz * (
+            dataset.total_mass / params.total_mass
+        )
 
         for idx, mode in enumerate(self.modes):
             if use_pn:
@@ -1478,7 +1492,7 @@ class Model:
                 # Time shifts are stored in units of the reference total mass
                 # of the dataset, so we rescale to the requested total mass.
                 ts_scaled = ts * (params.total_mass / self.dataset.total_mass)
-                phase += 2 * np.pi * (frequencies - frequencies[0]) * ts_scaled
+                phase += 2 * np.pi * (frequencies - reference_frequency_hz) * ts_scaled
             active_indices.append(idx)
             amps_list.append(amp)
             phases_list.append(phase)
@@ -1690,6 +1704,12 @@ class Model:
         phases_list: list[np.ndarray] = []
 
         dataset = self.dataset
+        # See the matching comment in `_hpc_waveform_per_mode`: a fixed
+        # anchor, independent of `frequencies` itself, so the reconstructed
+        # phase doesn't depend on wherever the caller's query grid starts.
+        reference_frequency_hz = dataset.effective_initial_frequency_hz * (
+            dataset.total_mass / params.total_mass
+        )
         for idx, mode in enumerate(self.modes):
             if use_pn:
                 parameters_intrinsic = params.intrinsic(dataset)
@@ -1713,7 +1733,7 @@ class Model:
                 # Time shifts are stored in units of the reference total mass
                 # of the dataset, so we rescale to the requested total mass.
                 ts_scaled = ts * (params.total_mass / self.dataset.total_mass)
-                phase += 2 * np.pi * (frequencies - frequencies[0]) * ts_scaled
+                phase += 2 * np.pi * (frequencies - reference_frequency_hz) * ts_scaled
 
             active_indices.append(idx)
             amps_list.append(amp)
