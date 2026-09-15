@@ -41,6 +41,8 @@ Run with: python visualization/validate_model.py
 
 import logging
 import os
+import sys
+from time import perf_counter
 from typing import Optional
 
 import matplotlib
@@ -90,6 +92,15 @@ REFERENCE_FMAX_HZ = 512.0
 DISTANCE_MPC = 100.0
 INCLINATION = 1.0
 TOTAL_MASS = 2.8
+
+#: Grid sizes for the wall-clock timing benchmark (see
+#: :func:`timing_benchmark`); smaller than ``benchmark_evaluation_time.py``'s
+#: own defaults since this runs as one step of a broader validation pass,
+#: not a dedicated timing sweep.
+TIMING_N_POINTS = (64, 512, 4096)
+TIMING_SEEDS = 5
+TIMING_EPOCHS = 2
+TIMING_JAX_BATCH = 1024
 
 
 class SharedTimeshiftValidateModel(ValidateModel):
@@ -1096,6 +1107,175 @@ def plot_mismatches(
     print(f"Saved plot to {outfile}")
 
 
+def timing_benchmark(
+    model: Model,
+    n_points_list=TIMING_N_POINTS,
+    n_seeds: int = TIMING_SEEDS,
+    n_epochs: int = TIMING_EPOCHS,
+    jax_batch: int = TIMING_JAX_BATCH,
+) -> dict:
+    r"""Median wall-clock time per waveform, numpy vs. JAX ``Model.predict``.
+
+    Compares :meth:`Model.predict` against the JAX port
+    (:func:`mlgw_bns.jax_predict.model_to_jax_waveform`): a single
+    JIT-compiled call, and a ``jax.vmap``-batched call (``jax_batch``
+    waveforms per call, time reported per-waveform), across grid sizes.
+    JIT compilation is warmed up once per grid size before timing starts,
+    so the reported times are steady-state. Uses
+    ``benchmark_evaluation_time.random_parameters`` (added to ``sys.path``
+    since it lives alongside this script) for the intrinsic/extrinsic
+    draw, so the two scripts sample identically.
+
+    Skipped --- with a warning, returning only the ``"numpy"`` entry ---
+    if ``jax`` is not importable; it is an optional extra
+    (``pyproject.toml``'s ``[jax]`` group), not a hard dependency.
+
+    Returns
+    -------
+    dict
+        ``{"n_points": [...], "numpy": [median ms, one per n_points],
+        "jax": [...], "jax_batch": [...]}``, the last two omitted if JAX
+        is unavailable.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from benchmark_evaluation_time import random_parameters
+
+    frequencies_hz = model.dataset.frequencies_hz
+    f_min = float(np.min(frequencies_hz))
+    f_max = float(np.max(frequencies_hz)) - 1
+
+    result: dict = {"n_points": list(n_points_list), "numpy": []}
+
+    # One untimed call first: numba JIT-compiles on first use and the
+    # model has its own lazy fixed-cost caches (mode-phase cache, sklearn
+    # config, ...), both one-off costs that would otherwise contaminate
+    # the smallest n_points bucket.
+    model.predict(np.linspace(f_min, f_max, num=n_points_list[0]), random_parameters(model, 0))
+
+    print("  numpy Model.predict:")
+    for n_points in n_points_list:
+        freqs = np.linspace(f_min, f_max, num=n_points)
+        times_ms = []
+        for _ in range(n_epochs):
+            for seed in range(n_seeds):
+                params = random_parameters(model, seed)
+                start = perf_counter()
+                model.predict(freqs, params)
+                times_ms.append((perf_counter() - start) * 1e3)
+        result["numpy"].append(float(np.median(times_ms)))
+        print(f"    n_points={n_points:>6}  median {result['numpy'][-1]:.3f} ms")
+
+    try:
+        import jax
+        import jax.numpy as jnp
+
+        from mlgw_bns.jax_predict import model_to_jax_waveform
+    except Exception as exc:  # pragma: no cover - environment dependent
+        logging.warning("JAX not available (%s); skipping JAX timing", exc)
+        return result
+
+    def pack(params, freqs):
+        return (
+            jnp.asarray(
+                [params.mass_ratio, params.lambda_1, params.lambda_2,
+                 params.chi_1, params.chi_2]
+            ),
+            jnp.asarray(freqs),
+            jnp.asarray(params.total_mass),
+            jnp.asarray(params.distance_mpc),
+            jnp.asarray(params.inclination),
+            jnp.asarray(params.reference_phase),
+        )
+
+    predict_single = jax.jit(model_to_jax_waveform(model))
+    predict_batch = jax.jit(
+        jax.vmap(
+            model_to_jax_waveform(model), in_axes=(0, None, None, None, None, None)
+        )
+    )
+    rng = np.random.default_rng(0)
+
+    result["jax"] = []
+    result["jax_batch"] = []
+
+    print("  JAX Model.predict (single call, JIT-compiled):")
+    for n_points in n_points_list:
+        freqs = np.linspace(f_min, f_max, num=n_points)
+
+        args = pack(random_parameters(model, 0), freqs)
+        jax.block_until_ready(predict_single(*args))  # compile, not timed
+
+        times_ms = []
+        for _ in range(n_epochs):
+            for seed in range(n_seeds):
+                args = pack(random_parameters(model, seed), freqs)
+                start = perf_counter()
+                jax.block_until_ready(predict_single(*args))
+                times_ms.append((perf_counter() - start) * 1e3)
+        result["jax"].append(float(np.median(times_ms)))
+        print(f"    n_points={n_points:>6}  median {result['jax'][-1]:.3f} ms")
+
+    print(f"  JAX Model.predict (jax.vmap batch of {jax_batch}, per-waveform):")
+    for n_points in n_points_list:
+        freqs = np.linspace(f_min, f_max, num=n_points)
+
+        centre = random_parameters(model, 0)
+        base = np.array(
+            [centre.mass_ratio, centre.lambda_1, centre.lambda_2,
+             centre.chi_1, centre.chi_2]
+        )
+        batch_params = base * (1.0 + 0.05 * rng.standard_normal((jax_batch, 5)))
+        batch_args = (
+            jnp.asarray(batch_params),
+            jnp.asarray(freqs),
+            jnp.asarray(centre.total_mass),
+            jnp.asarray(centre.distance_mpc),
+            jnp.asarray(centre.inclination),
+            jnp.asarray(centre.reference_phase),
+        )
+        jax.block_until_ready(predict_batch(*batch_args))  # compile, not timed
+
+        times_ms = []
+        for _ in range(n_epochs):
+            start = perf_counter()
+            jax.block_until_ready(predict_batch(*batch_args))
+            times_ms.append((perf_counter() - start) * 1e3 / jax_batch)
+        result["jax_batch"].append(float(np.median(times_ms)))
+        print(f"    n_points={n_points:>6}  median {result['jax_batch'][-1]:.4f} ms")
+
+    return result
+
+
+def plot_timing_benchmark(data: dict) -> None:
+    r"""Log-log plot of :func:`timing_benchmark`'s per-waveform timings.
+
+    ``data`` is that function's return value; the ``"jax"`` / ``"jax_batch"``
+    curves are omitted if it did not have JAX available.
+    """
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+
+    n_points = data["n_points"]
+    ax.loglog(n_points, data["numpy"], marker="o", label="numpy Model.predict")
+    if "jax" in data:
+        ax.loglog(n_points, data["jax"], marker="o", label="JAX (single call)")
+    if "jax_batch" in data:
+        ax.loglog(
+            n_points, data["jax_batch"], marker="o",
+            label=f"JAX (jax.vmap batch of {TIMING_JAX_BATCH})",
+        )
+
+    ax.set_xlabel("Number of evaluation points")
+    ax.set_ylabel("Time per waveform [ms]")
+    ax.grid(True, which="both", lw=0.3)
+    ax.legend()
+    fig.suptitle("Model.predict wall-clock time: numpy vs. JAX")
+    fig.tight_layout()
+
+    outfile = f"{OUTPUT_PREFIX}_timing.png"
+    fig.savefig(outfile, dpi=150)
+    print(f"Saved plot to {outfile}")
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -1156,3 +1336,7 @@ if __name__ == "__main__":
     print("Computing per-mode mismatch vs. power fraction...")
     mismatch_vs_power = mismatch_vs_power_by_mode(model)
     plot_mismatch_vs_power(mismatch_vs_power)
+
+    print("Benchmarking prediction wall-clock time (numpy vs. JAX)...")
+    timing_data = timing_benchmark(model)
+    plot_timing_benchmark(timing_data)
