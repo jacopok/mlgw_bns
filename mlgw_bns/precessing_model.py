@@ -62,6 +62,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Dict, Optional, Sequence, Tuple
 
 import numpy as np
+from scipy.interpolate import PchipInterpolator
 
 from .higher_order_modes import Mode
 from .model import Model
@@ -225,11 +226,43 @@ class EulerAngles:
         interpolating: they wind through many turns over an inspiral, and
         interpolating the wrapped values would smear each :math:`2\pi`
         jump across a whole interval.
+
+        A monotone cubic Hermite interpolant (PCHIP) is used in place of
+        the plain linear one used before, closer in spirit to
+        TEOBResumS' own ``gsl_interp_cspline`` lookup of these angles
+        (``twist_hlm_FD``/``twist_hlm_TD`` in ``TEOBResumSWaveform.c``):
+        the PN integration returns only a sparse set of accepted ODE
+        steps (see
+        :func:`~mlgw_bns.twist_waveform.integrate_pn_spin_precession`),
+        and linear interpolation between them is a coarser approximation
+        of the (smooth) angle trajectory. A plain (non-monotone) natural
+        cubic spline was tried first and rejected: ``self.momega`` can
+        have knot spacings spanning many orders of magnitude (most
+        strikingly after :meth:`reanchored`, whose
+        ``np.maximum.accumulate`` can leave long plateaus followed by
+        sharp jumps), and a global cubic spline rings badly across such
+        spacing -- it made the re-anchored mismatch dramatically *worse*
+        (median mismatch ~0.7, i.e. uncorrelated) rather than better.
+        PCHIP trades some smoothness for being shape-preserving (no
+        overshoot between knots regardless of spacing), which is safe
+        here since it still exactly reproduces the ODE solution at every
+        returned node.
         """
+        momega = np.asarray(momega)
+        clipped = np.clip(momega, self.momega[0], self.momega[-1])
+
+        # reanchored() can produce a non-decreasing (not strictly
+        # increasing) momega axis via np.maximum.accumulate; the
+        # interpolator needs strictly increasing knots.
+        unique_momega, unique_index = np.unique(self.momega, return_index=True)
+
+        def spline(values: np.ndarray) -> np.ndarray:
+            return PchipInterpolator(unique_momega, values[unique_index])(clipped)
+
         return (
-            np.interp(momega, self.momega, np.unwrap(self.alpha)),
-            np.interp(momega, self.momega, self.beta),
-            np.interp(momega, self.momega, np.unwrap(self.gamma)),
+            spline(np.unwrap(self.alpha)),
+            spline(self.beta),
+            spline(np.unwrap(self.gamma)),
         )
 
     def reanchored(
@@ -284,28 +317,49 @@ class EulerAngles:
             return self
 
         phase = np.unwrap(np.angle(reference_mode))
+
+        # np.gradient's raw phase derivative is pure numerical noise at
+        # the low-frequency band edge (the reference multipole has
+        # little power there -- see the docstring above), sometimes by
+        # tens of radians/Hz against a true near-merger value of
+        # ~1e-4-1e-5: since np.maximum.accumulate is a running maximum
+        # in frequency order, a single such spike gets locked in and
+        # freezes spa_time near-constant for the *entire rest of the
+        # table*, corrupting the re-anchoring across the whole trusted
+        # band, not just near the edge. Excluding that untrusted region
+        # before differentiating -- it is discarded below
+        # (reference_frequency_hz) regardless -- keeps the noise out of
+        # the running maximum in the first place.
+        trusted = frequencies_hz >= reference_frequency_hz
+        freq_trusted = frequencies_hz[trusted]
+        phase_trusted = phase[trusted]
+
         # Stationary-phase time of the (2,2): it reaches GW frequency f at
         # t(f) = (1 / 2 pi) dphi/df. The sign of the phase convention is
         # absorbed by requiring t to increase with f (an inspiral chirps
         # up).
-        spa_time = np.gradient(phase, frequencies_hz) / (2.0 * np.pi)
+        spa_time = np.gradient(phase_trusted, freq_trusted) / (2.0 * np.pi)
         if spa_time[-1] < spa_time[0]:
             spa_time = -spa_time
         spa_time = np.maximum.accumulate(spa_time)
 
         # PN (2,2) GW frequency along its own integration time.
         pn_f22 = self.momega / (np.pi * mass_sum_seconds)
-        anchor = max(reference_frequency_hz, frequencies_hz[0], pn_f22[0])
+        anchor = max(reference_frequency_hz, freq_trusted[0], pn_f22[0])
 
-        spa_time = spa_time - np.interp(anchor, frequencies_hz, spa_time)
-        pn_time = self.time - np.interp(anchor, pn_f22, self.time)
+        spa_time = spa_time - np.interp(anchor, freq_trusted, spa_time)
+        # self.time is in geometric units (M = 1); spa_time is in real
+        # seconds (built from frequencies_hz in Hz), so it must be
+        # converted before the two are compared/interpolated together.
+        time_seconds = self.time * mass_sum_seconds
+        pn_time = time_seconds - np.interp(anchor, pn_f22, time_seconds)
 
         # true (2,2) frequency at each PN sample: from the reference phase
         # above the anchor, from the PN integration below it
         f22 = np.where(
             pn_time >= 0.0,
-            np.interp(pn_time, spa_time, frequencies_hz,
-                      left=frequencies_hz[0], right=frequencies_hz[-1]),
+            np.interp(pn_time, spa_time, freq_trusted,
+                      left=freq_trusted[0], right=freq_trusted[-1]),
             pn_f22,
         )
         momega = np.maximum.accumulate(np.pi * mass_sum_seconds * f22)
