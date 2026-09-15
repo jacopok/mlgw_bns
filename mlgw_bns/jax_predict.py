@@ -9,10 +9,14 @@ idea to the current multi-mode model, whose per-mode residual regressor
 is a :class:`~mlgw_bns.neural_network.KernelRidgeNetwork` and whose output
 is the observer-frame :math:`(h_+, h_\times)` summed over four modes.
 
-The Post-Newtonian expansions (:func:`_taylorf2_psi` and the ``_H_2*`` /
-``_H_3*`` / ``_H_4*`` mode coefficients) and the JIT-able cubic-spline
-evaluator are ports of the corresponding upstream code /
-:mod:`mlgw_bns.taylorf2` / :mod:`mlgw_bns.pn_modes`.
+The Post-Newtonian expansions are not reimplemented here: the per-mode
+``H_lm`` coefficients are pure polynomials in ``v`` with scalar (not
+array-valued) constants, so :mod:`mlgw_bns.pn_modes`'s numpy functions
+run unmodified under ``jax.numpy`` arrays; the TaylorF2 phase itself is
+built from :mod:`mlgw_bns.taylorf2`'s ``_make_*`` factories instantiated
+with ``xp=jax.numpy`` (the same factories the numba-jitted numpy path
+instantiates with ``xp=numpy``). Only the JIT-able cubic-spline evaluator
+here is a genuine JAX-specific port.
 
 Public entry points
 -------------------
@@ -46,6 +50,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from .pn_modes import H_21, H_22, H_33, H_44
+from .taylorf2 import _make_taylorf2_psi
+
 jax.config.update("jax_enable_x64", True)
 
 if TYPE_CHECKING:
@@ -63,8 +70,6 @@ if TYPE_CHECKING:
 _SUN_MASS_SECONDS = 4.92549094830932e-6
 _EULER_GAMMA = 0.57721566490153286060
 _AMP_SI_BASE = 4.2425873413901263e24
-_LOG2 = 0.69314718055994528623
-_LOG3 = 1.0986122886681097821
 
 _ACTIVATIONS: dict[str, Callable] = {
     "relu": jax.nn.relu,
@@ -164,475 +169,15 @@ def mode_model_to_jax_residuals(
 
 
 # ====================================================================== #
-# TaylorF2 phase (natural units), mass-independent
+# TaylorF2 phase (natural units), mass-independent, and per-mode PN
+# amplitude/phase. Both are shared with the numpy path (jax.numpy
+# instantiation of mlgw_bns.taylorf2's `_make_*` factories, and
+# mlgw_bns.pn_modes's H_lm functions used directly on jnp arrays).
 # ====================================================================== #
 
-def _phif3hpn(v, eta, s1z, s2z):
-    """3.5PN point-mass + spin phase, tidal terms omitted (as called from
-    :func:`Phif5hPN` inside ``phase_5h_post_newtonian_tidal``)."""
-    vlso = 1.0 / math.sqrt(6.0)
-    delta = jnp.sqrt(1.0 - 4.0 * eta)
-    v2, v3, v4, v5, v6, v7 = v**2, v**3, v**4, v**5, v**6, v**7
-    eta2, eta3 = eta**2, eta**3
-    m1M = 0.5 * (1.0 + delta)
-    m2M = 0.5 * (1.0 - delta)
-    chi1sq, chi2sq = s1z * s1z, s2z * s2z
-    chi1dotchi2 = s1z * s2z
-    SL = m1M * m1M * s1z + m2M * m2M * s2z
-    dSigmaL = delta * (m2M * s2z - m1M * s1z)
+_taylorf2_psi = _make_taylorf2_psi(jnp)
 
-    sigma = eta * (721.0 / 48.0 * s1z * s2z - 247.0 / 48.0 * chi1dotchi2)
-    sigma += 719.0 / 96.0 * (m1M * m1M * chi1sq + m2M * m2M * chi2sq)
-    sigma -= 233.0 / 96.0 * (m1M * m1M * chi1sq + m2M * m2M * chi2sq)
-    phis_15PN = 188.0 * SL / 3.0 + 25.0 * dSigmaL
-    ga = (554345.0 / 1134.0 + 110.0 * eta / 9.0) * SL + (
-        13915.0 / 84.0 - 10.0 * eta / 3.0
-    ) * dSigmaL
-    pn_ss3 = (326.75 / 1.12 + 557.5 / 1.8 * eta) * eta * s1z * s2z
-    pn_ss3 += (
-        (4703.5 / 8.4 + 2935.0 / 6.0 * m1M - 120.0 * m1M * m1M)
-        + (-4108.25 / 6.72 - 108.5 / 1.2 * m1M + 125.5 / 3.6 * m1M * m1M)
-    ) * m1M * m1M * chi1sq
-    pn_ss3 += (
-        (4703.5 / 8.4 + 2935.0 / 6.0 * m2M - 120.0 * m2M * m2M)
-        + (-4108.25 / 6.72 - 108.5 / 1.2 * m2M + 125.5 / 3.6 * m2M * m2M)
-    ) * m2M * m2M * chi2sq
-    phis_3PN = math.pi * (3760.0 * SL + 1490.0 * dSigmaL) / 3.0 + pn_ss3
-    phis_35PN = (
-        -8980424995.0 / 762048.0 + 6586595.0 * eta / 756.0 - 305.0 * eta2 / 36.0
-    ) * SL - (
-        170978035.0 / 48384.0 - 2876425.0 * eta / 672.0 - 4735.0 * eta2 / 144.0
-    ) * dSigmaL
-
-    LO = 3.0 / 128.0 / eta / v5
-    pointmass = (
-        1
-        + 20.0 / 9.0 * (743.0 / 336.0 + 11.0 / 4.0 * eta) * v2
-        + (phis_15PN - 16.0 * math.pi) * v3
-        + 10.0
-        * (3058673.0 / 1016064.0 + 5429.0 / 1008.0 * eta + 617.0 / 144.0 * eta2 - sigma)
-        * v4
-        + (38645.0 / 756.0 * math.pi - 65.0 / 9.0 * eta * math.pi - ga)
-        * (1.0 + 3.0 * jnp.log(v / vlso))
-        * v5
-        + (
-            11583231236531.0 / 4694215680.0
-            - 640.0 / 3.0 * math.pi**2
-            - 6848.0 / 21.0 * (_EULER_GAMMA + jnp.log(4.0 * v))
-            + (-15737765635.0 / 3048192.0 + 2255.0 * math.pi**2 / 12.0) * eta
-            + 76055.0 / 1728.0 * eta2
-            - 127825.0 / 1296.0 * eta3
-            + phis_3PN
-        )
-        * v6
-        + (
-            math.pi
-            * (77096675.0 / 254016.0 + 378515.0 / 1512.0 * eta - 74045.0 / 756.0 * eta2)
-            + phis_35PN
-        )
-        * v7
-    )
-    return LO * pointmass
-
-
-def _phif5hpn(v, eta, s1z, s2z):
-    """5.5PN point-mass + spin phase (``Phif5hPN`` with Lam=dLam=0)."""
-    phi_35pn = _phif3hpn(v, eta, s1z, s2z)
-    v5, v8, v9, v10, v11 = v**5, v**8, v**9, v**10, v**11
-    logv = jnp.log(v)
-    eta2, eta3 = eta**2, eta**3
-    pi2 = math.pi**2
-
-    base8 = (
-        -36946947827.5 / 1601901100.8 * eta**4
-        + 51004148102.5 / 1310646355.2 * eta3
-        + (30060067316599.7 / 57668439628.8 - 39954.5 / 2721.6 * pi2) * eta2
-        + (
-            -567987228950352.7 / 128152088064.0
-            - 532292.8 / 396.9 * _EULER_GAMMA
-            + 930221.5 / 5443.2 * pi2
-            - 142068.8 / 44.1 * _LOG2
-            + 2632.5 / 4.9 * _LOG3
-        )
-        * eta
-        - 9049.0 / 56.7 * pi2
-        - 3681.2 / 18.9 * _EULER_GAMMA
-        + 255071384399888515.3 / 83042553065472.0
-        - 2632.5 / 19.6 * _LOG3
-        - 101102.0 / 396.9 * _LOG2
-    )
-    coef_8pn = base8
-    coef_log8pn = -3.0 * base8
-    coef_loglog8pn = 9.0 * (266146.4 / 1190.7 * eta + 1840.6 / 56.7)
-    coef_9pn = math.pi * (
-        1032375.5 / 19958.4 * eta3
-        + 4529333.5 / 12700.8 * eta2
-        + (2255.0 / 6.0 * pi2 - 149291726073.5 / 13412044.8) * eta
-        - 640.0 / 3.0 * pi2
-        - 1369.6 / 2.1 * _EULER_GAMMA
-        + 10534427947316.3 / 1877686272.0
-        - 2739.2 / 2.1 * _LOG2
-    )
-    coef_log9pn = -3.0 * 1369.6 / 6.3 * math.pi
-    coef_10pn = (
-        1.0
-        / (1.0 - 3.0 * eta)
-        * (
-            (242506658510205297979.7 / 85723270481616768.0) * eta**6
-            - (1272143474037195162.1 / 67631771583129.6) * eta**5
-            + (
-                1116081080066315514991.3 / 27213736660830720.0
-                - 943479.7 / 1881.6 * pi2
-            )
-            * eta**4
-            + (
-                -85710407655931086054085.1 / 3428930819264670720.0
-                - 614779314.2 / 152806.5 * _EULER_GAMMA
-                - 46051.9 / 153.6 * pi2
-                - 4311179766.8 / 152806.5 * _LOG2
-                + 127939.5 / 9.8 * _LOG3
-            )
-            * eta3
-            + (
-                -1873639936380505730110521.7 / 36575262072156487680.0
-                - (9923919211.9 / 458419.5) * _EULER_GAMMA
-                + 41579551.7 / 90316.8 * pi2
-                - 11734037971.3 / 458419.5 * _LOG2
-                - 5833093.5 / 548.8 * _LOG3
-            )
-            * eta2
-            + (
-                56993518125966874478111.3 / 1083711468804636672.0
-                + 6378740752.7 / 916839.0 * _EULER_GAMMA
-                - 545142954.7 / 812851.2 * pi2
-                + 15994339707.7 / 1833678.0 * _LOG2
-                + (892417.5 / 313.6) * _LOG3
-            )
-            * eta
-            + (57822311.5 / 304819.2) * pi2
-            + (647058264.7 / 2750517.0) * _EULER_GAMMA
-            - 143300652329540712655.9 / 12630669799587840.0
-            - 551245.5 / 2195.2 * _LOG3
-            + 5399283943.1 / 5501034.0 * _LOG2
-        )
-    )
-    coef_log10pn = (
-        3.0
-        / (1.0 - 3.0 * eta)
-        * (
-            1286378036.2 / 458419.5 * eta3
-            + 1384949312.9 / 1375258.5 * eta2
-            - 2427943164.1 / 2750517.0 * eta
-            + 647058264.7 / 8251551.0
-        )
-    )
-    coef_11pn = math.pi * (
-        65762707344.5 / 14417109907.2 * eta**4
-        - 108059782847.5 / 2621292710.4 * eta3
-        + 512031495514639.7 / 62911025049.6 * eta2
-        + (-1064790.5 / 3628.8 * eta2 + 4501578.5 / 14515.2 * eta - 9439.0 / 56.7) * pi2
-        + (
-            -134666.2 / 56.7 * _EULER_GAMMA
-            - 43038370739839704.7 / 3460106377728.0
-            + 2632.5 / 4.9 * _LOG3
-            - 2100962.6 / 396.9 * _LOG2
-        )
-        * eta
-        - 355801.1 / 793.8 * _EULER_GAMMA
-        + 185754140723659441.1 / 27680851021824.0
-        - 2632.5 / 19.6 * _LOG3
-        - 86254.9 / 113.4 * _LOG2
-    )
-    coef_log11pn = -3.0 * math.pi * (134666.2 / 170.1 * eta + 355801.1 / 2381.4)
-
-    return phi_35pn + (3.0 / 128.0 / eta / v5) * (
-        (coef_8pn + coef_log8pn * logv + coef_loglog8pn * logv * logv) * v8
-        + (coef_9pn + coef_log9pn * logv) * v9
-        + (coef_10pn + coef_log10pn * logv) * v10
-        + (coef_11pn + coef_log11pn * logv) * v11
-    )
-
-
-def _phift7hpn(v, eta, lam1, lam2):
-    """7.5PN tidal phase (``PhifT7hPNComplete``)."""
-    delta = jnp.sqrt(1.0 - 4.0 * eta)
-    Xa = 0.5 * (1.0 + delta)
-    Xb = 0.5 * (1.0 - delta)
-    Xa2, Xa3, Xa4, Xa5 = Xa**2, Xa**3, Xa**4, Xa**5
-    Xb2, Xb3, Xb4, Xb5 = Xb**2, Xb**3, Xb**4, Xb**5
-    v2, v3, v4, v5 = v**2, v**3, v**4, v**5
-    kapa = 3.0 * lam1 * Xa4 * Xb
-    kapb = 3.0 * lam2 * Xb4 * Xa
-    pNa = -3.0 / (16.0 * eta) * (12.0 + Xa / Xb)
-    pNb = -3.0 / (16.0 * eta) * (12.0 + Xb / Xa)
-    p1a = 5.0 * (3179.0 - 919.0 * Xa - 2286.0 * Xa2 + 260.0 * Xa3) / (
-        672.0 * (12.0 - 11.0 * Xa)
-    )
-    p1b = 5.0 * (3179.0 - 919.0 * Xb - 2286.0 * Xb2 + 260.0 * Xb3) / (
-        672.0 * (12.0 - 11.0 * Xb)
-    )
-    p2a = p2b = -math.pi
-    p3a = (
-        -5.0
-        * (
-            -387973870.0
-            + 43246839.0 * Xa
-            + 174965616.0 * Xa2
-            + 158378220.0 * Xa3
-            - 20427120.0 * Xa4
-            + 4572288.0 * Xa5
-        )
-        / 27433728.0
-    ) / (12.0 - 11.0 * Xa)
-    p3b = (
-        -5.0
-        * (
-            -387973870.0
-            + 43246839.0 * Xb
-            + 174965616.0 * Xb2
-            + 158378220.0 * Xb3
-            - 20427120.0 * Xb4
-            + 4572288.0 * Xb5
-        )
-        / 27433728.0
-    ) / (12.0 - 11.0 * Xb)
-    p4a = (
-        -math.pi
-        * (27719.0 - 22415.0 * Xa + 7598.0 * Xa2 - 10520.0 * Xa3)
-        / (672.0 * (12.0 - 11.0 * Xa))
-    )
-    p4b = (
-        -math.pi
-        * (27719.0 - 22127.0 * Xb + 7022.0 * Xb2 - 10232.0 * Xb3)
-        / (672.0 * (12.0 - 11.0 * Xb))
-    )
-    return v5 * (
-        kapa * pNa * (1.0 + p1a * v2 + p2a * v3 + p3a * v4 + p4a * v5)
-        + kapb * pNb * (1.0 + p1b * v2 + p2b * v3 + p3b * v4 + p4b * v5)
-    )
-
-
-def _compute_quadrupole_yy(lam):
-    loglam = jnp.log(jnp.where(lam > 0.0, lam, 1.0))
-    logCQ = (
-        0.194
-        + 0.0936 * loglam
-        + 0.0474 * loglam**2
-        - 4.21e-3 * loglam**3
-        + 1.23e-4 * loglam**4
-    )
-    return jnp.where(lam <= 0.0, 1.0, jnp.exp(logCQ))
-
-
-def _phifqm3hpn(v, eta, s1z, s2z, lam1, lam2):
-    """3.5PN quadrupole-monopole self-spin phase (``PhifQM3hPN``)."""
-    v2 = v * v
-    delta = jnp.sqrt(1.0 - 4.0 * eta)
-    X1 = 0.5 * (1.0 + delta)
-    X2 = 0.5 * (1.0 - delta)
-    at1_2 = (X1 * s1z) ** 2
-    at2_2 = (X2 * s2z) ** 2
-    CQ1 = _compute_quadrupole_yy(lam1) - 1.0
-    CQ2 = _compute_quadrupole_yy(lam2) - 1.0
-    a2CQ_p = at1_2 * CQ1 + at2_2 * CQ2
-    a2CQ_m = at1_2 * CQ1 - at2_2 * CQ2
-    out = -75.0 / (64.0 * eta) * a2CQ_p / v
-    out += (
-        (45.0 / 16.0 * eta + 15635.0 / 896.0) * a2CQ_p + 2215.0 / 512.0 * delta * a2CQ_m
-    ) * v / eta
-    out += -75.0 / (8.0 * eta) * a2CQ_p * v2 * math.pi
-    return out
-
-
-def _taylorf2_psi(f_natural, eta, chi1, chi2, lam1, lam2):
-    r"""``phase_5h_post_newtonian_tidal`` in natural units (``M f``).
-
-    ``v = (pi M f_Hz T_sun)^{1/3} = (pi f_natural)^{1/3}``, so the total
-    mass drops out.
-    """
-    v = jnp.abs(math.pi * f_natural) ** (1.0 / 3.0)
-    phi5 = _phif5hpn(v, eta, chi1, chi2)
-    phit = _phift7hpn(v, eta, lam1, lam2)
-    phiqm = _phifqm3hpn(v, eta, chi1, chi2, lam1, lam2)
-    return -phi5 - phit - phiqm
-
-
-# ====================================================================== #
-# Per-mode dimensionless PN amplitude coefficients H_lm(v)
-# ====================================================================== #
-
-def _H_22(v, eta, delta, chi_a, chi_s):
-    v2, v3, v4, v6 = v**2, v**3, v**4, v**6
-    c2 = 451 * eta / 168 - 323 / 224
-    c3 = 27 * delta * chi_a / 8 - 11 * eta * chi_s / 6 + 27 * chi_s / 8
-    c4 = (
-        -49 * delta * chi_a * chi_s / 16
-        + 105271 * eta**2 / 24192
-        + 6 * eta * chi_a**2
-        + eta * chi_s**2 / 8
-        - 1975055 * eta / 338688
-        - 49 * chi_a**2 / 32
-        - 49 * chi_s**2 / 32
-        - 27312085 / 8128512
-    )
-    c6 = (
-        107291 * delta * eta * chi_a * chi_s / 2688
-        - 875047 * delta * chi_a * chi_s / 32256
-        + 31 * math.pi * delta * chi_a / 12
-        + 34473079 * eta**3 / 6386688
-        + 491 * eta**2 * chi_a**2 / 84
-        - 51329 * eta**2 * chi_s**2 / 4032
-        - 3248849057 * eta**2 / 178827264
-        + 129367 * eta * chi_a**2 / 2304
-        + 8517 * eta * chi_s**2 / 224
-        - 7 * math.pi * eta * chi_s / 3
-        - 205 * math.pi**2 * eta / 48
-        + 545384828789 * eta / 5007163392
-        - 875047 * chi_a**2 / 64512
-        - 875047 * chi_s**2 / 64512
-        + 31 * math.pi * chi_s / 12
-        + 428j * math.pi / 105
-        - 177520268561 / 8583708672
-    )
-    return 1 + v2 * c2 + v3 * c3 + v4 * c4 + v6 * c6
-
-
-def _H_21(v, eta, delta, chi_a, chi_s):
-    i = 1j
-    v1, v2, v3, v4, v5, v6 = v, v**2, v**3, v**4, v**5, v**6
-    coef = i * math.sqrt(2) / 3
-    c1 = delta
-    c2 = -1.5 * delta * chi_s - 1.5 * chi_a
-    c3 = 117 / 56 * delta * eta + 335 / 672 * delta
-    c4 = (
-        -965 / 336 * delta * eta * chi_s
-        + 3427 / 1344 * delta * chi_s
-        - math.pi * delta
-        - i / 2 * delta
-        - i / 2 * delta * math.log(16)
-        - 2101 / 336 * eta * chi_a
-        + 3427 / 1344 * chi_a
-    )
-    c5 = (
-        21365 / 8064 * delta * eta**2
-        + 10 * delta * eta * chi_a**2
-        + 39 / 8 * delta * eta * chi_s**2
-        - 36529 / 12544 * delta * eta
-        - 307 / 32 * delta * chi_a**2
-        - 307 / 32 * delta * chi_s**2
-        + 3 * math.pi * delta * chi_s
-        - 964357 / 8128512 * delta
-        + 213 / 4 * eta * chi_a * chi_s
-        - 307 / 16 * chi_a * chi_s
-        + 3 * math.pi * chi_a
-    )
-    c6 = (
-        -547 / 768 * delta * eta**2 * chi_s
-        - 15 * delta * eta * chi_a**2 * chi_s
-        - 3 / 16 * delta * eta * chi_s**3
-        - 7049629 / 225792 * delta * eta * chi_s
-        + 417 / 112 * math.pi * delta * eta
-        - 1489 / 112 * i * delta * eta
-        - 89 / 28 * i * delta * eta * math.log(2)
-        + 729 / 64 * delta * chi_a**2 * chi_s
-        + 243 / 64 * delta * chi_s**3
-        + 143063173 / 5419008 * delta * chi_s
-        - 2455 / 1344 * math.pi * delta
-        - 335 / 1344 * i * delta
-        - 335 / 336 * i * delta * math.log(2)
-        + 42617 / 1792 * eta**2 * chi_a
-        - 15 * eta * chi_a**3
-        - 489 / 16 * eta * chi_a * chi_s**2
-        - 22758317 / 225792 * eta * chi_a
-        + 243 / 64 * chi_a**3
-        + 729 / 64 * chi_a * chi_s**2
-        + 143063173 / 5419008 * chi_a
-    )
-    return coef * (v1 * c1 + v2 * c2 + v3 * c3 + v4 * c4 + v5 * c5 + v6 * c6)
-
-
-def _H_33(v, eta, delta, chi_a, chi_s):
-    i = 1j
-    v1, v3, v4, v5, v6 = v, v**3, v**4, v**5, v**6
-    coef = -0.75 * i * math.sqrt(5 / 7)
-    c1 = delta
-    c3 = delta * (27 * eta / 8 - 1945 / 672)
-    c4 = (
-        -2 * delta * eta * chi_s / 3
-        + 65 * delta * chi_s / 24
-        + math.pi * delta
-        - 21 * i * delta / 5
-        + 6 * i * delta * math.log(3 / 2)
-        - 28 * eta * chi_a / 3
-        + 65 * chi_a / 24
-    )
-    c5 = (
-        420389 * delta * eta**2 / 63360
-        + 10 * delta * eta * chi_a**2
-        + delta * eta * chi_s**2 / 8
-        - 11758073 * delta * eta / 887040
-        - 81 * eta * chi_a**2 / 32
-        - 81 * eta * chi_s**2 / 32
-        - 1077664867 * delta / 447068160
-        + 81 * eta * chi_a * chi_s / 4
-        - 81 * chi_a * chi_s / 16
-    )
-    c6 = (
-        -67 * delta * eta**2 * chi_s / 72
-        - 58745 * delta * eta * chi_s / 4032
-        + 131 * math.pi * delta * eta / 16
-        - 440957 * i * delta * eta / 9720
-        + 69 * i * delta * eta * math.log(3 / 2) / 4
-        + 163021 * delta * chi_s / 16128
-        - 5675 * math.pi * delta / 1344
-        + 389 * i * delta / 32
-        - 1945 * i * delta * math.log(3 / 2) / 112
-        - 137 * eta**2 * chi_a / 24
-        - 148501 * eta * chi_a / 4032
-        + 163021 * chi_a / 16128
-    )
-    return coef * (v1 * c1 + v3 * c3 + v4 * c4 + v5 * c5 + v6 * c6)
-
-
-def _H_44(v, eta, delta, chi_a, chi_s):
-    i = 1j
-    v2, v4, v5, v6 = v**2, v**4, v**5, v**6
-    coef = math.sqrt(10 / 7) * 4 / 9
-    c2 = 3 * eta - 1
-    c4 = 1063 * eta**2 / 88 - 128221 * eta / 7392 + 158383 / 36960
-    c5 = (
-        math.pi * (2 - 6 * eta)
-        - eta
-        * (1695 * eta * chi_a + 2075 * chi_s - 3579 * i + 2880 * i * math.log(2))
-        / 120
-        + (
-            565 * delta * chi_a
-            + 1140 * eta**2 * chi_s
-            + 565 * chi_s
-            - 1008 * i
-            + 960 * i * math.log(2)
-        )
-        / 120
-    )
-    c6 = (
-        eta
-        * (
-            243 * delta * chi_a * chi_s / 16
-            + 563 * chi_a**2 / 32
-            + 247 * chi_s**2 / 32
-            - 22580029007 / 880588800
-        )
-        - 81 * delta * chi_a * chi_s / 16
-        - 7606537 * eta**3 / 274560
-        + eta**2 * (-30 * chi_a**2 - 3 * chi_s**2 / 8 + 901461137 / 11531520)
-        - 81 * chi_a**2 / 32
-        - 81 * chi_s**2 / 32
-        + 7888301437 / 29059430400
-    )
-    return coef * (v2 * c2 + v4 * c4 + v5 * c5 + v6 * c6)
-
-
-_H_BY_MODE = {(2, 2): _H_22, (2, 1): _H_21, (3, 3): _H_33, (4, 4): _H_44}
+_H_BY_MODE = {(2, 2): H_22, (2, 1): H_21, (3, 3): H_33, (4, 4): H_44}
 
 
 def _mode_pn_amp(lm, f_natural, eta, chi_a, chi_s):
@@ -674,8 +219,6 @@ def reference_phase_backbone_jax(params, f0_natural, lm, rel_step=1e-4):
     m = lm[1]
     q, lam1, lam2, chi1, chi2 = (params[:, k] for k in range(5))
     eta = q / (1.0 + q) ** 2
-    chi_a = (chi1 - chi2) / 2.0
-    chi_s = (chi1 + chi2) / 2.0
     h = f0_natural * rel_step
     lo = 2 * (f0_natural - h) / m
     hi = 2 * (f0_natural + h) / m
