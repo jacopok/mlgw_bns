@@ -93,6 +93,22 @@ DISTANCE_MPC = 100.0
 INCLINATION = 1.0
 TOTAL_MASS = 2.8
 
+#: Low-frequency floor for the full-waveform validation, in Hz. Below the
+#: trained band's own edge (``dataset.effective_initial_frequency_hz``,
+#: ~3.57 Hz for ``default_hom`` at ``TOTAL_MASS``), ``Model.predict`` /
+#: ``predict_modes_dict`` splice in each mode's post-Newtonian low-frequency
+#: extension (``ModeModel.predict_amplitude_phase``'s
+#: ``extend_with_post_newtonian``) rather than raising. ``ValidateModel``'s
+#: own machinery does not support this (it resamples the trained nodes and
+#: would extrapolate), so :func:`full_waveform_mismatches` and
+#: :func:`mismatch_vs_power_by_mode` build their own extended
+#: frequency/PSD grid via :func:`extended_frequency_grid` instead of using
+#: ``validator.frequencies`` directly, to exercise that code path with
+#: every sampled waveform. 2 Hz is comfortably below where any mode
+#: actually has EOB support (support masking still applies), so it
+#: validates the extension itself rather than moving the mismatch numbers.
+LOW_FREQUENCY_HZ = 2.0
+
 #: Grid sizes for the wall-clock timing benchmark (see
 #: :func:`timing_benchmark`); smaller than ``benchmark_evaluation_time.py``'s
 #: own defaults since this runs as one step of a broader validation pass,
@@ -566,13 +582,51 @@ def per_mode_mismatches(model: Model) -> dict:
     return mismatches_by_mode
 
 
+def extended_frequency_grid(
+    validator: ValidateModel, low_freq_hz: float = LOW_FREQUENCY_HZ
+):
+    r"""``validator``'s own PSD grid, extended down to ``low_freq_hz``.
+
+    :class:`ValidateModel` deliberately keeps :attr:`ValidateModel.frequencies`
+    at or above the trained band's own edge (see its docstring): its
+    ``true_waveforms``/``predicted_waveforms`` resample the trained nodes,
+    and going lower would extrapolate them. But ``Model.predict`` /
+    ``predict_modes_dict`` --- the production entry points this script is
+    validating --- handle frequencies below that edge themselves, via each
+    mode's post-Newtonian extension (see :data:`LOW_FREQUENCY_HZ`). This
+    builds a wider ``(frequencies, psd_values)`` pair, sourced from
+    ``validator``'s own (otherwise-unmasked) ``psd_data``, for callers that
+    want to exercise that code path instead.
+
+    Returns
+    -------
+    frequencies, psd_values : np.ndarray
+        Both restricted to ``[low_freq_hz, validator.frequencies[-1]]``.
+    """
+    all_frequencies = validator.psd_data[:, 0]
+    mask = (all_frequencies >= low_freq_hz) & (
+        all_frequencies <= validator.frequencies[-1]
+    )
+    return all_frequencies[mask], validator.psd_data[:, 1][mask]
+
+
 def full_waveform_mismatches(model: Model) -> tuple:
     r"""Compute the multi-mode full-waveform mismatch distribution.
 
     Compares :meth:`Model.predict_modes_dict` against the EOB ground
     truth from :meth:`Model.get_teob_modes_dict`, restricted to the
     band where the EOB waveform is actually defined (it is zero-padded
-    below its starting frequency).
+    below its starting frequency). The frequency grid itself
+    (:func:`extended_frequency_grid`) reaches down to
+    :data:`LOW_FREQUENCY_HZ`, well below where any mode has EOB support,
+    so that every ``predict_modes_dict`` call here exercises each mode's
+    post-Newtonian low-frequency extension; the *mismatch numbers* are
+    unaffected (the EOB-support masking below still excludes that region),
+    but a broken splice there --- e.g. a NaN or a discontinuity large
+    enough to leak into the supported band --- would otherwise pass
+    unnoticed, since :class:`ValidateModel`'s own machinery never
+    evaluates that code path at all. A non-finite value anywhere in the
+    predicted waveform raises immediately (see the assertion below).
 
     Also accumulates, per mode, the fraction of the total PSD-weighted
     power that mode carries, :math:`(h_{\ell m}|h_{\ell m}) / (h|h)`
@@ -597,7 +651,7 @@ def full_waveform_mismatches(model: Model) -> tuple:
     """
     reference_model = model.mode_models[Mode(2, 2)]
     validator = ValidateModel(reference_model)
-    frequencies = validator.frequencies
+    frequencies, psd_values = extended_frequency_grid(validator)
 
     parameter_generator = model.dataset.make_parameter_generator(SEED)
 
@@ -606,7 +660,7 @@ def full_waveform_mismatches(model: Model) -> tuple:
         return float(
             np.abs(
                 np.trapezoid(
-                    np.conj(a[mask]) * a[mask] / validator.psd_values[mask],
+                    np.conj(a[mask]) * a[mask] / psd_values[mask],
                     x=frequencies[mask],
                 )
             )
@@ -615,7 +669,7 @@ def full_waveform_mismatches(model: Model) -> tuple:
     def real_wiener_mismatch(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> float:
         """``1 - Re(a|b) / sqrt((a|a)(b|b))`` --- nothing optimised."""
         fm = frequencies[mask]
-        psd_m = validator.psd_values[mask]
+        psd_m = psd_values[mask]
 
         def ip(x, y):
             return np.trapezoid(np.conj(x[mask]) * y[mask] / psd_m, x=fm)
@@ -641,6 +695,14 @@ def full_waveform_mismatches(model: Model) -> tuple:
 
         predicted = model.predict_modes_dict(frequencies, params)
         true = model.get_teob_modes_dict(frequencies, params)
+
+        for key, mode_array in predicted.items():
+            if not np.all(np.isfinite(mode_array)):
+                raise RuntimeError(
+                    f"Non-finite values in the {key} mode's prediction down "
+                    f"to {LOW_FREQUENCY_HZ} Hz (q={intrinsic.mass_ratio:.3f}) "
+                    "-- the post-Newtonian low-frequency extension is broken."
+                )
 
         # The EOB modes are zero below the frequency where the waveform
         # actually starts; restrict to the common support.
@@ -732,13 +794,18 @@ def mismatch_vs_power_by_mode(model: Model, n_waveforms: int = N_FULL_WAVEFORM_M
         for mode in MODES
     }
     power_validator = ValidateModel(model.mode_models[Mode(2, 2)])
-    frequencies = power_validator.frequencies
+    # Down to LOW_FREQUENCY_HZ, like full_waveform_mismatches: exercises
+    # the post-Newtonian low-frequency extension in predict_modes_dict, and
+    # lets a mode's power fraction reflect its own EOB starting threshold
+    # if that happens to fall in [LOW_FREQUENCY_HZ, effective_initial_frequency_hz)
+    # (e.g. (2,1)'s, at m/2 * f0).
+    frequencies, psd_values = extended_frequency_grid(power_validator)
 
     parameter_generator = model.dataset.make_parameter_generator(SEED)
 
     def power(a: np.ndarray, mask: np.ndarray) -> float:
         """PSD-weighted power of a complex waveform over the support."""
-        weight = np.gradient(frequencies[mask]) / power_validator.psd_values[mask]
+        weight = np.gradient(frequencies[mask]) / psd_values[mask]
         return float(np.abs(np.sum(np.conj(a[mask]) * a[mask] * weight)))
 
     results: dict = {
@@ -1323,7 +1390,11 @@ if __name__ == "__main__":
     print("Computing per-mode mismatches...")
     mismatches_by_mode = per_mode_mismatches(model)
 
-    print("Computing full-waveform mismatches and per-mode power shares...")
+    print(
+        "Computing full-waveform mismatches and per-mode power shares "
+        f"(frequency grid down to {LOW_FREQUENCY_HZ} Hz, exercising the "
+        "post-Newtonian low-frequency extension)..."
+    )
     full_mismatches, full_mismatches_no_opt, power_fractions = full_waveform_mismatches(
         model
     )
