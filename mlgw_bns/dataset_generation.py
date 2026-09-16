@@ -1636,10 +1636,19 @@ class Dataset:
         )
 
         def generate_single(par):
-            _, amp, phi = self.waveform_generator.effective_one_body_waveform(
-                par, self.frequencies
-            )
-            return amp[amp_indices], phi[phi_indices], par.array
+            # Mirrors `generate_residuals`'s `generate_single`: a handful of
+            # parameter draws make the EOB tidal root finder fail to bracket
+            # (extreme, but in-range, mass-ratio/lambda combinations); skip
+            # them rather than losing the whole batch, since the callers
+            # here already tolerate fewer waveforms than requested (see
+            # `DownsamplingTraining.train`'s `n_use`).
+            try:
+                _, amp, phi = self.waveform_generator.effective_one_body_waveform(
+                    par, self.frequencies
+                )
+                return amp[amp_indices], phi[phi_indices], par.array
+            except Exception:
+                return None
 
         with joblib_progress("Generating waveforms", len(waveform_param_list)):
             results = Parallel(n_jobs=n_jobs)(
