@@ -34,11 +34,19 @@ Scope / accuracy
   output tracks the numpy pipeline to ~1e-4 relative, not bit-for-bit.
 * The library resamples with a *not-a-knot* spline; this uses a frozen
   linear solve for the not-a-knot second derivatives, matching it.
-* The low-frequency TaylorF2 splice (only below
+* The low-frequency TaylorF2 splice (below
   ``effective_initial_frequency_hz`` ~ 3.57 Hz, i.e. ``total_mass``
   below the dataset reference or a query grid starting that low) and the
-  high-frequency zero-padding are **not** ported; keep the query grid
-  inside ``[f_min_effective * M_ref / total_mass, f_max_trained]``.
+  high-frequency zero-padding *are* ported, matching
+  :meth:`ModeModel.predict_amplitude_phase_optimized`'s per-mode
+  splice/mask logic --- but as a fixed-shape ``jnp.where`` blend over the
+  whole query grid rather than the numpy path's dynamic slicing (which
+  JAX's static-shape tracing can't express), since ``total_mass`` is a
+  traced scalar and the extension point can fall anywhere in the grid.
+  Amplitude blends smoothly into the connection point (same
+  ``smoothing_func``); phase is glued on with a rigid additive shift
+  (any 2π branch mismatch in the raw PN evaluation is invisible, since
+  only ``cos``/``sin`` of the final phase are ever used).
 """
 
 from __future__ import annotations
@@ -440,6 +448,7 @@ def model_to_jax_waveform(model: "Model") -> Callable:
     pn_amp_frozen = []
     amp_knots_hz = []
     phi_knots_hz = []
+    trained_fmax_hz = []
 
     for lm in modes:
         mm = model.mode_models[_PMode(*lm)]
@@ -459,6 +468,16 @@ def model_to_jax_waveform(model: "Model") -> Callable:
         pn_amp_frozen.append(
             _mode_pn_amp(lm, af, ref_eta, ref_chi_a, ref_chi_s)
         )
+        # `ModeModel.predict_amplitude_phase_optimized` extends with zeros
+        # past its own last trained node (not the theoretical Nyquist edge,
+        # see `[[predict-amplitude-phase-hf-edge]]`).
+        trained_fmax_hz.append(float(fz[-1]))
+
+    # Fixed (mass-invariant) natural-units frequency of the low-frequency
+    # splice point, `effective_initial_frequency_hz`; see the matching
+    # `connection_f` in `predict_amplitude_phase_optimized`.
+    connection_f_natural = eff_fmin_hz * mass_sum_seconds
+    f_min_connection_hz = eff_fmin_hz / 2.0
 
     mode_phases_fn = mode_phases_nn_to_jax(model.mode_phases_predictor, model.modes)
     timeshift_fn = timeshifts_nn_to_jax(model.time_shifts_predictor)
@@ -542,6 +561,28 @@ def model_to_jax_waveform(model: "Model") -> Callable:
 
         pre = total_mass**2 / _AMP_SI_BASE * eta / distance_mpc  # (n,)
 
+        # ------------------------------------------------------------ #
+        # Low-frequency PN splice / high-frequency zero-padding, mirroring
+        # `ModeModel.predict_amplitude_phase_optimized`. `rescaled_flat` is
+        # `rescaled` without the leading batch axis (frequencies_hz and
+        # total_mass are shared across the `params` batch), used as a
+        # fixed-shape mask/blend rather than the numpy path's dynamic
+        # slicing (not expressible under JAX's static shapes, since
+        # `total_mass` is a traced scalar).
+        # ------------------------------------------------------------ #
+        mass_sum_seconds_query = total_mass * _SUN_MASS_SECONDS
+        f_natural_low = freqs * mass_sum_seconds_query  # (k,)
+        rescaled_flat = freqs * (total_mass / m_ref)  # (k,)
+        mask_low = rescaled_flat < eff_fmin_hz  # (k,)
+        zero_to_one = jnp.clip(
+            (rescaled_flat - f_min_connection_hz) / (eff_fmin_hz - f_min_connection_hz),
+            0.0,
+            1.0,
+        )
+        smoothing = (1.0 - jnp.cos(zero_to_one * math.pi)) / 2.0  # (k,)
+        conn_natural = jnp.asarray(connection_f_natural)
+        eff_fmin_hz_j = jnp.asarray(eff_fmin_hz)
+
         hp = jnp.zeros((params.shape[0], freqs.shape[0]), dtype=jnp.complex128)
         hc = jnp.zeros_like(hp)
 
@@ -567,7 +608,53 @@ def model_to_jax_waveform(model: "Model") -> Callable:
             amp_rs = jax.vmap(amp_splines[i], in_axes=(0, 0))(amp_ds, rescaled)
             phi_rs = jax.vmap(phi_splines[i], in_axes=(0, 0))(phi_ds, rescaled)
 
+            # Low-frequency PN splice: raw (unfrozen, per-row) PN amplitude
+            # and phase, matching `low_amp`/`low_phi` in
+            # `predict_amplitude_phase_optimized` --- unlike the in-band
+            # `amp_ds` above, these use the query's own eta/spins, not the
+            # frozen `amplitude_reference_parameters`.
+            def _low_pn_one(row, _lm=lm):
+                q_row = row[0]
+                e = q_row / (1.0 + q_row) ** 2
+                c1, c2 = row[3], row[4]
+                ca, cs = (c1 - c2) / 2.0, (c1 + c2) / 2.0
+                low_amp = _mode_pn_amp(_lm, f_natural_low, e, ca, cs)
+                low_phi = _mode_pn_phase(_lm, f_natural_low, e, c1, c2, ca, cs, row[1], row[2])
+                return low_amp, low_phi
+
+            def _low_pn_conn_one(row, _lm=lm):
+                q_row = row[0]
+                e = q_row / (1.0 + q_row) ** 2
+                c1, c2 = row[3], row[4]
+                ca, cs = (c1 - c2) / 2.0, (c1 + c2) / 2.0
+                amp_conn = _mode_pn_amp(_lm, conn_natural, e, ca, cs)
+                phi_conn = _mode_pn_phase(
+                    _lm, jnp.atleast_1d(conn_natural), e, c1, c2, ca, cs, row[1], row[2]
+                )[0]
+                return amp_conn, phi_conn
+
+            low_amp_full, low_phi_full = jax.vmap(_low_pn_one)(params)  # (n, k)
+            low_amp_conn, low_phi_conn = jax.vmap(_low_pn_conn_one)(params)  # (n,)
+
+            # Spline value exactly at the connection frequency, per row ---
+            # `resampled_amp[0]`/`resampled_phi[0]` in the numpy path, once
+            # `eff_fmin_hz` has been inserted as a query knot there.
+            amp_at_conn = jax.vmap(amp_splines[i], in_axes=(0, None))(amp_ds, eff_fmin_hz_j)
+            phi_at_conn = jax.vmap(phi_splines[i], in_axes=(0, None))(phi_ds, eff_fmin_hz_j)
+
+            amp_diff = amp_at_conn - low_amp_conn  # (n,)
+            phi_shift = phi_at_conn - low_phi_conn  # (n,)
+
+            low_amp_blended = low_amp_full + smoothing[None, :] * amp_diff[:, None]
+            low_phi_blended = low_phi_full + phi_shift[:, None]
+
+            amp_rs = jnp.where(mask_low[None, :], low_amp_blended, amp_rs)
+            phi_rs = jnp.where(mask_low[None, :], low_phi_blended, phi_rs)
+
             amp = amp_rs * pre[:, None]
+            # High-frequency zero-padding, past this mode's own last
+            # trained node.
+            amp = jnp.where(rescaled_flat[None, :] > trained_fmax_hz[i], 0.0, amp)
             phi = (
                 phi_rs
                 + m * reference_phase
