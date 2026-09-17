@@ -8,10 +8,16 @@ for the current API:
 
 * the pretrained model is loaded with :meth:`Model.default_for_testing`
   (the only shipped model, ``default_hom``, covers the (2,2), (2,1),
-  (3,3) and (4,4) modes), so ``predict`` here exercises the full
-  multi-mode observer-frame reconstruction;
+  (3,1), (3,2), (3,3), (4,3) and (4,4) modes -- :data:`mlgw_bns.model.DEFAULT_MODES`),
+  so ``predict`` here exercises the full multi-mode observer-frame
+  reconstruction;
 * parameters are drawn from ``model.dataset.make_parameter_generator``,
   with distance and inclination randomised on top.
+
+Also includes a reduced-mode variant (:class:`MlgwBnsReducedModes`, only
+predicting :data:`REDUCED_MODES`, the (2,2)/(2,1)/(3,3)/(4,4) subset the
+original shipped model was limited to) for comparison against the full
+model.
 
 For each ``(approximant, seed, n_points)`` triple the setup (parameter
 draw, grid construction) is done outside the timed region and only
@@ -47,6 +53,7 @@ from scipy.optimize import curve_fit
 from tqdm import tqdm
 
 import mlgw_bns
+from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.model import Model
 from mlgw_bns.mode_model import ParametersWithExtrinsic
 
@@ -57,6 +64,19 @@ try:  # optional -- only needed for the LAL approximants
     _HAVE_LAL = True
 except Exception:  # pragma: no cover - environment dependent
     _HAVE_LAL = False
+
+try:  # optional -- only needed for the JAX approximants
+    import jax
+
+    _HAVE_JAX = True
+except Exception:  # pragma: no cover - environment dependent
+    _HAVE_JAX = False
+
+#: Modes for :class:`MlgwBnsReducedModes` -- the (2,2)/(2,1)/(3,3)/(4,4)
+#: subset the original shipped model was limited to, kept as a fixed
+#: reference point now that :data:`mlgw_bns.model.DEFAULT_MODES` covers
+#: all 7 modes of the current shipped model.
+REDUCED_MODES = [Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
 
 
 def random_parameters(model: Model, seed: int) -> ParametersWithExtrinsic:
@@ -119,6 +139,17 @@ class MlgwBns(Approximant):
 
     def calculate(self) -> None:
         self.model.predict(self.frequencies, self.params)
+
+
+class MlgwBnsReducedModes(MlgwBns):
+    """`MlgwBns`, but predicting only :data:`REDUCED_MODES`
+    ((2,2), (2,1), (3,3), (4,4)), for comparison against the full model."""
+
+    name = "mlgw_bns (22, 21, 33, 44 only)"
+
+    def __init__(self, model_name: str = "default_hom") -> None:
+        self.model = Model.default_for_testing(model_name, modes=list(REDUCED_MODES))
+        self.dataset = self.model.dataset
 
 
 class MlgwBnsJax(Approximant):
@@ -431,9 +462,9 @@ def main() -> None:
     )
     parser.add_argument("--no-lal", action="store_true", help="skip LAL approximants")
     parser.add_argument(
-        "--jax",
+        "--no-jax",
         action="store_true",
-        help="also benchmark the JAX port (single call + a batch under jax.vmap)",
+        help="skip the JAX port (single call + a batch under jax.vmap)",
     )
     parser.add_argument("--jax-batch", type=int, default=1024)
     parser.add_argument(
@@ -452,10 +483,16 @@ def main() -> None:
         {int(x) for x in np.logspace(2, args.log_max, num=args.n_grid, dtype=int)}
     )
 
-    approximants: list[Approximant] = [MlgwBns(), TEOBResumSPA()]
-    if args.jax:
+    approximants: list[Approximant] = [
+        MlgwBns(),
+        MlgwBnsReducedModes(),
+        TEOBResumSPA(),
+    ]
+    if _HAVE_JAX and not args.no_jax:
         approximants.append(MlgwBnsJax())
         approximants.append(MlgwBnsJaxBatch(batch=args.jax_batch))
+    elif not _HAVE_JAX:
+        logging.warning("JAX not importable -- JAX approximants skipped")
     if _HAVE_LAL and not args.no_lal:
         for approx_name in ("SEOBNRv4_ROM_NRTidalv2", "SEOBNRv4T_surrogate"):
             try:

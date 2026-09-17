@@ -65,7 +65,15 @@ PRETRAINED_MODEL_FOLDER = "data/"
 MODELS_AVAILABLE = ["default_hom"]
 
 #: Modes covered by the pretrained models.
-DEFAULT_MODES = [Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
+DEFAULT_MODES = [
+    Mode(2, 2),
+    Mode(2, 1),
+    Mode(3, 1),
+    Mode(3, 2),
+    Mode(3, 3),
+    Mode(4, 3),
+    Mode(4, 4),
+]
 
 
 @njit(parallel=True, fastmath=True)
@@ -1088,12 +1096,25 @@ class Model:
 
     def _propagate_mode_phases_predictor(self) -> None:
         """Point every already-built per-mode model at the shared
-        mode-phases predictor, tagging each with its output column."""
-        for idx, mode in enumerate(self.modes):
-            if mode in self.mode_models:
+        mode-phases predictor, tagging each with its output column.
+
+        The column index is looked up in the *predictor's own*
+        ``modes`` list (its training order), not ``self.modes`` ---
+        which may list the same modes in a different order (e.g. a
+        caller requesting ``modes=[...]`` in a different sequence than
+        the pretrained checkpoint was fit with). Indexing off
+        ``self.modes`` instead silently feeds every mismatched mode
+        another mode's reference-phase column.
+        """
+        predictor = self.mode_phases_predictor
+        if predictor is None or predictor.modes is None:
+            return
+        predictor_index = {tuple(lm): idx for idx, lm in enumerate(predictor.modes)}
+        for mode in self.modes:
+            if mode in self.mode_models and (mode.l, mode.m) in predictor_index:
                 mm = self.mode_models[mode]
-                mm.mode_phases_predictor = self.mode_phases_predictor
-                mm.mode_phases_index = idx
+                mm.mode_phases_predictor = predictor
+                mm.mode_phases_index = predictor_index[(mode.l, mode.m)]
 
     def _propagate_time_shifts_predictor(self) -> None:
         """Point every already-built per-mode model at the shared predictor.

@@ -140,6 +140,16 @@ def test_default_for_testing_rejects_unknown_name():
 DEFAULT_MODEL_MAX_MISMATCH = 4e-3
 DEFAULT_MODEL_MEDIAN_MISMATCH = 6e-4
 
+# Measured on the packaged 7-mode model (hom7_big) over the eight binaries
+# `test_full_waveform_mismatch_is_flat_in_total_mass` draws (seed 7): medians
+# of 4.1e-5, 7.9e-5 and 1.5e-4 at total_mass 2.2, 2.8 and 3.6 respectively --
+# rising smoothly with mass rather than jumping at the 2.8 dataset reference,
+# so the PN-splice bug the test guards against is not back. The floor moved
+# up an order of magnitude from the old 4-mode default (odd-m HOM modes are
+# harder to fit, see mode21-q1-boundary-singularity); this carries about the
+# same 2x headroom as `DEFAULT_MODEL_MEDIAN_MISMATCH` above.
+FLAT_MASS_MEDIAN_MISMATCH = 3e-4
+
 
 def test_default_model_full_waveform_mismatch(default_model):
     """Compare the summed multi-mode waveform against the EOB ground truth."""
@@ -222,7 +232,7 @@ def test_full_waveform_mismatch_is_flat_in_total_mass(default_model, total_mass)
             )
         )
 
-    assert np.median(mismatches) < 1e-5
+    assert np.median(mismatches) < FLAT_MASS_MEDIAN_MISMATCH
 
 
 def test_reference_phase_is_a_coalescence_phase(default_model):

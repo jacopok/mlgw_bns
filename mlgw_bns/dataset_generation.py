@@ -566,6 +566,8 @@ class WaveformParameters:
             "LambdaBl2": self.lambda_2,
             "chi1": self.chi_1,
             "chi2": self.chi_2,
+            "chi1z": self.chi_1,
+            "chi2z": self.chi_2,
             "M": self.dataset.total_mass,
             "distance": 1.0,
             "initial_frequency": initial_freq,
