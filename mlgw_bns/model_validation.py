@@ -34,7 +34,7 @@ from scipy import integrate  # type: ignore
 from scipy.interpolate import interp1d  # type: ignore
 from scipy.optimize import dual_annealing, minimize, minimize_scalar  # type: ignore
 from tqdm import tqdm  # type: ignore
-
+fill_value='extrapolate'
 from .data_management import FDWaveforms
 from .dataset_generation import ParameterSet
 from .mode_model import FrequencyTooHighError, FrequencyTooLowError, ModeModel
@@ -43,6 +43,22 @@ from .resample_residuals import cartesian_waveforms_at_frequencies
 
 
 PSD_PATH: Path = Path(__file__).parent / "data"
+
+
+def _trapezoid_weights(x: np.ndarray) -> np.ndarray:
+    r"""Per-point quadrature weights such that ``sum(f * weights) == trapz(f, x)``.
+
+    Used by :meth:`ValidateModel.full_waveform_mismatch` to vectorise its
+    grid search: expressing the trapezoidal rule as a fixed weight per
+    frequency point (rather than calling :func:`scipy.integrate.trapezoid`
+    once per grid point) turns the whole ``(t_c, phi_c)`` grid into a
+    couple of matrix multiplications.
+    """
+    weights = np.empty_like(x, dtype=float)
+    weights[1:-1] = (x[2:] - x[:-2]) / 2
+    weights[0] = (x[1] - x[0]) / 2
+    weights[-1] = (x[-1] - x[-2]) / 2
+    return weights
 
 
 class ValidateModel:
@@ -117,6 +133,7 @@ class ValidateModel:
         return interp1d(
             self.frequencies,
             self.psd_values,
+            fill_value='extrapolate'
         )
 
     def time_shifts_predictor(self) -> Union[TimeshiftsNN, TimeshiftsGPR]:
@@ -600,7 +617,8 @@ class ValidateModel:
         frequencies: Optional[np.ndarray] = None,
         max_delta_t: float = 0.07,
         max_delta_phi: float = 2 * np.pi,
-    ) -> float:
+        return_shifts: bool = False,
+    ) -> Union[float, Tuple[float, float, float]]:
         r"""Mismatch between two multi-mode waveforms, with time/phase marginalisation.
 
         For full waveforms with higher modes, the mismatch cannot be
@@ -637,13 +655,22 @@ class ValidateModel:
                 Maximum reference phase shift for the two waveforms
                 which are being compared, in radians. Defaults to
                 :math:`2\pi`.
+        return_shifts : bool
+                If ``True``, also return the ``(delta_t, delta_phi)``
+                that realise the optimum, alongside the mismatch ---
+                used where the *alignment itself* (not just the
+                mismatch it achieves) is of interest, e.g. how large a
+                time/phase correction a partial mode reconstruction
+                needs relative to the full waveform.
 
         Returns
         -------
-        float
+        float or tuple[float, float, float]
                 The mismatch between the two waveforms, marginalised
-                over time and phase. Returns ``1.0`` as a fallback if
-                the optimisation fails.
+                over time and phase. Returns ``1.0`` (or ``(1.0, 0.0,
+                0.0)`` with ``return_shifts``) as a fallback if the
+                optimisation fails. With ``return_shifts=True``, a
+                ``(mismatch, delta_t, delta_phi)`` tuple instead.
         """
         if frequencies is None:
             frequencies = self.frequencies
@@ -660,7 +687,6 @@ class ValidateModel:
             return abs(product_complex(a, b))
 
         waveform_1_summed = sum(modes_1.values())
-        waveform_2_summed = sum(modes_2.values())
         norm_1 = np.sqrt(product(waveform_1_summed, waveform_1_summed))
 
         def to_minimize(params: np.ndarray) -> float:
@@ -689,17 +715,53 @@ class ValidateModel:
 
         try:
             # Two-stage: coarse grid search followed by local refinement.
+            # The grid search is vectorised rather than a double Python
+            # loop calling `to_minimize` --- this matters because this
+            # method's typical caller (a mismatch distribution over many
+            # sampled waveforms/orientations) makes O(10^4-10^5) calls.
+            #
+            # Under a coalescence-phase rotation each (l, m) mode of
+            # ``modes_2`` picks up e^{i m phi_c}, and every mode picks up
+            # the same time-shift phasor e^{2 pi i f t_c}; grouping modes
+            # by their shared azimuthal number ``m`` therefore separates
+            # the phi_c- and t_c-dependence into, respectively, a
+            # (n_phi, n_freq) matrix ``g`` and a (n_freq, n_t) phasor
+            # matrix, whose product gives every (t_c, phi_c) overlap on
+            # the grid in one matrix multiplication. The per-phi_c norm
+            # (||waveform_2_shifted||, needed since the phase rotation
+            # changes the cross terms --- see `to_minimize`) is also
+            # t_c-independent, since |e^{2 pi i f t_c}| = 1, and so is
+            # computed once per phi_c rather than once per grid point.
             t_grid = np.linspace(-max_delta_t, max_delta_t, 40)
             phi_grid = np.linspace(-max_delta_phi, max_delta_phi, 25)
-            best_val = np.inf
-            best_params = np.array([0.0, 0.0])
 
-            for t_c in t_grid:
-                for phi_c in phi_grid:
-                    val = to_minimize(np.array([t_c, phi_c]))
-                    if val < best_val:
-                        best_val = val
-                        best_params = np.array([t_c, phi_c])
+            m_values = sorted({m for (_l, m) in modes_2})
+            grouped_by_m = np.stack(
+                [
+                    sum(v for (_l, m), v in modes_2.items() if m == m_target)
+                    for m_target in m_values
+                ]
+            )  # (n_m, n_freq)
+
+            quadrature_weights = _trapezoid_weights(frequencies) / psd_values
+            phi_phasors = np.exp(1j * np.outer(phi_grid, m_values))  # (n_phi, n_m)
+            g = phi_phasors @ grouped_by_m  # (n_phi, n_freq): waveform_2, un-time-shifted
+
+            norm_2_grid = np.sqrt(
+                np.abs(np.sum(np.conj(g) * g * quadrature_weights, axis=1))
+            )  # (n_phi,)
+
+            weighted_truth = np.conj(waveform_1_summed) * quadrature_weights
+            t_phasors = np.exp(2j * np.pi * np.outer(frequencies, t_grid))  # (n_freq, n_t)
+            overlap_grid = (g * weighted_truth) @ t_phasors  # (n_phi, n_t)
+
+            with np.errstate(divide="ignore", invalid="ignore"):
+                match_grid = np.abs(overlap_grid) / (norm_1 * norm_2_grid[:, None])
+            match_grid = np.nan_to_num(match_grid, nan=0.0, posinf=0.0, neginf=0.0)
+
+            p_idx, t_idx = np.unravel_index(np.argmax(match_grid), match_grid.shape)
+            best_val = -float(match_grid[p_idx, t_idx])
+            best_params = np.array([t_grid[t_idx], phi_grid[p_idx]])
 
             res = minimize(
                 to_minimize,
@@ -720,12 +782,18 @@ class ValidateModel:
                     "(%s); using the better of the refined and grid-search estimates.",
                     res.message,
                 )
-                best_val = min(best_val, res.fun)
+                if res.fun < best_val:
+                    best_val = res.fun
+                    best_params = res.x
             else:
                 best_val = res.fun
+                best_params = res.x
 
             # `to_minimize` already returns the negative normalised match.
-            return 1 + best_val
+            mismatch = 1 + best_val
+            if return_shifts:
+                return mismatch, float(best_params[0]), float(best_params[1])
+            return mismatch
 
         except Exception as e:
             logging.warning(
@@ -733,7 +801,7 @@ class ValidateModel:
                 "Returning fallback mismatch 1.0.",
                 e,
             )
-            return 1.0
+            return (1.0, 0.0, 0.0) if return_shifts else 1.0
 
     def sky_maximized_mismatch(
         self,

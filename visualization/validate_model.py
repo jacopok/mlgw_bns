@@ -39,8 +39,10 @@ single shared predictor from the (2,2) mode and applies it to every mode.
 Run with: python visualization/validate_model.py
 """
 
+import copy
 import logging
 import os
+import pickle
 import sys
 from time import perf_counter
 from typing import Optional
@@ -49,15 +51,42 @@ import matplotlib
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
+from tqdm import tqdm
 
 from mlgw_bns.data_management import FDWaveforms, Residuals
 from mlgw_bns.dataset_generation import ParameterSet
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.mode_model import ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
-from mlgw_bns.model import Model
+from mlgw_bns.model import Model, _broadcast_time_shifts, _build_mode_coeffs
 
 logging.basicConfig(level=logging.WARNING)
+
+#: LaTeX rendering (real ``text.usetex``, not just mathtext) for every
+#: plot in this script, set globally so individual plotting functions
+#: don't each have to opt in.
+plt.rcParams.update(
+    {
+        "text.usetex": True,
+        "font.family": "serif",
+    }
+)
+
+
+def _sci_latex(x: float, sig: int = 1) -> str:
+    r"""Format ``x`` as LaTeX scientific notation, e.g. ``$8.9 \times 10^{-4}$``.
+
+    Used for axis/tick labels where Python's ``e`` notation (``8.9e-04``)
+    would look out of place next to LaTeX-rendered text.
+    """
+    if x <= 0:
+        return "$0$"
+    exponent = int(np.floor(np.log10(x)))
+    mantissa = x / 10**exponent
+    if round(mantissa, sig) >= 10.0:
+        mantissa /= 10.0
+        exponent += 1
+    return rf"${mantissa:.{sig}f} \times 10^{{{exponent}}}$"
 
 #: Default model to validate, relative to this directory. Override with
 #: ``--model``; the figures are then named after it, so that several
@@ -65,12 +94,26 @@ logging.basicConfig(level=logging.WARNING)
 MODEL_FILENAME = "../default_hom"
 OUTPUT_PREFIX = "validation"
 
-MODES = [Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
+MODES = [Mode(2, 2), Mode(2, 1), Mode(3, 1), Mode(3, 2), Mode(3, 3), Mode(4, 3), Mode(4, 4)]
 
 N_RESIDUAL_WAVEFORMS = 40
 N_MISMATCH_WAVEFORMS = 100
 N_FULL_WAVEFORM_MISMATCHES = 100
 N_PREDICTOR_VALIDATION_WAVEFORMS = 1000
+
+#: Sample sizes for :func:`mode_subset_data`: ``N_MODE_SUBSET_WAVEFORMS``
+#: intrinsic (mass/spin) draws, each re-evaluated at
+#: ``N_MODE_SUBSET_ORIENTATIONS`` random inclination/coalescence-phase
+#: draws --- the mode content of a waveform is fixed per intrinsic draw
+#: (computed once), so this is the expensive axis: every
+#: (waveform, orientation, mode subset) triple runs its own
+#: time-and-phase-optimised ``full_waveform_mismatch``. Lower these for a
+#: quick check.
+N_MODE_SUBSET_WAVEFORMS = 100
+N_MODE_SUBSET_ORIENTATIONS = 100
+#: Distinct from SEED (used for the intrinsic draws below) so the
+#: inclination/phase sampling doesn't reuse the same stream.
+MODE_SUBSET_ORIENTATION_SEED = 20260917
 
 SEED = 17
 #: Seed for the time-shift/mode-phases predictor validation: deliberately
@@ -113,7 +156,7 @@ LOW_FREQUENCY_HZ = 2.0
 #: :func:`timing_benchmark`); smaller than ``benchmark_evaluation_time.py``'s
 #: own defaults since this runs as one step of a broader validation pass,
 #: not a dedicated timing sweep.
-TIMING_N_POINTS = (64, 512, 4096)
+TIMING_N_POINTS = (64, 128, 256, 512, 1024, 2048, 4096)
 TIMING_SEEDS = 5
 TIMING_EPOCHS = 2
 TIMING_JAX_BATCH = 1024
@@ -897,20 +940,20 @@ def plot_mismatch_vs_power(data: dict) -> None:
             per_mode["power_fraction"],
             per_mode["optimised"],
             color=color,
-            alpha=0.25,
             s=14,
+            alpha=1.0,
             marker="o",
             linewidths=0,
+            label=label,
         )
         ax.scatter(
             per_mode["power_fraction"],
             per_mode["regressed"],
             color=color,
-            alpha=1.0,
             s=14,
             marker="o",
+            alpha=0.25,
             linewidths=0,
-            label=label,
         )
 
     ax.set_xscale("logit")
@@ -918,16 +961,458 @@ def plot_mismatch_vs_power(data: dict) -> None:
     ax.set_xlabel("Power fraction, $\\max$(EOB, mlgw)")
     ax.set_ylabel("Mismatch")
     ax.set_title(
-        "faint: residual time+phase optimised    "
-        "full color: predicted \u0394t + reference phase, nothing optimised (regressed)",
+        "full: residual time+phase optimised    "
+        "faint: predicted \u0394t + reference phase, nothing optimised (regressed)",
         fontsize="small",
     )
     ax.grid(True)
     ax.legend()
     fig.suptitle("Per-mode mismatch vs. power fraction")
     fig.tight_layout()
+    ax.set_xlim(ax.get_xlim()[0], 1-1e-5)
 
     outfile = f"{OUTPUT_PREFIX}_mismatch_vs_power.png"
+    fig.savefig(outfile, dpi=150)
+    print(f"Saved plot to {outfile}")
+
+
+def _mode_bases(model: Model, params: ParametersWithExtrinsic, frequencies: np.ndarray):
+    r"""Per-mode EOB/surrogate amplitude and phase, before :math:`Y_{\ell m}`.
+
+    Both the reference-phase rotation (:math:`m \varphi_c`) and the
+    inclination-dependent :math:`{}_{-2}Y_{\ell m}(\iota,\varphi)` weight
+    are cheap to apply after the fact (see :func:`_mode_cartesian`), so
+    this factors out the two expensive parts --- the EOB call and the
+    surrogate NN inference --- computed once per intrinsic draw with
+    ``params.reference_phase`` forced to zero. :func:`mode_subset_data`
+    then reuses these bases across every sampled inclination/phase pair,
+    rather than re-running the EOB generator or the NN once per
+    orientation.
+
+    Mirrors :meth:`Model.get_teob_modes_dict` (for the truth) and
+    :meth:`Model._hpc_waveform_per_mode` (for the surrogate, whose
+    ``predict_amplitude_phase_optimized`` already bakes in
+    ``params.reference_phase``, hence forcing it to zero here).
+
+    Returns
+    -------
+    amp_true, phase_true, amp_pred, phase_pred : dict[Mode, np.ndarray]
+        One array per mode in ``model.modes``.
+    support : np.ndarray
+        Boolean mask, ``True`` where every mode has nonzero EOB truth
+        amplitude (i.e. where the EOB waveform is not zero-padded).
+    """
+    assert params.reference_phase == 0.0
+
+    dataset = model.dataset
+    dataset_for_teob = copy.copy(dataset)
+    dataset_for_teob.total_mass = params.total_mass
+    params_teob = params.intrinsic(dataset_for_teob)
+
+    f_natural = frequencies * params.mass_sum_seconds
+    generator = model.mode_models[model.modes[0]].waveform_generator
+    eob_waveforms = generator.all_modes_amplitude_phase(params_teob, model.modes, f_natural)
+
+    amp_true = {}
+    phase_true = {}
+    for mode in model.modes:
+        _, amp, phase = eob_waveforms[mode]
+        amp_true[mode] = amp
+        phase_true[mode] = phase
+
+    ts_per_mode = _broadcast_time_shifts(
+        model._resolve_time_shifts(params, None), len(model.modes)
+    )
+    reference_frequency_hz = dataset.effective_initial_frequency_hz * (
+        dataset.total_mass / params.total_mass
+    )
+
+    amp_pred = {}
+    phase_pred = {}
+    for idx, mode in enumerate(model.modes):
+        amp, phase = model.mode_models[mode].predict_amplitude_phase_optimized(
+            frequencies, params, apply_time_shift=False
+        )
+        ts_scaled = ts_per_mode[idx] * (params.total_mass / dataset.total_mass)
+        amp_pred[mode] = amp
+        phase_pred[mode] = phase + 2 * np.pi * (frequencies - reference_frequency_hz) * ts_scaled
+
+    support = np.ones(len(frequencies), dtype=bool)
+    for mode in model.modes:
+        support &= np.abs(amp_true[mode]) > 0
+
+    return amp_true, phase_true, amp_pred, phase_pred, support
+
+
+def _mode_cartesian(amp: np.ndarray, phase: np.ndarray, coeffs: np.ndarray) -> np.ndarray:
+    r"""One mode's :math:`h_+ - i h_\times` contribution, given its coefficients.
+
+    ``coeffs`` (shape ``(8,)``) are the per-mode spherical-harmonic
+    coefficients built by :func:`~mlgw_bns.model._build_mode_coeffs`,
+    already encoding the requested inclination; this applies the same
+    combination as :meth:`Model.predict_modes_dict` /
+    :meth:`Model.get_teob_modes_dict`. The overall :math:`1/(2\eta)`
+    normalisation both of those apply is omitted --- it is a real,
+    positive, waveform-independent factor and so cancels out of every
+    mismatch computed from the result.
+    """
+    cosphi = np.cos(phase)
+    sinphi = np.sin(phase)
+    h_plus = amp * (cosphi * coeffs[0] + sinphi * coeffs[1]) + 1j * amp * (
+        cosphi * coeffs[2] + sinphi * coeffs[3]
+    )
+    h_cross = amp * (cosphi * coeffs[4] + sinphi * coeffs[5]) + 1j * amp * (
+        cosphi * coeffs[6] + sinphi * coeffs[7]
+    )
+    return h_plus - 1j * h_cross
+
+
+def _mode_subset_bases_cache_path(n_waveforms: int) -> str:
+    """Where :func:`mode_subset_data` caches its expensive per-waveform bases.
+
+    Keyed by ``OUTPUT_PREFIX`` (so different models don't collide) and by
+    the number of waveforms it holds.
+    """
+    return f"{OUTPUT_PREFIX}_mode_subset_bases_n{n_waveforms}.pkl"
+
+
+def _load_mode_subset_bases_cache() -> Optional[dict]:
+    """Load the largest on-disk bases cache for the current ``OUTPUT_PREFIX``.
+
+    Returned regardless of how it compares to the caller's requested
+    ``n_waveforms``: :func:`mode_subset_data` truncates it if it is
+    larger, or tops it up (continuing the same parameter-generator
+    stream) if it is smaller.
+    """
+    candidates = []
+    prefix = f"{OUTPUT_PREFIX}_mode_subset_bases_n"
+    directory = os.path.dirname(prefix) or "."
+    base = os.path.basename(prefix)
+    for name in os.listdir(directory):
+        if name.startswith(base) and name.endswith(".pkl"):
+            try:
+                count = int(name[len(base) : -len(".pkl")])
+            except ValueError:
+                continue
+            candidates.append((count, os.path.join(directory, name)))
+    if not candidates:
+        return None
+    _, path = max(candidates)
+    with open(path, "rb") as f:
+        cached = pickle.load(f)
+    print(f"  Loaded {len(cached['per_waveform'])} cached waveform bases from {path}")
+    return cached
+
+
+def mode_subset_data(
+    model: Model,
+    n_waveforms: int = N_MODE_SUBSET_WAVEFORMS,
+    n_orientations: int = N_MODE_SUBSET_ORIENTATIONS,
+    use_cache: bool = True,
+) -> dict:
+    r"""Full-waveform mismatch vs. how many modes the surrogate reconstructs.
+
+    Compares the *full* (all-modes) EOB truth against the surrogate
+    restricted to a cumulative subset of modes --- (2,2) only; (2,2) plus
+    the next most powerful mode; and so forth --- to see how many modes
+    are actually needed for an accurate reconstruction. The cumulative
+    order is determined empirically, ranking :attr:`Model.modes` by their
+    median PSD-weighted EOB power (the same quantity reported by
+    :func:`full_waveform_mismatches`'s ``power_fractions``, but computed
+    directly here since the per-mode EOB amplitudes are already at hand).
+
+    Per :func:`_mode_bases`, the expensive per-mode EOB/surrogate
+    evaluation happens once per intrinsic (mass/spin) draw; inclination
+    and coalescence phase are then resampled ``n_orientations`` times
+    per draw as a cheap postprocessing step (an analytic
+    :math:`{}_{-2}Y_{\ell m}(\iota,\varphi)` reweighting plus an
+    :math:`m \varphi_c` phase rotation), and only *that* recombination
+    feeds into the (expensive) time-and-phase-optimised
+    :meth:`~mlgw_bns.model_validation.ValidateModel.full_waveform_mismatch`
+    call, once per (waveform, orientation, mode subset) triple.
+
+    Inclination is sampled isotropically (:math:`\cos\iota \sim
+    \mathrm{Uniform}(-1, 1)`) and the coalescence phase uniformly on
+    :math:`[0, 2\pi)`, matching the usual priors for these angles.
+
+    The per-waveform bases (the EOB call plus the surrogate NN
+    inference --- the only part of this function that isn't cheap
+    postprocessing) are cached to disk, keyed by ``OUTPUT_PREFIX`` and
+    ``n_waveforms`` (:func:`_mode_subset_bases_cache_path`); a rerun at
+    the same or a smaller ``n_waveforms`` reuses that cache instead of
+    recomputing it, and a larger one tops it up (advancing the same
+    parameter generator from where the cached run left off, so the
+    combined sequence matches what a single from-scratch run at the
+    larger count would have drawn). Pass ``use_cache=False`` to force a
+    recompute. Progress is logged via ``tqdm`` for both the basis
+    computation and the (much slower) orientation/subset sweep.
+
+    Returns
+    -------
+    dict
+        ``{"subset_labels": [...], "cumulative_power": [...],
+        "mode_power_fraction": {mode: ...},
+        "results": {label: {"mismatch": ..., "delta_t": ...,
+        "delta_phi": ...}}}``, arrays one entry per
+        (waveform, orientation) pair that succeeded.
+    """
+    reference_model = model.mode_models[Mode(2, 2)]
+    validator = ValidateModel(reference_model)
+    frequencies, psd_values = extended_frequency_grid(validator)
+
+    parameter_generator = model.dataset.make_parameter_generator(SEED)
+
+    cached = _load_mode_subset_bases_cache() if use_cache else None
+    if cached is not None:
+        per_waveform = list(cached["per_waveform"])
+        mode_power = {mode: list(values) for mode, values in cached["mode_power"].items()}
+        n_draws_consumed = cached["n_draws_consumed"]
+        if len(per_waveform) > n_waveforms:
+            # More than requested: truncate. `n_draws_consumed` then no
+            # longer matches this prefix, but that's harmless --- with
+            # `len(per_waveform) == n_waveforms` already, the top-up
+            # below never runs, so it's never read.
+            per_waveform = per_waveform[:n_waveforms]
+            mode_power = {mode: values[:n_waveforms] for mode, values in mode_power.items()}
+    else:
+        per_waveform = []
+        mode_power = {mode: [] for mode in model.modes}
+        n_draws_consumed = 0
+
+    if len(per_waveform) < n_waveforms:
+        print(
+            f"  Computing per-mode EOB/surrogate bases for "
+            f"{n_waveforms - len(per_waveform)} more waveforms "
+            f"({len(per_waveform)} cached)..."
+        )
+        for _ in range(n_draws_consumed):
+            next(parameter_generator)
+        with tqdm(total=n_waveforms, initial=len(per_waveform), unit="waveform") as pbar:
+            while len(per_waveform) < n_waveforms:
+                intrinsic = next(parameter_generator)
+                n_draws_consumed += 1
+                params0 = ParametersWithExtrinsic(
+                    mass_ratio=intrinsic.mass_ratio,
+                    lambda_1=intrinsic.lambda_1,
+                    lambda_2=intrinsic.lambda_2,
+                    chi_1=intrinsic.chi_1,
+                    chi_2=intrinsic.chi_2,
+                    distance_mpc=DISTANCE_MPC,
+                    inclination=0.0,
+                    reference_phase=0.0,
+                    total_mass=TOTAL_MASS,
+                )
+                try:
+                    amp_true, phase_true, amp_pred, phase_pred, support = _mode_bases(
+                        model, params0, frequencies
+                    )
+                except Exception:  # pragma: no cover - EOB blowups
+                    continue
+
+                if support.sum() < 2 or not all(
+                    np.all(np.isfinite(amp_pred[m])) and np.all(np.isfinite(phase_pred[m]))
+                    for m in model.modes
+                ):
+                    continue
+
+                for mode in model.modes:
+                    mode_power[mode].append(
+                        float(
+                            np.trapezoid(
+                                amp_true[mode][support] ** 2 / psd_values[support],
+                                x=frequencies[support],
+                            )
+                        )
+                    )
+                per_waveform.append((amp_true, phase_true, amp_pred, phase_pred, support))
+                pbar.update(1)
+
+        if use_cache:
+            cache_path = _mode_subset_bases_cache_path(len(per_waveform))
+            with open(cache_path, "wb") as f:
+                pickle.dump(
+                    {
+                        "per_waveform": per_waveform,
+                        "mode_power": mode_power,
+                        "n_draws_consumed": n_draws_consumed,
+                    },
+                    f,
+                )
+            print(f"  Cached {len(per_waveform)} waveform bases to {cache_path}")
+
+    ordered_modes = sorted(model.modes, key=lambda m: -np.median(mode_power[m]))
+    total_power = sum(np.median(mode_power[m]) for m in model.modes)
+    mode_power_fraction = {
+        mode: np.median(mode_power[mode]) / total_power for mode in model.modes
+    }
+
+    subsets = [ordered_modes[: k + 1] for k in range(len(ordered_modes))]
+    subset_labels = ["+".join(f"({m.l},{m.m})" for m in subset) for subset in subsets]
+    cumulative_power = [
+        sum(mode_power_fraction[m] for m in subset) for subset in subsets
+    ]
+
+    results = {
+        label: {"mismatch": [], "delta_t": [], "delta_phi": []}
+        for label in subset_labels
+    }
+
+    orientation_rng = np.random.default_rng(MODE_SUBSET_ORIENTATION_SEED)
+
+    print(
+        f"  Sweeping {n_orientations} inclination/phase draws per waveform, "
+        f"across {len(subsets)} mode subsets..."
+    )
+    sweep_progress = tqdm(
+        total=len(per_waveform) * n_orientations, unit="orientation"
+    )
+    for amp_true, phase_true, amp_pred, phase_pred, support in per_waveform:
+        support_freqs = frequencies[support]
+        for _ in range(n_orientations):
+            iota = np.arccos(orientation_rng.uniform(-1.0, 1.0))
+            phi_c = orientation_rng.uniform(0.0, 2 * np.pi)
+
+            Ylm_real, Ylm_imag, Ylm_real_mneg, Ylm_imag_mneg = model._compute_Ylm_modes(
+                modes=model.modes, phi=0.0, iota=iota
+            )
+            coeffs = _build_mode_coeffs(
+                model.modes,
+                list(range(len(model.modes))),
+                Ylm_real,
+                Ylm_imag,
+                Ylm_real_mneg,
+                Ylm_imag_mneg,
+            )
+
+            true_modes = {}
+            pred_modes = {}
+            for idx, mode in enumerate(model.modes):
+                c = coeffs[idx]
+                key = (mode.l, mode.m)
+                true_modes[key] = _mode_cartesian(
+                    amp_true[mode][support],
+                    phase_true[mode][support] + mode.m * phi_c,
+                    c,
+                )
+                pred_modes[key] = _mode_cartesian(
+                    amp_pred[mode][support],
+                    phase_pred[mode][support] + mode.m * phi_c,
+                    c,
+                )
+
+            for subset, label in zip(subsets, subset_labels):
+                pred_subset = {(m.l, m.m): pred_modes[(m.l, m.m)] for m in subset}
+                mismatch, delta_t, delta_phi = validator.full_waveform_mismatch(
+                    modes_1=true_modes,
+                    modes_2=pred_subset,
+                    frequencies=support_freqs,
+                    return_shifts=True,
+                )
+                # `full_waveform_mismatch`'s phi_grid spans [-2pi, 2pi] ---
+                # twice the true period, since every mode's e^{i m phi_c}
+                # is 2pi-periodic for integer m --- so phi=0, -2pi and
+                # +2pi are all physically identical alignments but land
+                # at wildly different raw numbers. Left unwrapped, that
+                # aliasing alone makes this column's boxplot look like a
+                # uniform, badly-constrained phase when the true residual
+                # offset is small and tightly clustered near zero. Wrap to
+                # the canonical (-pi, pi] before storing.
+                delta_phi = (delta_phi + np.pi) % (2 * np.pi) - np.pi
+                results[label]["mismatch"].append(mismatch)
+                results[label]["delta_t"].append(delta_t)
+                results[label]["delta_phi"].append(delta_phi)
+            sweep_progress.update(1)
+    sweep_progress.close()
+
+    return {
+        "subset_labels": subset_labels,
+        "cumulative_power": cumulative_power,
+        "mode_power_fraction": mode_power_fraction,
+        "n_waveforms": len(per_waveform),
+        "n_orientations": n_orientations,
+        "results": {
+            label: {key: np.array(values) for key, values in per_label.items()}
+            for label, per_label in results.items()
+        },
+    }
+
+
+def plot_mode_subset_boxplots(data: dict) -> None:
+    r"""Boxplot the mismatch and required alignment vs. mode subset.
+
+    ``data`` is the output of :func:`mode_subset_data`. Three rows
+    (height ratios 2:1:1), one boxplot column per cumulative mode
+    subset:
+
+    1. full-waveform mismatch (time and reference phase optimised),
+       log-scaled;
+    2. the time shift :math:`\Delta t` that optimisation needed to
+       align the partial surrogate reconstruction to the full EOB
+       truth;
+    3. the same for the reference-phase shift :math:`\Delta\varphi`.
+
+    Boxes span the 25-75 interquartile range; whiskers extend to the
+    5th/95th percentiles (``whis=[5, 95]``), with outliers beyond that
+    not drawn separately (``showfliers=False``) since with this many
+    samples they would just clutter the plot.
+    """
+    subset_labels = data["subset_labels"]
+    results = data["results"]
+    cumulative_power = data["cumulative_power"]
+
+    n_cols = len(subset_labels)
+    positions = np.arange(1, n_cols + 1)
+
+    fig, axes = plt.subplots(
+        3, 1, figsize=(1.7 * n_cols + 2, 9.5),
+        gridspec_kw={"height_ratios": [2, 1, 1]},
+        sharex=True,
+    )
+
+    mismatches = [results[label]["mismatch"] for label in subset_labels]
+    # Rows 2/3 report the *magnitude* of the required alignment shift on
+    # a log axis --- what matters here is how large a correction is
+    # needed, not its sign, and the two point in genuinely different
+    # directions across waveforms (unlike the mismatch, which is
+    # positive by construction).
+    delta_t_us = [np.abs(results[label]["delta_t"]) * 1e6 for label in subset_labels]
+    delta_phi = [np.abs(results[label]["delta_phi"]) for label in subset_labels]
+
+    box_kwargs = dict(whis=[5, 95], showfliers=False, widths=0.6)
+
+    axes[0].boxplot(mismatches, positions=positions, **box_kwargs)
+    axes[0].set_yscale("log")
+    axes[0].set_ylabel("Full-waveform mismatch\n(time + phase optimised)")
+
+    axes[1].boxplot(delta_t_us, positions=positions, **box_kwargs)
+    axes[1].set_yscale("log")
+    axes[1].set_ylabel(r"$|\Delta t|$ [$\mu$s]")
+
+    axes[2].boxplot(delta_phi, positions=positions, **box_kwargs)
+    axes[2].set_yscale("log")
+    axes[2].set_ylabel(r"$|\Delta \varphi|$ [rad]")
+
+    for ax in axes:
+        ax.grid(True, which="both", axis="y", lw=0.3)
+
+    axes[2].set_xticks(positions)
+    axes[2].set_xticklabels(
+        [
+            f"{label}\n[{_sci_latex(max(1.0 - power, 0.0))} power missing]"
+            for label, power in zip(subset_labels, cumulative_power)
+        ],
+        rotation=30, ha="right", fontsize="small",
+    )
+    axes[2].set_xlabel("Cumulative mode subset (surrogate), ordered by EOB power")
+
+    fig.suptitle(
+        "Full-waveform mismatch vs. number of modes reconstructed "
+        f"({data['n_waveforms']} waveforms, {data['n_orientations']} "
+        "inclination/phase draws each)"
+    )
+    fig.tight_layout()
+
+    outfile = f"{OUTPUT_PREFIX}_mode_subset.png"
     fig.savefig(outfile, dpi=150)
     print(f"Saved plot to {outfile}")
 
@@ -1144,7 +1629,9 @@ def plot_mismatches(
     for (mode, (optimised, regressed)), color in zip(mismatches_by_mode.items(), colors):
         label = rf"$(\ell, m) = ({mode.l}, {mode.m})$"
         if power_fractions and len(power_fractions.get(mode, [])):
-            label += f"  [{np.median(power_fractions[mode]):.3%} of power]"
+            # `\%` --- a literal `%` would otherwise be read as a LaTeX
+            # comment character now that `text.usetex` is on globally.
+            label += rf"  [{np.median(power_fractions[mode]) * 100:.3f}\% of power]"
         plot_kde(0, optimised, track=True, linewidth=2.0, color=color, label=label)
         plot_kde(1, regressed, track=True, linewidth=2.0, color=color, label=label)
 
@@ -1343,6 +1830,70 @@ def plot_timing_benchmark(data: dict) -> None:
     print(f"Saved plot to {outfile}")
 
 
+def plot_evaluation_time_fit(
+    model_name: str,
+    n_points_list=TIMING_N_POINTS,
+    n_seeds: int = TIMING_SEEDS,
+    n_epochs: int = TIMING_EPOCHS,
+) -> None:
+    r"""Loglog wall-clock timing with ``c1 + c2 * N`` fit lines per approximant.
+
+    Thin wrapper around ``benchmark_evaluation_time.py``'s own
+    :func:`~benchmark_evaluation_time.create_and_run_tests` /
+    :func:`~benchmark_evaluation_time.make_figure` (added to ``sys.path``
+    since it lives alongside this script), comparing the full model, a
+    reduced-mode model (:class:`~benchmark_evaluation_time.MlgwBnsReducedModes`,
+    only ``benchmark_evaluation_time.REDUCED_MODES``), TEOBResumS-SPA and,
+    when ``jax`` is importable, the JAX port (single call + a
+    ``jax.vmap``-batched call, see ``TIMING_JAX_BATCH``).
+
+    Skipped --- with a warning --- if ``model_name`` is not one of
+    :data:`mlgw_bns.model.MODELS_AVAILABLE`, since the approximants there
+    load a *shipped* pretrained model by name rather than reusing an
+    already-loaded :class:`Model` instance.
+    """
+    from mlgw_bns.model import MODELS_AVAILABLE
+
+    if model_name not in MODELS_AVAILABLE:
+        logging.warning(
+            "%r not in MODELS_AVAILABLE=%r; skipping the fit-line timing "
+            "benchmark (it loads a shipped pretrained model by name)",
+            model_name,
+            MODELS_AVAILABLE,
+        )
+        return
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from benchmark_evaluation_time import (
+        _HAVE_JAX,
+        MlgwBns,
+        MlgwBnsJax,
+        MlgwBnsJaxBatch,
+        MlgwBnsReducedModes,
+        TEOBResumSPA,
+        create_and_run_tests,
+        make_figure,
+    )
+
+    approximants = [
+        MlgwBns(model_name),
+        MlgwBnsReducedModes(model_name),
+        TEOBResumSPA(model_name),
+    ]
+    if _HAVE_JAX:
+        approximants.append(MlgwBnsJax(model_name))
+        approximants.append(MlgwBnsJaxBatch(TIMING_JAX_BATCH, model_name))
+    else:
+        logging.warning("JAX not importable -- skipping it in the fit-line timing benchmark")
+
+    tests = create_and_run_tests(n_seeds, n_epochs, list(n_points_list), approximants)
+    make_figure(tests, approximants, list(n_points_list))
+
+    outfile = f"{OUTPUT_PREFIX}_timing_fit.png"
+    plt.savefig(outfile, dpi=150)
+    print(f"Saved plot to {outfile}")
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -1408,6 +1959,12 @@ if __name__ == "__main__":
     mismatch_vs_power = mismatch_vs_power_by_mode(model)
     plot_mismatch_vs_power(mismatch_vs_power)
 
+    print("Computing full-waveform mismatch vs. mode subset...")
+    plot_mode_subset_boxplots(mode_subset_data(model))
+
     print("Benchmarking prediction wall-clock time (numpy vs. JAX)...")
     timing_data = timing_benchmark(model)
     plot_timing_benchmark(timing_data)
+
+    print("Benchmarking prediction wall-clock time with fit lines (full vs. reduced-mode vs. TEOB)...")
+    plot_evaluation_time_fit(os.path.basename(args.model.rstrip("/")) or "default_hom")

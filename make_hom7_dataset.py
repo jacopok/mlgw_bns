@@ -26,7 +26,7 @@ logging.basicConfig(
 )
 
 #: Where training writes its output, relative to the current directory.
-TRAINING_BASENAME = "hom7"
+TRAINING_BASENAME = "hom7_big"
 
 MODES = [
     Mode(2, 2),
@@ -55,7 +55,7 @@ def train(n_jobs: int = 1) -> None:
     )
     # Sizes match `make_default_dataset.py`; see its comments for the
     # memory/accuracy tradeoffs behind each number.
-    model.generate(64, 2**15, 24576, reference_dataset_size=16384, n_jobs=n_jobs)
+    model.generate(64, 2**12, 24576, reference_dataset_size=16384, n_jobs=n_jobs)
     model.set_hyper_and_train_nn()
     model.save(include_training_data=True)
 

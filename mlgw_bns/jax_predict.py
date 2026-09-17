@@ -58,7 +58,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .pn_modes import H_21, H_22, H_33, H_44
+from .pn_modes import H_21, H_22, H_33, H_44, H_31, H_32, H_43
 from .taylorf2 import _make_taylorf2_psi
 
 jax.config.update("jax_enable_x64", True)
@@ -185,7 +185,15 @@ def mode_model_to_jax_residuals(
 
 _taylorf2_psi = _make_taylorf2_psi(jnp)
 
-_H_BY_MODE = {(2, 2): H_22, (2, 1): H_21, (3, 3): H_33, (4, 4): H_44}
+_H_BY_MODE = {
+    (2, 2): H_22, 
+    (2, 1): H_21, 
+    (3, 3): H_33, 
+    (4, 4): H_44,
+    (3, 1): H_31, 
+    (3, 2): H_32, 
+    (4, 3): H_43,
+}
 
 
 def _mode_pn_amp(lm, f_natural, eta, chi_a, chi_s):
