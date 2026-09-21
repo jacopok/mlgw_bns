@@ -27,7 +27,7 @@ frequency_downsampling_histograms.py
 !mlgw_bns/data/*.h5
 !mlgw_bns/data/*.pkl
 !mlgw_bns/data/*.yaml
-mlgw_bns/data/*_arrays.h5
+!mlgw_bns/data/*_arrays.h5
 .claude/settings.json
 visualization/*.png
 default_hom_l2_m1.yaml
@@ -72,7 +72,7 @@ visualization/validate_low_frequency_pn.png
 CLAUDE.md
 
 # TEOBResumS debug dump, written to cwd on a crashed/failed configuration
-data/
+/data/
 
 # hom7 model training artifacts (metadata + log)
 hom7*.yaml
