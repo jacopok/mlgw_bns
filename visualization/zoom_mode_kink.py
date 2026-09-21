@@ -7,8 +7,8 @@ phase-unwrap artefact from a real mode-amplitude feature.
 
 Run with::
 
-    python zoom_mode_kink.py --mode 4,4 --q-lo 1.8 --q-hi 2.6
-    python zoom_mode_kink.py --mode 3,3 --q-lo 1.0 --q-hi 1.2 --base-chi1 0
+    python visualization/zoom_mode_kink.py --mode 4,4 --q-lo 1.8 --q-hi 2.6
+    python visualization/zoom_mode_kink.py --mode 3,3 --q-lo 1.0 --q-hi 1.2 --base-chi1 0
 """
 
 from __future__ import annotations

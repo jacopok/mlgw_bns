@@ -19,7 +19,7 @@ Output
 ------
 ``downsampling_vs_ntrain.png`` / ``.txt``
 
-Run with:  uv run python downsampling_vs_ntrain.py
+Run with:  uv run python visualization/downsampling_vs_ntrain.py
 """
 
 from __future__ import annotations

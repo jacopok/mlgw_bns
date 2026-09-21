@@ -19,8 +19,8 @@ but high-curvature target.
 
 Run with::
 
-    python slice_mode_pca.py                       # (2,1) vs (2,2), default_hom
-    python slice_mode_pca.py --modes 2,1 --n-components 10 --n-points 120
+    python visualization/slice_mode_pca.py                       # (2,1) vs (2,2), default_hom
+    python visualization/slice_mode_pca.py --modes 2,1 --n-components 10 --n-points 120
 """
 
 from __future__ import annotations

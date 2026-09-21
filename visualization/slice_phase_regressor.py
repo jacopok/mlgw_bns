@@ -14,8 +14,8 @@ and where it doesn't.
 
 Run with::
 
-    python slice_phase_regressor.py                 # uses phase_regressor_data_5hz.npz
-    python slice_phase_regressor.py --regressor rff --n-fit 32000
+    python visualization/slice_phase_regressor.py                 # uses phase_regressor_data_5hz.npz
+    python visualization/slice_phase_regressor.py --regressor rff --n-fit 32000
 """
 
 from __future__ import annotations

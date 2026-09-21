@@ -27,7 +27,7 @@ median / 90th-percentile table.
 
 Run with::
 
-    python validate_regressor_training_curve.py \\
+    python visualization/validate_regressor_training_curve.py \\
         --train-size 8000 --val-size 1000 --subsets 500,1000,2000,4000,8000 --sweep
 """
 
