@@ -8,158 +8,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Higher-order-mode support: the model shipped with the package now
+    reconstructs seven modes --- (2,2), (2,1), (3,1), (3,2), (3,3), (4,3) and
+    (4,4) --- and sums them into the observer-frame polarizations, weighted by
+    the spin-weighted spherical harmonics.
+- `Model.default_for_testing` takes an optional `modes` argument, to load only
+    a subset of the shipped modes instead of all seven.
 - `mlgw_bns.neural_network.KernelRidgeNetwork`, a kernel-ridge alternative to
     the multi-layer perceptron, selected by passing it as `nn_kind` to `Model`
     or `ModeModel`. On the (2,2) mode with 8192 training waveforms it reaches a
     median mismatch of 3.4e-9 against the network's 7.2e-6 --- a factor of two
-    thousand --- and fits in twenty seconds rather than ten minutes.
-
-    The accuracy of the surrogate under a fixed training budget is limited by
-    the map from parameters to principal-component coefficients, not by the
-    basis: the truncation floor at thirty components sits at 1.8e-10, four
-    orders of magnitude below what the network reaches, and the network stops
-    improving altogether beyond about 2048 training waveforms while the kernel
-    keeps improving as `n**-2`. Part of the difference is that the network
-    minimizes an unweighted mean squared error over targets divided by
-    `max|x_i|` per component, which weights component `i`'s contribution to the
-    residual by `s_i**-2` --- some nine orders of magnitude in favour of the
-    *least* important component. Kernel ridge solves `(K + alpha I)^-1 y`
-    separately per output and is therefore equivariant under rescaling each
-    output, so that weighting, and `pc_exponent` with it, cannot affect it.
-
-    Which backend a saved model used is recorded in its metadata, so loading
-    picks the right one without being told.
+    thousand --- and fits in twenty seconds rather than ten minutes. Kernel
+    ridge solves `(K + alpha I)^-1 y` separately per output and is therefore
+    equivariant under rescaling each output, unlike the network's mean squared
+    error, which implicitly weights components by their PCA scale. Which
+    backend a saved model used is recorded in its metadata, so loading picks
+    the right one without being told. Per-mode hyperparameter defaults live in
+    `mlgw_bns/data/kernel_ridge_defaults.json`; `HyperparameterOptimization`
+    tunes the two of them (`kernel_gamma`, `kernel_alpha`) directly against
+    reconstruction accuracy in residual space.
 - `reference_amplitude`, an option on `Model`, `ModeModel` and `Dataset`, which
     divides the EOB amplitude by the Post-Newtonian amplitude of one fixed
     parameter set --- the centre of the parameter ranges --- rather than each
     waveform's own. The (2,1) and (3,3) PN amplitudes have a deep minimum at a
-    parameter-dependent frequency, and dividing by it there sends the ratio to
-    twenty or sixty while the waveform does nothing remarkable, so a handful of
-    training waveforms end up setting the normalization for all of them. On the
-    (3,3) mode this is worth a factor of eighteen in mismatch and on the (2,1)
-    a factor of two and a half; on the (2,2), whose PN amplitude has no such
-    minimum, it is a 3% improvement, and on (4,4) an 8% degradation, since it
-    is applied per-dataset rather than per-mode. Off by default.
+    parameter-dependent frequency, which was letting a handful of training
+    waveforms set the normalization for all of them; worth a factor of
+    eighteen in mismatch on (3,3) and two and a half on (2,1). Off by default.
 - Odd-`m` mode regressors are weighted by each training waveform's integrated
-    mode power, following arXiv:2609.03025 (DANSur_HM). At exactly `q = 1` the
-    odd-`m` amplitude vanishes identically, so the (2,1)/(3,3) amplitude residual
-    grows linearly out of zero through a `q <~ 1.15` boundary layer far too steep
-    for the global-RBF `KernelRidgeNetwork`, which rings across the `q ~ 1.2-1.5`
-    region that carries the mode's power. Weighting by
-    `(int A_i^2 df / max_j P_j) ** beta` for odd `m` only (`power_weighting`,
-    `power_weight_exponent` on `ModeModel`, on by default, recorded in the
-    metadata; `sample_weight` threaded through both network backends and passed
-    to scikit-learn only when set, so even-`m` and legacy fits stay
-    bit-identical). The shipped `default_hom` model is retrained accordingly:
-    same training data and PCA basis, odd-`m` regressor re-fit only. Median
-    mismatch over 200 waveforms: (2,1) optimised per-mode 4.5e-4 -> 2.0e-5
-    (22x), (3,3) 3.9e-6 -> 4.5e-7 (8.7x), (2,2) and (4,4) bit-identical, full
-    waveform 1.9e-7 -> 6.5e-8 (2.9x).
-- Per-mode defaults for `KernelRidgeNetwork`, in
-    `mlgw_bns/data/kernel_ridge_defaults.json`, read by
-    `Hyperparameters.default_kernel_ridge` and written by
-    `HyperparameterOptimization.save_best_as_default`. `hyperparameter_optimization.py`
-    and `optimize_n_hours.py` are now specific to `KernelRidgeNetwork`: the
-    search is over its two hyperparameters (`kernel_gamma`, `kernel_alpha`)
-    only, at a fixed 8192 training waveforms, and single-objective ---
-    reconstruction accuracy in residual space, not the PSD-weighted mismatch
-    used for the MLP search, since kernel ridge has no architecture to trade
-    against training time.
-- `visualization/train_comparison_models.py`, which trains matched models for
-    the legacy and improved pipelines, sharing the waveform generation between
-    the two so that the comparison isolates the regressor.
-- `experiments/`, the study behind the two changes above: cached residuals, a
-    surrogate whose every stage is a knob, and the sweeps that measured them.
-    Nothing there is imported by the package.
+    mode power (`power_weighting`, `power_weight_exponent` on `ModeModel`, on
+    by default), following arXiv:2609.03025 (DANSur_HM): at exactly `q = 1` the
+    odd-`m` amplitude vanishes identically, and the boundary layer around it
+    was otherwise too steep for the global-RBF `KernelRidgeNetwork` to fit.
+    Median mismatch improves 22x on (2,1) and 8.7x on (3,3).
 - `mlgw_bns.jax_predict`, an experimental JAX port of the prediction pipeline
     (`jax` optional-dependency extra), adapted from Saulo Albuquerque's
-    `mlgw-bns-jax` (see `jax_reference/`). `model_to_jax_waveform(model)`
-    returns a pure, `jax.jit` / `jax.vmap`-able function that reproduces the
-    full four-mode `Model.predict` --- the RBF kernel-ridge + PCA residuals,
-    the per-mode TaylorF2 expansions (ports of `pn_modes` / `taylorf2`), the
-    `ModePhasesNN` / `TimeshiftsNN` reference predictors, a not-a-knot
-    cubic-spline resampler, and the `Y_lm` mode sum. It agrees with the numpy
-    pipeline to ~1e-4 relative (XLA's reduction order on the ill-conditioned
-    kernel-ridge sum, not a modelling difference); the low-frequency TaylorF2
-    splice and the HF zero-padding are not ported, so keep the query grid
-    inside the trained band. On a single waveform JAX is ~1.5x faster than
-    numpy; batched with `jax.vmap` (the parameter-estimation regime) it is
-    5--15x faster per waveform. `visualization/benchmark_jax_prediction.py`
-    and `benchmark_evaluation_time.py --jax` run the comparisons.
-
-- Higher-order-mode support: the model shipped with the package now reconstructs
-    the (2,2), (2,1), (3,3) and (4,4) modes and sums them into the observer-frame
-    polarizations.
+    `mlgw-bns-jax`. `model_to_jax_waveform(model)` returns a pure,
+    `jax.jit` / `jax.vmap`-able function reproducing the full `Model.predict`,
+    including the low-frequency PN splice and high-frequency zero-padding.
+    Agrees with the numpy pipeline to ~1e-4 relative; roughly 1.5x faster than
+    numpy for a single waveform and 5--15x faster batched with `jax.vmap`.
 - Progress bars for the (long) dataset generation and training stages, and
     logging of the memory footprint of the arrays being allocated.
-- Scripts under `visualization/` to validate a trained model and the time-shift
-    predictor, and to inspect the TEOBResumS modes, their PN residuals and the
-    parameters discarded during training.
-- `visualization/validate_extrinsic_against_teob.py`, which varies *every*
-    parameter --- intrinsic plus inclination, total mass, distance and reference
-    phase --- and compares the surrogate's full strain against an independent
-    TEOBResumS call, to check that the `Y_{lm}(iota)` projection and the
-    total-mass/distance scaling are treated the same way on both sides. Holding
-    each varied parameter fixed in turn found the `total_mass < 2.8`
-    PN-extension bug (see *Fixed*). After it, and with the coalescence phase
-    marginalised per mode (`exp(i m phi_c)`, not a single global phase --- that
-    alone inflates the median to ~3e-3), the surrogate's full reconstructed
-    strain agrees with an independent EOB call to ~3e-7 median over
-    [20, 2048] Hz --- the same floor as the on-grid per-mode check, tail and
-    all. The long-standing "FD floor" (~4e-4 median over [20, 2048] Hz,
-    growing with mass ratio) turned out to be the *reference*, not the
-    surrogate: `initial_frequency` in TEOBResumS is the (2,2) GW frequency at
-    the ODE start, and the `(l, m)` multipole is identically zero below
-    `(m/2) f0`, so a bare `EOBRunPy(initial_frequency=15)` call has no (3,3)
-    below 22.5 Hz and no (4,4) below 30 Hz --- the surrogate's [20, 30] Hz
-    higher-mode content had nothing to compare against.
-    `probe_teob_config_gap.py --ladder` (no surrogate) shows the FD multi-mode
-    waveform is self-consistent to ~1e-9 over [40, 2048] Hz and *independent*
-    of the ODE start from 3 to 18 Hz; the [20, 2048] number is flat only for
-    `f0 <= 7` Hz. The script now lowers its reference's ODE start by
-    `initial_frequency_scaling`, exactly as `all_modes_amplitude_phase` does.
-    Reaching a clean number also needed the reference strain reconstructed
-    from the `hflm` multipoles (TEOBResumS' own pre-summed output is
-    undersampled at the inter-mode beat on a coarse grid) and a dense grid.
-- `visualization/fd_grid_convergence.py`, which reruns the surrogate-vs-TEOBResumS
-    FD mismatch on a ladder of frequency grids (df 0.5 down to 0.03 Hz) to show
-    it is flat under refinement --- the FD validation gap is not a quadrature or
-    interpolation artefact of the decimated model grid.
-- `visualization/validate_low_frequency_pn.py`, which exercises the per-mode
-    TaylorF2 low-frequency extension (the splice below
-    `effective_initial_frequency_hz` ~ 3.57 Hz, untouched by the 20 Hz-start
-    validation scripts) by requesting from 2 Hz and comparing per mode against
-    an independent low-start `EOBRunPy` call. The extension matches EOB to
-    ~1.7e-7 mismatch in the pure-PN band and to ~0.006 rad ((2,2)) .. 0.04 rad
-    ((4,4)) per-mode phase over [2, 20] Hz, joins the model band without a
-    kink, and is self-consistent with pure TaylorF2 below the connection to
-    ~1e-9. `EOBRunPy` is kept memory-safe (~1 GB peak) with a bounded
-    `interp_freqs` grid.
-- `visualization/probe_teob_config_gap.py`, which mismatches TEOBResumS
-    against itself --- no surrogate. `--ladder` (default) sweeps the ODE start
-    frequency and shows the FD multi-mode waveform is self-consistent to
-    ~1e-9 (median) / ~1e-7 (worst, high mass ratio) over [40, 2048] Hz and
-    independent of the start from 3 to 18 Hz; the [20, 2048] excess at higher
-    starts is the `(m/2) f0` kinematic mode cutoff. `--abc` runs the original
-    config probe (bare `f0=15` vs the library's `initial_frequency_scaling`).
-- `visualization/mismatch_vs_total_mass.py`, sweeping the multi-mode mismatch
-    across the total-mass axis (with an optional `--baseline` overlay for a
-    before/after figure), and `visualization/teob_hom_start_frequency.py`, a
-    self-contained check of how a multi-mode TEOBResumS frequency-domain
-    waveform depends on `initial_frequency`. Most of it (~2e-3 under a single
-    global phase) is a coalescence-phase convention that `exp(i m phi_c)`
-    marginalisation removes; TEOBResumS computes each multipole independently
-    and is self-consistent for HOM. The residual it reports over [20, 2048] Hz
-    is the low-frequency `(m/2) f0` mode cutoff (see
-    `probe_teob_config_gap.py --ladder`, which shows ~1e-9 self-consistency
-    over [40, 2048] Hz independent of the start frequency).
+- Various new scripts under `visualization/`, checking the surrogate's
+    extrinsic-parameter handling, its low- and high-frequency extensions, and
+    its mismatch against total mass and frequency-grid choices, against
+    independent TEOBResumS calls.
 
 ### Changed
 
 - `Model.predict` is about 2.5x faster at the fixed (grid-size independent)
     cost, which dominates for the frequency grids used in parameter
-    estimation (~20 ms down to ~8 ms for the shipped four-mode model). Four
-    changes, all bit-for-bit identical in output:
+    estimation (~20 ms down to ~8 ms). Four changes, all bit-for-bit identical
+    in output:
     - the shared per-mode reference-phase predictor
         (`ModeModel._predicted_mode_phase0`) was evaluated once per mode even
         though one call returns every mode's phase --- it is now cached on
@@ -193,8 +93,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     are predicted from the source parameters with `Model.time_shifts_predictor`.
 - `Model.default_for_testing()` loads the higher-order-mode model
     (`mlgw_bns/data/default_hom`) rather than the old single-mode checkpoints.
+- Multi-mode training-data generation issues one TEOBResumS call per parameter
+    point for every requested mode, instead of one call per (mode, point) pair.
 - TEOBResumS is now taken from PyPI rather than from a checkout expected to sit
-    next to this repository.
+    next to this repository. Its packaged root-finder is less robust than a
+    local, unreleased fix at high tidal deformability (see *Fixed*), so
+    dataset generation and validation degrade gracefully by skipping a failed
+    draw instead of requiring it.
 - The project is built and developed with [uv](https://docs.astral.sh/uv/)
     instead of poetry.
 - **Breaking**: amplitude residuals are now stored and learned as
@@ -223,17 +128,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `ModeModel.predict_amplitude_phase{,_optimized}` glued the model band onto
     the PN segment by shifting the *band* to match the PN phase at the
     connection, which overwrote each mode's per-mode phase constant
-    (`_predicted_mode_phase0`, carrying the inter-mode alignment) with the PN
-    one. For a higher-order-mode waveform this mis-phased the modes relative to
-    each other by a constant that is not of the form `m * phi_c`, so the
-    coalescence-phase-marginalised full-waveform mismatch could not remove it:
-    a ~1000x degradation (`7e-8` -> `1e-4`) for every `total_mass` below the
-    dataset reference (2.8 Msun), the only regime in which the extension fires.
-    The `(2,2)` mode and `total_mass >= 2.8` were unaffected. The fix shifts the
-    PN *segment* to match the band instead, leaving the band's phase --- and its
-    per-mode constant --- untouched. Found by holding each extrinsic parameter
-    fixed in turn while validating against TEOBResumS
-    (`visualization/validate_extrinsic_against_teob.py`).
+    (carrying the inter-mode alignment) with the PN one. For a
+    higher-order-mode waveform this mis-phased the modes relative to each
+    other by a constant the coalescence-phase-marginalised full-waveform
+    mismatch could not remove: a ~1000x degradation for every `total_mass`
+    below the dataset reference (2.8 Msun), the only regime in which the
+    extension fires. The fix shifts the PN *segment* to match the band
+    instead, leaving the band's phase --- and its per-mode constant ---
+    untouched.
+- `Model.predict`/`predict_modes_dict` anchored each mode's time-shift-induced
+    linear phase to the first element of whatever frequency array the caller
+    passed in, rather than a fixed physical reference; as long as every caller
+    queried starting exactly at the trained band's edge this was invisible,
+    but querying into the post-Newtonian low-frequency extension exposed it as
+    a query-grid-dependent phase shared coherently by every mode. Now anchored
+    to `dataset.effective_initial_frequency_hz`, matching the convention
+    `ModeModel.predict_amplitude_phase_optimized` already used internally.
+- Dataset generation and `ValidateModel` no longer abort an entire batch when
+    one EOB draw fails root-finding, which the packaged TEOBResumS does
+    routinely at high tidal deformability (up to ~22% of draws at
+    `lambda_max=12000`); the failed draw is now skipped and logged instead.
+- A multi-mode frequency-domain TEOBResumS call's low-frequency support
+    depends on `initial_frequency` (the (2,2) GW frequency at the ODE start):
+    each `(l, m)` multipole is identically zero below `(m/2) * f0`, so training
+    data generated from an ODE start that isn't lowered per mode is missing
+    higher-mode content just above the nominal band edge. Dataset generation
+    now lowers the ODE start by `initial_frequency_scaling(modes)`.
 - `Model.predict` did not rescale the mode time shifts, which are stored in
     units of the reference total mass of the dataset, to the total mass being
     requested, while `Model.predict_modes_dict` did: the two therefore
@@ -250,21 +170,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SklearnNetwork.fit` clipped the mini-batch size to `x_data.shape[1]` --- the
     number of *features*, which is five --- rather than `shape[0]`, the number
     of samples, so the configured `batch_size` never survived at any
-    training-set size and every packaged model was trained with a batch of five.
-    The constructor already clipped correctly, to the sample count, so the
-    second clip was pure slip. Set `Hyperparameters.legacy_batch_size_clip` to
-    reproduce the old behaviour exactly.
-
-    Repairing it does not by itself improve accuracy --- at 8192 waveforms the
-    network scores 9.7e-6 against the slip's 7.2e-6, which is inside its own
-    run-to-run scatter, and it now needs more iterations to converge because
-    larger batches mean fewer gradient steps per iteration. It is fixed because
-    until it was, no tuning of `batch_size` meant anything.
+    training-set size and every packaged model was trained with a batch of
+    five. The constructor already clipped correctly, to the sample count, so
+    the second clip was pure slip. Set `Hyperparameters.legacy_batch_size_clip`
+    to reproduce the old behaviour exactly. Repairing it does not by itself
+    improve accuracy at a fixed training-set size, but until it was fixed no
+    tuning of `batch_size` meant anything.
 - `tests/test_downsampling_interpolation.py` asserted a generator expression,
     `assert (err < 1e-5 for err in errs_amp)`, which is a truthy object whatever
-    it would yield --- so the reconstruction error was never checked. The errors
-    are in fact of order 5e-4 and would have failed that bound; the test now
-    compares them against the downsampling tolerances they are actually set by.
+    it would yield --- so the reconstruction error was never checked. The test
+    now compares against the downsampling tolerances it is actually set by.
 
 ### Removed
 
