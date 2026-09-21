@@ -376,6 +376,7 @@ class Model:
         modes: list[Mode],
         generator_factory: ModeGeneratorFactory = teob_mode_generator_factory,
         time_shifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None,
+        mode_phases_predictor: Optional[ModePhasesNN] = None,
         **model_kwargs,
     ):
         if not modes:
@@ -393,9 +394,12 @@ class Model:
         # ``[phi_lm[f0] for lm in modes]``. Trained by
         # :meth:`_train_reference_predictors` alongside the time-shift
         # predictor, on a small dedicated pre-pass dataset.
-        self.mode_phases_predictor: Optional[ModePhasesNN] = (
-            self._load_default_mode_phases_predictor()
-        )
+        if mode_phases_predictor is None:
+            self.mode_phases_predictor: Optional[ModePhasesNN] = (
+                self._load_default_mode_phases_predictor()
+            )
+        else:
+            self.mode_phases_predictor = mode_phases_predictor
 
         # Stored for lazy construction of the per-mode `ModeModel` objects.
         self._generator_factory = generator_factory
@@ -573,27 +577,28 @@ class Model:
 
         base_filename = PRETRAINED_MODEL_FOLDER + model_name
 
-        # Load the shared predictor up front and hand it to the constructor:
-        # letting the constructor look for it on disk would only find it if
-        # the cwd happened to mirror the package layout.
+        # Load the shared predictors up front and hand them to the
+        # constructor: letting the constructor look for them on disk would
+        # only find them if the cwd happened to mirror the package layout.
         kwargs.setdefault(
             "time_shifts_predictor",
             load_timeshifts_predictor_from_file(
                 files(__name__).joinpath(f"{base_filename}_timeshifts.pkl").open("rb")
             ),
         )
-
-        model = cls(modes=modes, filename=base_filename, **kwargs)
-
         try:
-            model.mode_phases_predictor = load_mode_phases_predictor_from_file(
-                files(__name__).joinpath(f"{base_filename}_mode_phases.pkl").open("rb")
+            kwargs.setdefault(
+                "mode_phases_predictor",
+                load_mode_phases_predictor_from_file(
+                    files(__name__).joinpath(f"{base_filename}_mode_phases.pkl").open("rb")
+                ),
             )
-            model._propagate_mode_phases_predictor()
         except (FileNotFoundError, ValueError):
             logging.warning(
                 "Pretrained model %s has no mode-phases predictor.", model_name
             )
+
+        model = cls(modes=modes, filename=base_filename, **kwargs)
 
         for mode in model.modes:
             mode_model = model.mode_models[mode]
