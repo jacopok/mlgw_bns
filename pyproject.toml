@@ -1,6 +1,6 @@
 [project]
 name = "mlgw_bns"
-version = "0.12.1"
+version = "1.0.0"
 description = "Accelerating gravitational wave template generation with machine learning."
 license = "GPL-3.0-only"
 authors = [
