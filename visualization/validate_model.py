@@ -157,9 +157,12 @@ LOW_FREQUENCY_HZ = 2.0
 #: own defaults since this runs as one step of a broader validation pass,
 #: not a dedicated timing sweep.
 TIMING_N_POINTS = (64, 128, 256, 512, 1024, 2048, 4096)
-TIMING_SEEDS = 5
-TIMING_EPOCHS = 2
-TIMING_JAX_BATCH = 1024
+TIMING_SEEDS = 10
+TIMING_EPOCHS = 5
+#: Lowered from 1024 -- see benchmark_evaluation_time.py's --jax-batch help:
+#: its per-call cost scales ~linearly with this, and 128 already averages
+#: the per-waveform time far better than repeating the call would.
+TIMING_JAX_BATCH = 128
 
 
 class SharedTimeshiftValidateModel(ValidateModel):
@@ -1845,7 +1848,8 @@ def plot_evaluation_time_fit(
     reduced-mode model (:class:`~benchmark_evaluation_time.MlgwBnsReducedModes`,
     only ``benchmark_evaluation_time.REDUCED_MODES``), TEOBResumS-SPA and,
     when ``jax`` is importable, the JAX port (single call + a
-    ``jax.vmap``-batched call, see ``TIMING_JAX_BATCH``).
+    ``jax.vmap``-batched call, see ``TIMING_JAX_BATCH``) -- both of the
+    latter also in a reduced-mode flavour.
 
     Skipped --- with a warning --- if ``model_name`` is not one of
     :data:`mlgw_bns.model.MODELS_AVAILABLE`, since the approximants there
@@ -1869,6 +1873,8 @@ def plot_evaluation_time_fit(
         MlgwBns,
         MlgwBnsJax,
         MlgwBnsJaxBatch,
+        MlgwBnsJaxBatchReducedModes,
+        MlgwBnsJaxReducedModes,
         MlgwBnsReducedModes,
         TEOBResumSPA,
         create_and_run_tests,
@@ -1882,7 +1888,9 @@ def plot_evaluation_time_fit(
     ]
     if _HAVE_JAX:
         approximants.append(MlgwBnsJax(model_name))
+        approximants.append(MlgwBnsJaxReducedModes(model_name))
         approximants.append(MlgwBnsJaxBatch(TIMING_JAX_BATCH, model_name))
+        approximants.append(MlgwBnsJaxBatchReducedModes(TIMING_JAX_BATCH, model_name))
     else:
         logging.warning("JAX not importable -- skipping it in the fit-line timing benchmark")
 
