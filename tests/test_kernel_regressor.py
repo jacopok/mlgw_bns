@@ -77,10 +77,14 @@ def test_kernel_is_equivariant_under_output_rescaling(smooth_training_data):
     rescaled = KernelRidgeNetwork(Hyperparameters.default(len(x_train)))
     rescaled.fit(x_train, y_train * scales[np.newaxis, :])
 
+    # rtol is well above float64 eps: kernel ridge's (K + alpha I)^-1 solve
+    # accumulates BLAS-order-dependent rounding that differs across platforms,
+    # while a genuine equivariance break would be many orders of magnitude
+    # larger than this.
     np.testing.assert_allclose(
         rescaled.predict(x_test) / scales[np.newaxis, :],
         plain.predict(x_test),
-        rtol=1e-9,
+        rtol=1e-6,
     )
 
 

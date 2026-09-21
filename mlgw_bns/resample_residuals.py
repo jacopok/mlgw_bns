@@ -292,7 +292,7 @@ def compare_and_plot_signals_with_alignment(a, b, bshift_method = 'mean_fill', p
     
     num_charts = 3
     chart_height = 3.6
-    if bshift_method is 'all':
+    if bshift_method == 'all':
         num_charts = 5
     
     import matplotlib.pyplot as plt
@@ -341,7 +341,7 @@ def compare_and_plot_signals_with_alignment(a, b, bshift_method = 'mean_fill', p
                     label=f"Best match ({shift_amount}, {best_match_ymax:.2f})")
     axes[1].legend()
     
-    if bshift_method is 'mean_fill' or bshift_method is 'all':
+    if bshift_method == 'mean_fill' or bshift_method == 'all':
         b_shifted_mean_fill = makelab.signal.shift_array(b, shift_amount, np.mean(b))
         euclid_distance_a_to_b_shifted_mean_fill = distance.euclidean(a, b_shifted_mean_fill)
         axes[2].plot(a, alpha=0.7, label="a", marker=a_marker)
@@ -350,8 +350,8 @@ def compare_and_plot_signals_with_alignment(a, b, bshift_method = 'mean_fill', p
         axes[2].set_title(f"Euclidean distance From 'a' to 'b_shifted_mean_fill' = {euclid_distance_a_to_b_shifted_mean_fill:.2f}")
     
     ax_idx = 0
-    if bshift_method is 'zero_fill' or bshift_method is 'all':
-        if bshift_method is 'zero_fill':
+    if bshift_method == 'zero_fill' or bshift_method == 'all':
+        if bshift_method == 'zero_fill':
             ax_idx = 2
         else:
             ax_idx = 3
@@ -364,8 +364,8 @@ def compare_and_plot_signals_with_alignment(a, b, bshift_method = 'mean_fill', p
         axes[ax_idx].set_title(f"Euclidean distance From 'a' to 'b_shifted_zero_fill' = {euclid_distance_a_to_b_shifted_zero_fill:.2f}")
     
     
-    if bshift_method is 'roll' or bshift_method is 'all':
-        if bshift_method is 'roll':
+    if bshift_method == 'roll' or bshift_method == 'all':
+        if bshift_method == 'roll':
             ax_idx = 2
         else:
             ax_idx = 4
