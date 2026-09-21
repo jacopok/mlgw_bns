@@ -9,13 +9,22 @@ spherical-harmonic mode $(\ell, m)$, and sums their contributions,
 weighted by the spin-weighted spherical harmonics, into the observer-frame
 polarizations $h_+$ and $h_\times$.
 The modes covered by the model shipped with the package are
-$(2,2)$, $(2,1)$, $(3,3)$ and $(4,4)$.
+$(2,2)$, $(2,1)$, $(3,1)$, $(3,2)$, $(3,3)$, $(4,3)$ and $(4,4)$
+(`mlgw_bns.model.DEFAULT_MODES`).
 
 The fastest way to access a functional instance of this object is to use
 the pretrained one:
 ```python
 from mlgw_bns import Model
 model = Model.default_for_testing()
+```
+By default this loads every shipped mode; a subset can be requested
+instead with the `modes` keyword, which skips loading the files for the
+modes left out:
+```python
+from mlgw_bns.higher_order_modes import Mode
+
+model = Model.default_for_testing(modes=[Mode(2, 2), Mode(2, 1)])
 ```
 
 Now we can predict waveforms; in order to do so however we
@@ -105,21 +114,28 @@ there is nothing to align a single mode against.
 
 ### The parameter ranges for a new model
 
-These may change as the package is updated: the current ranges should be
+These may change as the package is updated. For the pretrained model shipped
+with the package the current ranges are
 
 - `total_mass`: between 2 and 4 solar masses
 - `mass_ratio`: between 1 and 3
-- `lambda_1` (tidal polarizability of the larger star): between 5 and 5000
-- `lambda_2`: between 5 and 5000
+- `lambda_1` (tidal polarizability of the larger star): between 5 and 12000
+- `lambda_2`: between 5 and 12000
 - `chi_1` (aligned spin of the larger star): between -0.5 and 0.5
 - `chi_2`: between -0.5 and 0.5
 - frequencies: between 5 and 2048 Hz
 
-These can be checked, once a `Model` object is initialized as described before,
-by looking at the ranges of any of its modes:
+A freshly-created `Model` uses narrower defaults instead (`lambda_1` and
+`lambda_2` between 5 and 5000), set by
+{class}`ParameterRanges <mlgw_bns.data_management.ParameterRanges>` and
+customizable through the `parameter_ranges` argument of `ModeModel` (or of
+`Model`, which forwards it to every mode) when building a new model.
+
+The ranges actually in effect can be checked, once a `Model` object is
+initialized as described before, by looking at the ranges of any of its modes:
 ```python
 >>> print(model.mode_models[Mode(2, 2)].parameter_ranges)
-ParameterRanges(mass_range=(2.0, 4.0), q_range=(1.0, 3.0), lambda1_range=(5.0, 5000.0), lambda2_range=(5.0, 5000.0), chi1_range=(-0.5, 0.5), chi2_range=(-0.5, 0.5))
+ParameterRanges(mass_range=(2.0, 4.0), q_range=(1.0, 3.0), lambda1_range=(5.0, 12000.0), lambda2_range=(5.0, 12000.0), chi1_range=(-0.5, 0.5), chi2_range=(-0.5, 0.5))
 ```
 for the first six,
 ```python

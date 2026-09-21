@@ -1,13 +1,16 @@
-"""Corner plot marking which regions of parameter space get discarded by
-`WaveformGenerator.generate_residuals`.
+"""Corner plot marking which regions of parameter space have a
+non-positive EOB amplitude somewhere in the band.
 
-For the (2,1) and (3,3) modes, `generate_residuals` returns `None` (and the
-parameter set is skipped during training) whenever the EOB amplitude goes
-non-positive somewhere in the band, since that causes a pi phase jump the
-NN cannot learn. This script draws many parameter sets from the same
-distribution used to build a training dataset, checks which ones are
-discarded for each of these modes, and plots the result as a corner plot
-over the five intrinsic parameters (q, Lambda_1, Lambda_2, chi_1, chi_2).
+For the (2,1) and (3,3) modes this used to make `generate_residuals`
+return `None`, and the parameter set was skipped during training, since a
+sign flip in the amplitude causes a pi phase jump the NN cannot learn.
+`generate_residuals` no longer discards these --- it is not None-safe
+against them --- so this script instead calls
+`effective_one_body_waveform` directly and flags a parameter set whenever
+its EOB amplitude dips to or below zero anywhere in the band, i.e. what
+would previously have been discarded. It then plots the result as a
+corner plot over the five intrinsic parameters (q, Lambda_1, Lambda_2,
+chi_1, chi_2).
 
 Run with: python visualization/plot_discarded_parameters.py
 """
@@ -52,7 +55,7 @@ def corner_plot(samples: np.ndarray, discarded: np.ndarray, title: str, outfile:
             if row == col:
                 bins = np.histogram_bin_edges(samples[:, col], bins=30)
                 ax.hist(samples[kept, col], bins=bins, color="0.6", alpha=0.7, label="kept")
-                ax.hist(samples[discarded, col], bins=bins, color="crimson", alpha=0.8, label="discarded")
+                ax.hist(samples[discarded, col], bins=bins, color="crimson", alpha=0.8, label="would be discarded")
                 ax.set_yticks([])
             else:
                 ax.scatter(samples[kept, col], samples[kept, row], s=4, color="0.6", alpha=0.5, linewidths=0)
@@ -91,12 +94,13 @@ for mode in MODES:
 
     discarded = np.zeros(N_WAVEFORMS, dtype=bool)
     for i, params in enumerate(params_list):
-        discarded[i] = generator.generate_residuals(params, f_natural) is None
+        _, amplitude_eob, _ = generator.effective_one_body_waveform(params, f_natural)
+        discarded[i] = bool(np.any(amplitude_eob <= 0))
 
     corner_plot(
         samples,
         discarded,
-        title=rf"Discarded parameter sets for $(\ell, m) = ({mode.l}, {mode.m})$",
+        title=rf"Would-be-discarded parameter sets for $(\ell, m) = ({mode.l}, {mode.m})$",
         outfile=f"discarded_params_l{mode.l}_m{mode.m}.png",
     )
 

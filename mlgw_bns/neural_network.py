@@ -28,22 +28,32 @@ relies on at training and prediction time:
   --- helpers for fetching the pretrained Pareto front of best
   hyperparameter trials shipped with the package.
 
+* :func:`load_kernel_ridge_defaults` and :func:`save_kernel_ridge_default`
+  --- the per-mode ``(kernel_gamma, kernel_alpha)`` counterpart for
+  :class:`KernelRidgeNetwork`, written by
+  :meth:`~mlgw_bns.hyperparameter_optimization.HyperparameterOptimization.save_best_as_default`.
+
 The optional PyTorch backend that used to live in this module has been
 removed; only the scikit-learn backend is now supported.
 """
 
 from __future__ import annotations
 
+import json
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import IO, TYPE_CHECKING, Optional, Union
+from pathlib import Path
+from typing import IO, TYPE_CHECKING, Any, Callable, Optional, Union
 
 import joblib  # type: ignore
 import numpy as np
+import scipy.linalg  # type: ignore
 from importlib.resources import files
 from sklearn.gaussian_process import GaussianProcessRegressor  # type: ignore
-from sklearn.kernel_approximation import RBFSampler  # type: ignore
-from sklearn.linear_model import Ridge  # type: ignore
+from sklearn.kernel_approximation import Nystroem, RBFSampler  # type: ignore
+from sklearn.kernel_ridge import KernelRidge  # type: ignore
+from sklearn.linear_model import LinearRegression, Ridge, RidgeCV  # type: ignore
 from sklearn.neural_network import MLPRegressor  # type: ignore
 from sklearn.pipeline import Pipeline  # type: ignore
 from sklearn.preprocessing import MinMaxScaler, StandardScaler  # type: ignore
@@ -51,9 +61,58 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler  # type: ignore
 if TYPE_CHECKING:
     import optuna
 
+    from .pn_modes import Mode
+
 #: Location, relative to the package, of the joblib-pickled Pareto front
 #: produced by the hyperparameter-optimization pipeline.
 TRIALS_FILE = "data/best_trials.pkl"
+
+#: Where the per-mode :class:`KernelRidgeNetwork` defaults, tuned by
+#: :class:`~mlgw_bns.hyperparameter_optimization.HyperparameterOptimization`,
+#: are read from and written to. Kept as plain JSON, rather than joblib
+#: like :data:`TRIALS_FILE`, since it is meant to be hand-edited and
+#: diffed as easily as the code that produces it.
+KERNEL_DEFAULTS_PATH = Path(__file__).parent / "data" / "kernel_ridge_defaults.json"
+
+
+def mode_key(mode: "Optional[Mode]") -> str:
+    """Turn a :class:`~mlgw_bns.pn_modes.Mode` into the string key used to
+    index the per-mode kernel-ridge defaults. ``None`` is the (2,2) mode,
+    the convention used throughout :class:`~mlgw_bns.mode_model.ModeModel`.
+    """
+    l, m = (2, 2) if mode is None else mode
+    return f"{l}{m}"
+
+
+def load_kernel_ridge_defaults() -> "dict[str, tuple[float, float]]":
+    """Read the per-mode ``(kernel_gamma, kernel_alpha)`` defaults.
+
+    Returns an empty mapping if the file does not exist yet, i.e. before
+    any mode has been optimized.
+    """
+    try:
+        with open(KERNEL_DEFAULTS_PATH) as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        return {}
+    return {key: (v["kernel_gamma"], v["kernel_alpha"]) for key, v in raw.items()}
+
+
+def save_kernel_ridge_default(mode: "Optional[Mode]", kernel_gamma: float, kernel_alpha: float) -> None:
+    """Persist ``(kernel_gamma, kernel_alpha)`` as the default for ``mode``,
+    merging into whatever is already on disk for the other modes.
+    """
+    try:
+        with open(KERNEL_DEFAULTS_PATH) as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        raw = {}
+
+    raw[mode_key(mode)] = {"kernel_gamma": kernel_gamma, "kernel_alpha": kernel_alpha}
+
+    KERNEL_DEFAULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(KERNEL_DEFAULTS_PATH, "w") as f:
+        json.dump(raw, f, indent=2, sort_keys=True)
 
 
 @dataclass
@@ -104,6 +163,18 @@ class Hyperparameters:
     max_iter : int, optional
             Hard upper bound on the number of training iterations.
             Defaults to 1000.
+    legacy_batch_size_clip : bool, optional
+            Reproduce the mini-batch clipping of models packaged before
+            this flag existed, which clipped ``batch_size`` to the number
+            of input features (five) rather than the number of training
+            samples. Defaults to ``False``. See :meth:`SklearnNetwork.fit`.
+    kernel_gamma : float, optional
+            Width of the RBF kernel used by :class:`KernelRidgeNetwork`,
+            on standardized inputs. Ignored by :class:`SklearnNetwork`.
+    kernel_alpha : float, optional
+            Ridge regularization used by :class:`KernelRidgeNetwork`.
+            Small values give the best median accuracy; larger ones trade
+            that against the worst case. Ignored by :class:`SklearnNetwork`.
     """
 
     pc_exponent: float
@@ -119,6 +190,17 @@ class Hyperparameters:
     n_iter_no_change: float
 
     max_iter: int = field(default=1000)
+
+    #: Kept so that the packaged models, all of which were trained with the
+    #: mini-batch clipped to the feature count, can be reproduced exactly.
+    legacy_batch_size_clip: bool = field(default=False)
+
+    #: Defaults for :class:`KernelRidgeNetwork`, from a scan over gamma and
+    #: alpha on the (2,2) mode with 8192 training waveforms. Unused by the
+    #: network backend, which is why they carry defaults rather than being
+    #: required like the rest.
+    kernel_gamma: float = field(default=0.1)
+    kernel_alpha: float = field(default=1e-10)
 
     @property
     def n_layers(self) -> int:
@@ -217,27 +299,125 @@ class Hyperparameters:
     ) -> "Hyperparameters":
         """Reconstruct a :class:`Hyperparameters` from a frozen Optuna trial.
 
-        This is the inverse of :meth:`from_trial` for already-completed
-        trials, used when reading the pretrained Pareto front shipped
-        with the package.
+        This is the inverse of :meth:`from_trial` (or, for a trial
+        produced by :meth:`from_trial_kernel_ridge`, of that instead) for
+        already-completed trials, used when reading the pretrained
+        Pareto front shipped with the package.
 
         Parameters
         ----------
         frozen_trial : optuna.trial.FrozenTrial
                 Completed trial whose params dictionary contains the
-                values produced by :meth:`from_trial`.
+                values produced by :meth:`from_trial` or
+                :meth:`from_trial_kernel_ridge`.
 
         Returns
         -------
         Hyperparameters
                 Hyperparameter set corresponding to the trial.
         """
-        params = frozen_trial.params
+        params = dict(frozen_trial.params)
+
+        if "n_layers" not in params:
+            # A trial from from_trial_kernel_ridge: only n_train,
+            # kernel_gamma and kernel_alpha were ever sampled.
+            return cls.default_kernel_ridge(
+                n_train=params["n_train"],
+                kernel_gamma=params["kernel_gamma"],
+                kernel_alpha=params["kernel_alpha"],
+            )
+
         n_layers = params.pop("n_layers")
         layers = [params.pop(f"size_layer_{i}") for i in range(n_layers)]
         params["hidden_layer_sizes"] = tuple(layers)
 
         return cls(**params)
+
+    @classmethod
+    def from_trial_kernel_ridge(
+        cls, trial: "optuna.Trial", n_train: int
+    ) -> "Hyperparameters":
+        """Sample a :class:`Hyperparameters` for :class:`KernelRidgeNetwork`
+        from an :class:`optuna.Trial`.
+
+        Unlike :meth:`from_trial`, this only samples the two parameters
+        :class:`KernelRidgeNetwork` actually reads, :attr:`kernel_gamma`
+        and :attr:`kernel_alpha`; ``n_train`` is fixed rather than
+        sampled, since the accuracy comparison across trials is only
+        fair at a fixed training-set size, and the MLP-specific fields
+        are filled with placeholders :class:`KernelRidgeNetwork` ignores.
+
+        Parameters
+        ----------
+        trial : optuna.Trial
+                Trial object used to draw ``kernel_gamma`` and ``kernel_alpha``.
+        n_train : int
+                Fixed number of training waveforms.
+
+        Returns
+        -------
+        Hyperparameters
+        """
+        trial.suggest_int("n_train", n_train, n_train)
+
+        return cls.default_kernel_ridge(
+            n_train=n_train,
+            kernel_gamma=trial.suggest_float("kernel_gamma", 1e-3, 30.0, log=True),
+            kernel_alpha=trial.suggest_float("kernel_alpha", 1e-14, 1e-2, log=True),
+        )
+
+    @classmethod
+    def default_kernel_ridge(
+        cls,
+        n_train: int,
+        mode: "Optional[Mode]" = None,
+        kernel_gamma: Optional[float] = None,
+        kernel_alpha: Optional[float] = None,
+    ) -> "Hyperparameters":
+        """Build a :class:`Hyperparameters` for :class:`KernelRidgeNetwork`.
+
+        The MLP-specific fields are filled with placeholders, since
+        :class:`KernelRidgeNetwork` never reads them. If ``kernel_gamma``
+        or ``kernel_alpha`` are not given explicitly, they are looked up
+        in :func:`load_kernel_ridge_defaults` for ``mode``, falling back
+        to the class-level defaults if that mode has not been optimized
+        yet.
+
+        Parameters
+        ----------
+        n_train : int
+                Number of training waveforms.
+        mode : Mode, optional
+                Mode whose tuned defaults to use, when ``kernel_gamma``
+                or ``kernel_alpha`` are not given explicitly. Defaults to
+                the (2,2) mode.
+        kernel_gamma : float, optional
+        kernel_alpha : float, optional
+
+        Returns
+        -------
+        Hyperparameters
+        """
+        if kernel_gamma is None or kernel_alpha is None:
+            tuned = load_kernel_ridge_defaults().get(mode_key(mode))
+            if tuned is not None:
+                kernel_gamma = kernel_gamma if kernel_gamma is not None else tuned[0]
+                kernel_alpha = kernel_alpha if kernel_alpha is not None else tuned[1]
+
+        return cls(
+            pc_exponent=1.0,
+            n_train=n_train,
+            hidden_layer_sizes=(1,),
+            activation="relu",
+            alpha=0.0,
+            batch_size=1,
+            learning_rate_init=0.0,
+            tol=0.0,
+            validation_fraction=0.1,
+            n_iter_no_change=1,
+            kernel_gamma=kernel_gamma if kernel_gamma is not None else cls.kernel_gamma,
+            kernel_alpha=kernel_alpha if kernel_alpha is not None else cls.kernel_alpha,
+        )
 
     @classmethod
     def default(cls, training_waveform_number: Optional[int] = None) -> "Hyperparameters":
@@ -292,7 +472,12 @@ class NeuralNetwork(ABC):
         self.hyper = hyper
 
     @abstractmethod
-    def fit(self, x_data: np.ndarray, y_data: np.ndarray) -> None:
+    def fit(
+        self,
+        x_data: np.ndarray,
+        y_data: np.ndarray,
+        sample_weight: Optional[np.ndarray] = None,
+    ) -> None:
         """Fit the network to the given training data.
 
         Parameters
@@ -302,6 +487,14 @@ class NeuralNetwork(ABC):
         y_data : np.ndarray
                 Targets, shape ``(n_samples, n_outputs)`` (or
                 ``(n_samples,)`` for a scalar target).
+        sample_weight : np.ndarray, optional
+                Per-sample weights, shape ``(n_samples,)``. ``None``
+                (the default) means an unweighted fit, and implementations
+                must then not pass the argument on to scikit-learn at all,
+                so that behaviour is unchanged from before weighting
+                existed. Supplied by
+                :meth:`~mlgw_bns.mode_model.ModeModel.train_nn` for odd-``m``
+                modes; see :func:`~mlgw_bns.mode_model.mode_power_weights`.
         """
 
     @abstractmethod
@@ -380,20 +573,48 @@ class SklearnNetwork(NeuralNetwork):
         if param_scaler is not None:
             self.param_scaler: StandardScaler = param_scaler
 
-    def fit(self, x_data: np.ndarray, y_data: np.ndarray) -> None:
+    def fit(
+        self,
+        x_data: np.ndarray,
+        y_data: np.ndarray,
+        sample_weight: Optional[np.ndarray] = None,
+    ) -> None:
         """Fit the scaler and the underlying :class:`MLPRegressor`.
 
-        The mini-batch size is temporarily clipped to the input feature
-        count to avoid scikit-learn's "batch_size larger than data" warning;
-        it is restored to the configured value once training completes.
+        The mini-batch size is temporarily clipped to the number of
+        training samples, to avoid scikit-learn's "batch_size larger than
+        data" warning, and restored once training completes.
+
+        Every model packaged before this was written was trained with
+        :attr:`Hyperparameters.legacy_batch_size_clip` behaviour, in which
+        the clip used ``x_data.shape[1]`` --- the number of *features*,
+        which is five --- so the configured ``batch_size`` never survived
+        at any training-set size. That is preserved here as an option, for
+        reproducing those models exactly; it is not the default, because
+        it makes any tuning of ``batch_size`` meaningless.
+
+        ``sample_weight`` is forwarded to ``MLPRegressor.fit`` only when it
+        is not ``None``, so an unweighted call is byte-identical to the
+        one-argument call this method used to make.
         """
         self.param_scaler = StandardScaler().fit(x_data)
 
         old_batch_size = self.nn.batch_size
-        self.nn.batch_size = min(self.nn.batch_size, x_data.shape[1])
+        # A dataclass default is a class attribute, so this resolves even
+        # on a `Hyperparameters` unpickled from before the field existed
+        # --- such an instance picks up the new default, i.e. the repaired
+        # clip. That is harmless for the packaged models: the flag is only
+        # read here, and loading one of them to predict never fits. It
+        # only means that *re-fitting* with old hyperparameters uses the
+        # corrected mini-batch, which is what one would want anyway.
+        clip_to = (
+            x_data.shape[1] if self.hyper.legacy_batch_size_clip else x_data.shape[0]
+        )
+        self.nn.batch_size = min(self.nn.batch_size, clip_to)
 
         scaled_x = self.param_scaler.transform(x_data)
-        self.nn.fit(scaled_x, y_data)
+        weight_kwargs = {} if sample_weight is None else {"sample_weight": sample_weight}
+        self.nn.fit(scaled_x, y_data, **weight_kwargs)
 
         self.nn.batch_size = old_batch_size
 
@@ -418,6 +639,189 @@ class SklearnNetwork(NeuralNetwork):
 
     @classmethod
     def from_file(cls, filename: Union[IO[bytes], str]) -> "SklearnNetwork":
+        """Inverse of :meth:`save`. The tuple is unpacked into the constructor."""
+        return cls(*joblib.load(filename))
+
+
+class KernelRidgeNetwork(NeuralNetwork):
+    r"""Kernel ridge regression from parameters to component coefficients.
+
+    A drop-in alternative to :class:`SklearnNetwork`, selected by passing
+    it as ``nn_kind`` to :class:`~mlgw_bns.mode_model.ModeModel`. On the
+    (2,2) mode with 8192 training waveforms it reaches a median mismatch
+    of :math:`3.4 \times 10^{-9}` against the network's
+    :math:`7 \times 10^{-6}`, and fits in twenty seconds rather than ten
+    minutes.
+
+    Two things make the difference. The first is that this map is smooth
+    and low-dimensional --- five parameters to a few tens of coefficients
+    --- which is the regime kernel methods are good at, and there is no
+    stochastic optimizer to converge. The second is subtler: the network
+    minimizes an unweighted mean squared error over targets that have
+    been divided by :math:`\max_j |x_{ji}|` per component, which weights
+    component :math:`i`'s contribution to the *residual* by
+    :math:`s_i^{-2}`, running some nine orders of magnitude in favour of
+    the least important component. Kernel ridge solves
+    :math:`(K + \alpha I)^{-1} y` separately for each output, which is
+    equivariant under rescaling each output, so that weighting --- and
+    hence :attr:`Hyperparameters.pc_exponent` --- cannot affect it at all.
+
+    Inputs are standardized, as for the network. Outputs are standardized
+    too, which is what makes a single :attr:`Hyperparameters.kernel_alpha`
+    meaningful across components that span ten orders of magnitude.
+
+    The cost of a prediction grows with the training set, since it
+    evaluates one kernel per training point: about 260 microseconds per
+    waveform per mode at 8192 training waveforms, against 35 for the
+    network. Set against the ~25 ms a full four-mode waveform takes end
+    to end, that is a few per cent.
+
+    Parameters
+    ----------
+    hyper : Hyperparameters
+            Only :attr:`~Hyperparameters.kernel_gamma` and
+            :attr:`~Hyperparameters.kernel_alpha` are read; the network
+            attributes are ignored, but the object is kept whole so that
+            the rest of the codebase can treat the two backends alike.
+    regressor : KernelRidge, optional
+            Pre-built regressor to wrap.
+    param_scaler : StandardScaler, optional
+            Pre-fitted scaler for the inputs.
+    target_scaler : StandardScaler, optional
+            Pre-fitted scaler for the outputs.
+    """
+
+    def __init__(
+        self,
+        hyper: Hyperparameters,
+        regressor: "Optional[KernelRidge]" = None,
+        param_scaler: Optional[StandardScaler] = None,
+        target_scaler: Optional[StandardScaler] = None,
+    ):
+        super().__init__(hyper=hyper)
+        if regressor is None:
+            regressor = KernelRidge(
+                kernel="rbf",
+                gamma=getattr(hyper, "kernel_gamma", 0.1),
+                alpha=getattr(hyper, "kernel_alpha", 1e-10),
+            )
+        self.regressor: KernelRidge = regressor
+        if param_scaler is not None:
+            self.param_scaler: StandardScaler = param_scaler
+        if target_scaler is not None:
+            self.target_scaler: StandardScaler = target_scaler
+        #: Cached row norms of ``regressor.X_fit_`` for the lean RBF
+        #: evaluation in :meth:`predict` (filled on first use).
+        self._xfit_sqnorm: Optional[np.ndarray] = None
+
+    def fit(
+        self,
+        x_data: np.ndarray,
+        y_data: np.ndarray,
+        sample_weight: Optional[np.ndarray] = None,
+    ) -> None:
+        """Fit the two scalers and solve the kernel system.
+
+        For small ``kernel_gamma`` the RBF Gram matrix is close to
+        low-rank --- broad kernels make training points look alike to
+        each other --- so its Cholesky solve routinely reports a
+        singular matrix regardless of ``kernel_alpha``. scikit-learn
+        already falls back to an exact least-squares solve (slower, but
+        not wrong) and warns every time it does; that warning is
+        expected here rather than a sign of a bad fit, so it is
+        silenced.
+
+        ``sample_weight`` reaches the :class:`KernelRidge` solve only.
+        The two scalers are deliberately left *unweighted*: their means
+        and scales set what ``kernel_gamma`` and ``kernel_alpha`` mean,
+        and those are tuned per mode in ``data/kernel_ridge_defaults.json``
+        against the unweighted standardization. Weighting them would
+        silently change the effective kernel width and ridge penalty
+        along with the weights.
+        """
+        self.param_scaler = StandardScaler().fit(x_data)
+        self.target_scaler = StandardScaler().fit(y_data)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="Singular matrix in solving dual problem.*",
+                category=UserWarning,
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message="Ill-conditioned matrix.*",
+                category=scipy.linalg.LinAlgWarning,
+            )
+            weight_kwargs = (
+                {} if sample_weight is None else {"sample_weight": sample_weight}
+            )
+            self.regressor.fit(
+                self.param_scaler.transform(x_data),
+                self.target_scaler.transform(y_data),
+                **weight_kwargs,
+            )
+
+    def predict(self, x_data: np.ndarray) -> np.ndarray:
+        """Parameters to component coefficients.
+
+        This is a lean re-implementation of
+        ``target_scaler.inverse_transform(regressor.predict(
+        param_scaler.transform(x)))`` for the fitted RBF
+        :class:`~sklearn.kernel_ridge.KernelRidge` and the two
+        :class:`~sklearn.preprocessing.StandardScaler` objects. It is
+        called once per mode on a single already-clean parameter row, and
+        scikit-learn's ``KernelRidge.predict`` re-validates the whole
+        ``(n_train, n_features)`` training matrix through ``check_array``
+        on every call --- which, for ``n_train`` in the thousands, costs
+        several times the actual kernel evaluation. The maths is
+        identical: ``K_ij = exp(-gamma ||x_i - X_fit_j||^2)`` and the
+        prediction is ``K @ dual_coef_``, de-standardized.
+
+        The floating-point operation order matches
+        :func:`sklearn.metrics.pairwise.euclidean_distances` /
+        ``rbf_kernel`` exactly (accumulate ``-2 X Y^T``, then add the two
+        squared-norm vectors, then ``exp`` in place), so the output is
+        bit-for-bit identical to the scikit-learn path --- which matters
+        because the small ``kernel_alpha`` makes ``dual_coef_`` large and
+        alternating, so ``K @ dual_coef_`` is a cancelling sum sensitive
+        to the summation order.
+        """
+        regressor = self.regressor
+        x_fit = regressor.X_fit_
+        params = np.asarray(x_data, dtype=float)
+        scaled_x = (params - self.param_scaler.mean_) / self.param_scaler.scale_
+
+        sq_norm = self._xfit_sqnorm
+        if sq_norm is None or sq_norm.shape[0] != x_fit.shape[0]:
+            sq_norm = np.einsum("ij,ij->i", x_fit, x_fit)
+            self._xfit_sqnorm = sq_norm
+
+        gamma = regressor.gamma
+        if gamma is None:
+            gamma = 1.0 / x_fit.shape[1]
+
+        sq_dist = -2.0 * (scaled_x @ x_fit.T)
+        sq_dist += np.einsum("ij,ij->i", scaled_x, scaled_x)[:, None]
+        sq_dist += sq_norm[None, :]
+        np.maximum(sq_dist, 0.0, out=sq_dist)
+        sq_dist *= -gamma
+        np.exp(sq_dist, out=sq_dist)
+
+        scaled_prediction = sq_dist @ regressor.dual_coef_
+        return (
+            scaled_prediction * self.target_scaler.scale_ + self.target_scaler.mean_
+        )
+
+    def save(self, filename: str) -> None:
+        """Pickle ``(hyper, regressor, param_scaler, target_scaler)`` via joblib."""
+        joblib.dump(
+            (self.hyper, self.regressor, self.param_scaler, self.target_scaler),
+            filename,
+        )
+
+    @classmethod
+    def from_file(cls, filename: Union[IO[bytes], str]) -> "KernelRidgeNetwork":
         """Inverse of :meth:`save`. The tuple is unpacked into the constructor."""
         return cls(*joblib.load(filename))
 
@@ -521,13 +925,19 @@ class TimeshiftsGPR:
         scaled_params = self.scaler.transform(params)
         return self.regressor.predict(scaled_params)
 
-    def save_model(self, filename: str) -> None:
+    def save_model(self, filename: str, include_training_data: bool = True) -> None:
         """Persist the entire object to ``filename`` via joblib.
 
         Parameters
         ----------
         filename : str
                 Destination path.
+        include_training_data : bool, optional
+                Ignored: a Gaussian process needs its training points to
+                :meth:`predict` (they parametrise the posterior), so unlike
+                :class:`TimeshiftsNN`/:class:`ModePhasesNN` there is nothing
+                to strip. Accepted only so :meth:`Model.save` can call every
+                predictor's ``save_model`` uniformly.
         """
         joblib.dump(self, filename)
 
@@ -648,6 +1058,43 @@ class TimeshiftsNN:
             ]
         )
 
+    #: Ridge penalties scanned by the leave-one-out CV in
+    #: :meth:`make_nystroem_ridge_pipeline`.
+    NYSTROEM_ALPHAS = np.logspace(-10.0, 0.0, 21)
+
+    @staticmethod
+    def make_nystroem_ridge_pipeline(
+        n_components: int = 2500,
+        gamma: float = DEFAULT_GAMMA,
+        random_state: int = DEFAULT_RANDOM_STATE,
+    ) -> Pipeline:
+        r"""Nystroem RBF features + leave-one-out-CV ridge.
+
+        Unlike the random features of :meth:`make_rff_ridge_pipeline`, the
+        ``n_components`` Nystroem landmarks are drawn from the training set,
+        so for a smooth low-dimensional target the kernel approximation is
+        markedly more sample-efficient at equal width. The ridge penalty is
+        chosen per fit by :class:`~sklearn.linear_model.RidgeCV`'s efficient
+        generalised cross-validation over :attr:`NYSTROEM_ALPHAS`.
+
+        Used by :class:`ModePhasesNN`; see the head-to-head in
+        ``compare_phase_regressors.py`` (Nystroem beat RFF on every mode and
+        training-set size, and both MLP variants).
+        """
+        return Pipeline(
+            [
+                (
+                    "nystroem",
+                    Nystroem(
+                        n_components=n_components,
+                        gamma=gamma,
+                        random_state=random_state,
+                    ),
+                ),
+                ("ridge", RidgeCV(alphas=TimeshiftsNN.NYSTROEM_ALPHAS)),
+            ]
+        )
+
     def fit(self) -> "TimeshiftsNN":
         """Fit the RFF + Ridge model on stored training data.
 
@@ -704,9 +1151,26 @@ class TimeshiftsNN:
         scaled_params = self.scaler.transform(params)
         return self.regressor.predict(scaled_params)
 
-    def save_model(self, filename: str) -> None:
-        """Persist the entire object to ``filename`` via joblib."""
-        joblib.dump(self, filename)
+    def save_model(self, filename: str, include_training_data: bool = True) -> None:
+        """Persist the entire object to ``filename`` via joblib.
+
+        Parameters
+        ----------
+        include_training_data : bool, optional
+            If ``False``, ``training_params``/``training_timeshifts`` are
+            dropped before pickling (restored on ``self`` afterwards) ---
+            they are only needed to refit, not to :meth:`predict`, and for
+            RFF+Ridge they are the entire footprint of the file.
+        """
+        if include_training_data:
+            joblib.dump(self, filename)
+            return
+        tp, tt = self.training_params, self.training_timeshifts
+        self.training_params = self.training_timeshifts = None
+        try:
+            joblib.dump(self, filename)
+        finally:
+            self.training_params, self.training_timeshifts = tp, tt
 
     @classmethod
     def load_model(cls, filename: str) -> "TimeshiftsNN":
@@ -721,6 +1185,317 @@ class TimeshiftsNN:
         if not isinstance(model, cls):
             raise ValueError("Loaded model is not of the correct type.")
         return model
+
+
+class ModePhasesNN:
+    """Kernel-ridge surrogate for per-mode reference phases.
+
+    Analogous to :class:`TimeshiftsNN`, but a *multi-output* regressor: for
+    a given set of intrinsic parameters it predicts the vector
+    ``[phi_lm[f0] for lm in modes]`` --- the phase of each spherical
+    harmonic mode at the lowest frequency node of the training grid.
+
+    The regressor is an **exact RBF** :class:`~sklearn.kernel_ridge.KernelRidge`
+    (see :meth:`make_kernel_ridge_pipeline`). The reference dataset is small
+    (~16k), so the exact kernel solve is cheap, and ``compare_mode_phase_regressor.py``
+    found it beats both the Nystroem(2500) landmark approximation (which it
+    replaced) and RFF on every mode and training-set size, while pickling to
+    ~1 MB against Nystroem's ~50 MB ``n_components**2`` normalisation matrix.
+    Pass ``pipeline_factory`` to override.
+
+    The relative phases between modes are hard for the per-mode PCA +
+    network to learn from the residuals directly; pulling the node-0
+    per-mode phase constant out into this dedicated regressor gives the
+    per-mode networks cleaner training data while still allowing the
+    mode phases (and hence their relative phases) to be reconstructed at
+    predict time.
+
+    Same construction contract as :class:`TimeshiftsNN`: pass
+    ``training_params`` and ``training_mode_phases`` to fit from data, or
+    a fitted ``regressor`` and ``scaler`` to wrap an existing pipeline.
+
+    Parameters
+    ----------
+    regressor : object, optional
+            Fitted scikit-learn regressor or pipeline with ``predict``.
+    scaler : MinMaxScaler, optional
+            Fitted input scaler. Defaults to a fresh :class:`MinMaxScaler`.
+    modes : list[tuple[int, int]], optional
+            The ``(l, m)`` modes, in the column order of the targets.
+    training_params : np.ndarray, optional
+            Training feature matrix, shape ``(n_samples, n_features)``.
+    training_mode_phases : np.ndarray, optional
+            Training targets, shape ``(n_samples, n_modes)``.
+    n_components, gamma, ridge_alpha, random_state
+            As in :class:`TimeshiftsNN`.
+
+    Attributes
+    ----------
+    is_fitted : bool
+            ``True`` once the model is ready for :meth:`predict`.
+    """
+
+    #: Kept for the ``pipeline_factory=None`` Nystroem fallback and legacy
+    #: pickles; the default pipeline is exact kernel ridge and ignores it.
+    DEFAULT_N_COMPONENTS = 2500
+    DEFAULT_GAMMA = TimeshiftsNN.DEFAULT_GAMMA
+    DEFAULT_RIDGE_ALPHA = TimeshiftsNN.DEFAULT_RIDGE_ALPHA
+    DEFAULT_RANDOM_STATE = TimeshiftsNN.DEFAULT_RANDOM_STATE
+    #: Ridge penalty for the default exact :class:`~sklearn.kernel_ridge.KernelRidge`
+    #: (:meth:`make_kernel_ridge_pipeline`). Small: the target is smooth and the
+    #: reference dataset noise-free bar TEOB ``tc`` quantisation.
+    DEFAULT_KERNEL_ALPHA = 1e-8
+
+    @staticmethod
+    def make_kernel_ridge_pipeline(
+        gamma: float = DEFAULT_GAMMA, alpha: float = DEFAULT_KERNEL_ALPHA
+    ) -> Pipeline:
+        """Exact RBF kernel ridge --- the default reference-phase regressor."""
+        return Pipeline(
+            [("kernel_ridge", KernelRidge(kernel="rbf", gamma=gamma, alpha=alpha))]
+        )
+
+    def __init__(
+        self,
+        regressor=None,
+        scaler: Optional[MinMaxScaler] = None,
+        *,
+        modes: Optional[list] = None,
+        training_params: Optional[np.ndarray] = None,
+        training_mode_phases: Optional[np.ndarray] = None,
+        f0_natural: Optional[float] = None,
+        relative_to_22: bool = True,
+        n_components: int = DEFAULT_N_COMPONENTS,
+        gamma: float = DEFAULT_GAMMA,
+        ridge_alpha: float = DEFAULT_RIDGE_ALPHA,
+        random_state: int = DEFAULT_RANDOM_STATE,
+        pipeline_factory: Optional[Callable[[], Any]] = None,
+    ):
+        self.regressor = regressor
+        self.scaler = scaler if scaler is not None else MinMaxScaler()
+        self.modes = modes
+        #: Zero-argument callable returning an unfitted scikit-learn
+        #: estimator/pipeline for the leftover regression. ``None`` (the
+        #: default and what every shipped model uses) means
+        #: :meth:`make_kernel_ridge_pipeline` (exact RBF kernel ridge). Set
+        #: it to swap in a different regressor --- see
+        #: ``compare_mode_phase_regressor.py``. Not persisted (a fitted
+        #: model carries only its ``regressor``); legacy pickles get
+        #: ``None`` via :meth:`__setstate__`.
+        self.pipeline_factory = pipeline_factory
+        self.training_params = training_params
+        self.training_mode_phases = training_mode_phases
+        #: When ``True`` (and (2,2) is among ``modes``), every higher-order
+        #: mode is regressed as ``phi_lm(f0) - phi_22(f0)`` rather than
+        #: ``phi_lm(f0)`` directly. The two share a large, strongly curved
+        #: common term --- the merger-time-alignment phase ``2 pi f0 tc``,
+        #: mode-independent (verified: ``roughness(phi_lm - (m/2) phi_22) /
+        #: roughness(phi_lm) = |1 - m/2|`` exactly) --- which the difference
+        #: cancels, leaving only the small smooth per-mode PN structure.
+        #: (2,2) itself keeps its absolute target. Legacy pickles default
+        #: to ``False`` via :meth:`__setstate__`.
+        self.relative_to_22 = relative_to_22
+        #: Frequency (natural units) at which the reference phase is
+        #: anchored. When set, the huge stationary-phase backbone
+        #: ``a * M_lm + b`` is subtracted analytically per mode and only
+        #: the smooth leftover is regressed. ``None`` -> plain regressor
+        #: on the raw targets (legacy behaviour / old pickles).
+        self.f0_natural = f0_natural
+        #: ``(l, m) -> (LinearRegression, f0_natural)`` calibration of the
+        #: analytic backbone, populated by :meth:`fit` when ``f0_natural``
+        #: is set: a linear fit of the target on ``[M_lm, q, Lambda_1,
+        #: Lambda_2, chi_1, chi_2]``. Legacy pickles instead hold the
+        #: 3-tuple ``(a, b, f0_natural)`` of the old ``a * M_lm + b`` fit.
+        self.analytic_coeffs: dict = {}
+        self.n_components = n_components
+        self.gamma = gamma
+        self.ridge_alpha = ridge_alpha
+        self.random_state = random_state
+        self.is_fitted = regressor is not None
+
+    def __getstate__(self):
+        # ``pipeline_factory`` is only consulted at fit time; a fitted model
+        # carries its ``regressor`` and does not need it. Drop it on pickle
+        # so a lambda / local factory does not break serialization.
+        return {k: v for k, v in self.__dict__.items() if k != "pipeline_factory"}
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.__dict__.setdefault("f0_natural", None)
+        self.__dict__.setdefault("analytic_coeffs", {})
+        self.__dict__.setdefault("relative_to_22", False)
+        self.__dict__.setdefault("pipeline_factory", None)
+
+    def _ref_column(self) -> "Optional[int]":
+        """Column index of the (2,2) mode, or ``None`` if it is absent.
+
+        Relative-to-(2,2) targeting is only active when this is not
+        ``None`` and :attr:`relative_to_22` is set.
+        """
+        if not self.relative_to_22 or self.modes is None:
+            return None
+        for i, lm in enumerate(self.modes):
+            if tuple(lm) == (2, 2):
+                return i
+        return None
+
+    @staticmethod
+    def _backbone_design(params: np.ndarray, lm, f0: float) -> np.ndarray:
+        """``[M_lm, q, Lambda_1, Lambda_2, chi_1, chi_2, chi_eff]`` design matrix.
+
+        The analytic-backbone calibration is a plain linear fit on these
+        columns: ``M_lm`` carries the huge stationary-phase dynamic range,
+        the raw intrinsic parameters plus the effective spin
+        ``chi_eff = (chi_1 + q chi_2) / (1 + q)`` carry the per-mode
+        spin/mass-ratio dependence that the ``m/2`` frequency rescaling in
+        :func:`~mlgw_bns.pn_modes.reference_phase_backbone` gets wrong
+        (dominant for the ``m``-odd and high-``ell`` modes).
+        """
+        from .pn_modes import Mode, reference_phase_backbone
+
+        params = np.asarray(params, dtype=float)
+        m = reference_phase_backbone(params, f0, Mode(*lm))
+        q, chi_1, chi_2 = params[:, 0], params[:, 3], params[:, 4]
+        chi_eff = (chi_1 + q * chi_2) / (1.0 + q)
+        return np.column_stack([m, params, chi_eff])
+
+    def _analytic_prediction(self, params: np.ndarray) -> np.ndarray:
+        """Analytic-backbone calibration per mode, shape ``(n_samples, n_modes)``."""
+        from .pn_modes import Mode, reference_phase_backbone
+
+        params = np.asarray(params, dtype=float)
+        ref = self._ref_column()
+        columns = []
+        for j, lm in enumerate(self.modes):
+            entry = self.analytic_coeffs[lm]
+            if len(entry) == 3:  # legacy (a, b, f0): a * M_lm + b
+                a, b, f0 = entry
+                m = reference_phase_backbone(params, f0, Mode(*lm))
+                columns.append(a * m + b)
+            else:
+                lr, f0 = entry
+                design = self._backbone_design(params, lm, f0)
+                if ref is not None and j != ref:
+                    design = design.copy()
+                    design[:, 0] -= self._backbone_design(
+                        params, self.modes[ref], f0
+                    )[:, 0]
+                columns.append(lr.predict(design))
+        return np.stack(columns, axis=1)
+
+    def fit(self) -> "ModePhasesNN":
+        """Fit the kernel-ridge model on stored training data.
+
+        When ``f0_natural`` was given, each mode's target is first
+        reduced by an analytically-calibrated stationary-phase backbone
+        --- a linear fit on ``[M_lm, q, Lambda_1, Lambda_2, chi_1,
+        chi_2, chi_eff]`` (see :meth:`_backbone_design` and
+        :func:`~mlgw_bns.pn_modes.reference_phase_backbone`) --- and the
+        regressor only learns the smooth ``O(10-100 rad)`` leftover.
+
+        Raises
+        ------
+        ValueError
+                If either ``training_params`` or ``training_mode_phases``
+                was not provided at construction time.
+        """
+        if self.training_params is None or self.training_mode_phases is None:
+            raise ValueError("Training data not provided.")
+
+        targets = np.asarray(self.training_mode_phases, dtype=float).copy()
+
+        ref = self._ref_column()
+        if ref is not None:
+            # regress phi_lm - phi_22 for every higher-order mode; (2,2)
+            # keeps its absolute target (column ``ref``).
+            phi22 = targets[:, ref].copy()
+            for j in range(targets.shape[1]):
+                if j != ref:
+                    targets[:, j] -= phi22
+
+        if self.f0_natural is not None:
+            params = np.asarray(self.training_params, dtype=float)
+            f0 = float(self.f0_natural)
+            self.analytic_coeffs = {}
+            leftover = np.empty_like(targets)
+            for j, lm in enumerate(self.modes):
+                design = self._backbone_design(params, lm, f0)
+                if ref is not None and j != ref:
+                    # backbone for the *difference*: M_lm - M_22
+                    design = design.copy()
+                    design[:, 0] -= self._backbone_design(
+                        params, self.modes[ref], f0
+                    )[:, 0]
+                lr = LinearRegression().fit(design, targets[:, j])
+                self.analytic_coeffs[lm] = (lr, f0)
+                leftover[:, j] = targets[:, j] - lr.predict(design)
+            targets = leftover
+
+        scaled_params = self.scaler.fit_transform(self.training_params)
+        if self.pipeline_factory is not None:
+            self.regressor = self.pipeline_factory()
+        else:
+            self.regressor = self.make_kernel_ridge_pipeline(gamma=self.gamma)
+        self.regressor.fit(scaled_params, targets)
+        self.is_fitted = True
+        return self
+
+    def predict(self, params: np.ndarray) -> np.ndarray:
+        """Predict per-mode reference phases, shape ``(n_samples, n_modes)``."""
+        if not self.is_fitted:
+            raise ValueError("Model is not fitted yet. Call 'fit' first.")
+
+        scaled_params = self.scaler.transform(params)
+        prediction = self.regressor.predict(scaled_params)
+        if self.analytic_coeffs:
+            prediction = prediction + self._analytic_prediction(params)
+
+        ref = self._ref_column()
+        if ref is not None:
+            # invert the phi_lm - phi_22 target transform
+            phi22 = prediction[:, ref].copy()
+            for j in range(prediction.shape[1]):
+                if j != ref:
+                    prediction[:, j] += phi22
+        return prediction
+
+    def save_model(self, filename: str, include_training_data: bool = True) -> None:
+        """Persist the entire object to ``filename`` via joblib.
+
+        Parameters
+        ----------
+        include_training_data : bool, optional
+            If ``False``, ``training_params``/``training_mode_phases`` are
+            dropped before pickling (restored on ``self`` afterwards) ---
+            they are only needed to refit, not to :meth:`predict`.
+        """
+        if include_training_data:
+            joblib.dump(self, filename)
+            return
+        tp, tmp = self.training_params, self.training_mode_phases
+        self.training_params = self.training_mode_phases = None
+        try:
+            joblib.dump(self, filename)
+        finally:
+            self.training_params, self.training_mode_phases = tp, tmp
+
+    @classmethod
+    def load_model(cls, filename: str) -> "ModePhasesNN":
+        """Load a previously saved :class:`ModePhasesNN`."""
+        model = joblib.load(filename)
+        if not isinstance(model, cls):
+            raise ValueError("Loaded model is not of the correct type.")
+        return model
+
+
+def load_mode_phases_predictor_from_file(
+    filename: Union[IO[bytes], str]
+) -> ModePhasesNN:
+    """Load a :class:`ModePhasesNN` checkpoint."""
+    model = joblib.load(filename)
+    if not isinstance(model, ModePhasesNN):
+        raise ValueError("Loaded object is not a ModePhasesNN.")
+    return model
 
 
 def load_timeshifts_predictor(

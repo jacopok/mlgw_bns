@@ -137,7 +137,10 @@ def model():
 
 @pytest.fixture(scope="session")
 def generated_model(model):
-    model.generate(6, 30, 30)
+    model.generate(
+        6, 30, 30,
+        reference_dataset_size=60, reference_grid_points=32, reference_fmax_hz=400.0,
+    )
     yield model
 
 

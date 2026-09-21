@@ -87,14 +87,27 @@ class PrincipalComponentTraining:
         downsampling_indices: DownsamplingIndices,
         number_of_components: int,
         timeshifts_predictor: Union[TimeshiftsGPR, TimeshiftsNN],
+        subtract_mode_phase_anchor: bool = False,
+        mode_phases_predictor=None,
+        mode_index=None,
     ):
 
         self.dataset = dataset
         self.downsampling_indices = downsampling_indices
         self.pca_model = PrincipalComponentAnalysisModel(number_of_components)
         self.timeshifts_predictor = timeshifts_predictor
+        self.subtract_mode_phase_anchor = subtract_mode_phase_anchor
+        self.mode_phases_predictor = mode_phases_predictor
+        self.mode_index = mode_index
 
-    def train(self, number_of_training_waveforms: int) -> PrincipalComponentData:
+    def train(
+        self, number_of_training_waveforms: int, n_jobs: int = 1
+    ) -> PrincipalComponentData:
+        """Generate a training set and fit the PCA on it.
+
+        ``n_jobs`` is sequential (``1``) by default -- parallelism is
+        opt-in; pass a higher value explicitly to use multiple workers.
+        """
 
         if number_of_training_waveforms < self.pca_model.number_of_components:
             logging.warn(
@@ -117,17 +130,42 @@ class PrincipalComponentTraining:
         freq_downsampled, parameters, residuals = self.dataset.generate_residuals(
             number_of_training_waveforms,
             self.downsampling_indices,
-            flatten_phase=False
+            flatten_phase=False,
+            n_jobs=n_jobs,
         )
 
-        residuals.phase_residuals = remove_linear_trend(
+        return self.train_on(
+            parameters,
+            residuals,
+            self.dataset.natural_units_to_hz(freq_downsampled),
+        )
+
+    def train_on(
+        self,
+        parameters,
+        residuals,
+        frequencies_hz: np.ndarray,
+    ) -> PrincipalComponentData:
+        """Fit the PCA on residuals generated elsewhere.
+
+        Used by :meth:`~mlgw_bns.model.Model.generate`, which produces the
+        residuals for every mode from one shared EOB sweep. Does not mutate
+        ``residuals`` (unlike the in-place ``phase_residuals`` assignment in
+        :meth:`train`).
+        """
+        flattened_phase = remove_linear_trend(
             parameters=parameters,
             phi_diff=residuals.phase_residuals,
-            frq=self.dataset.natural_units_to_hz(freq_downsampled),
+            frq=frequencies_hz,
             timeshifts_predictor=self.timeshifts_predictor,
+            subtract_mode_phase_anchor=self.subtract_mode_phase_anchor,
+            mode_phases_predictor=self.mode_phases_predictor,
+            mode_index=self.mode_index,
         )
-
-        return self.pca_model.fit(residuals.combined)
+        combined = np.concatenate(
+            (np.asarray(residuals.amplitude_residuals), flattened_phase), axis=1
+        )
+        return self.pca_model.fit(combined)
 
 
 class PrincipalComponentAnalysisModel:
@@ -299,13 +337,58 @@ class PrincipalComponentAnalysisModel:
         total_variance = PrincipalComponentAnalysisModel.calculate_total_variance(pca_data)
         return np.cumsum(pca_data.eigenvalues) / total_variance
     
-def remove_linear_trend(parameters, phi_diff, frq, timeshifts_predictor):
+def remove_linear_trend(
+    parameters,
+    phi_diff,
+    frq,
+    timeshifts_predictor,
+    subtract_mode_phase_anchor=False,
+    mode_phases_predictor=None,
+    mode_index=None,
+):
+    """Strip the linear-in-frequency phase trend handled by the shared
+    time-shift predictor from every phase residual.
 
-    for i in range(parameters.parameter_array.shape[0]):
-        phi_diff[i] = (
-            phi_diff[i]
-            - 2 * np.pi * (frq - frq[0]) * timeshifts_predictor.predict([parameters.parameter_array[i]])
-            - phi_diff[i,0]
-        )
+    ``subtract_mode_phase_anchor`` controls what happens to the residual's
+    value at the lowest-frequency node:
 
-    return phi_diff
+    * ``False`` (default, used by the non-HOM (2,2) model): the exact
+      per-waveform ``phi_diff[i, 0]`` is subtracted, so the training
+      residuals are identically zero at ``f0``. A single-mode model's
+      absolute phase constant is unobservable (the mismatch marginalises a
+      global phase), so nothing is restored at predict time.
+    * ``True`` (used by the HOM :class:`~mlgw_bns.model.Model`): the shared
+      :class:`~mlgw_bns.neural_network.ModePhasesNN` *prediction* of the
+      per-mode reference phase :math:`\\phi_{\\ell m}(f_0)`
+      (``mode_phases_predictor.predict(...)[:, mode_index]``) is subtracted,
+      so the PCA/NN only see the smooth generalisation-error leftover; the
+      same prediction is added back at predict time. If no predictor is
+      supplied (standalone :meth:`ModeModel.generate`), the exact
+      per-waveform ``phi_diff[i, 0]`` is subtracted instead.
+
+    The prediction calls are vectorised over the whole batch.
+    """
+    # float64 throughout: the mode-phase predictor returns the full
+    # ~1e4-1e6 rad arg H_lm(f0) constant, and scikit-learn propagates the
+    # input dtype, so a float32 ``parameter_array`` (which is what
+    # ``Dataset.generate_residuals`` stores) would quantise that prediction
+    # to ~0.06 rad -- and it would then no longer cancel the float64
+    # prediction that ``ModeModel._predicted_mode_phase0`` adds back at
+    # predict time. The phase residual carries the same constant until it is
+    # subtracted just below.
+    param_array = np.asarray(parameters.parameter_array, dtype=np.float64)
+    phi_diff = np.asarray(phi_diff, dtype=np.float64)
+
+    slopes = np.asarray(timeshifts_predictor.predict(param_array)).reshape(-1)
+    trend = 2 * np.pi * np.outer(slopes, np.asarray(frq) - frq[0])
+
+    if subtract_mode_phase_anchor and mode_phases_predictor is not None and mode_index is not None:
+        anchors = np.asarray(
+            mode_phases_predictor.predict(param_array), dtype=np.float64
+        )[:, mode_index]
+    else:
+        # non-HOM model, or a standalone HOM ModeModel with no predictor:
+        # subtract the exact per-waveform value at f0.
+        anchors = phi_diff[:, 0].copy()
+
+    return phi_diff - trend - anchors[:, None]
