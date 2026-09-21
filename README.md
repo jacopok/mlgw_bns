@@ -16,6 +16,15 @@ the accuracy then steadily improves as more training waveforms are used.
 Currently, the only model used for training is [`TEOBResumS`](http://arxiv.org/abs/1806.01772),
 but it is planned to introduce the possibility to use others.
 
+The model shipped with the package covers the $(2,2)$, $(2,1)$, $(3,1)$,
+$(3,2)$, $(3,3)$, $(4,3)$ and $(4,4)$ spherical-harmonic modes.
+Below are the per-mode and full-waveform mismatch distributions against
+the underlying `TEOBResumS` waveforms: with the residual time shift and
+reference phase optimized (top), and with only the surrogate's own
+predicted alignment applied (bottom):
+
+![mismatches](docs/images/mismatches.png)
+
 The documentation can be found [here](https://mlgw-bns.readthedocs.io/en/latest).
 
 <!-- ![dependencygraph](mlgw_bns.svg) -->
@@ -35,5 +44,6 @@ Changes across versions are documented in the [CHANGELOG](https://github.com/jac
 
 ## Reference
 
-The reference paper is [this one](https://arxiv.org/abs/2210.15684), currently 
-only on arxiv.
+The reference paper is [Tissino, Carullo, Breschi, Gamba, Schmidt & Bernuzzi, "Combining effective-one-body accuracy and reduced-order-quadrature speed for binary neutron star merger parameter estimation with machine learning"](https://arxiv.org/abs/2210.15684),
+published in Physical Review D 107, 084037 (2023),
+[doi:10.1103/PhysRevD.107.084037](https://doi.org/10.1103/PhysRevD.107.084037).

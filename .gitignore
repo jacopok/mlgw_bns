@@ -49,6 +49,7 @@ retrain_default_hom_*.log
 
 # scratch diagnostics / exploratory plots
 *.png
+!docs/images/*.png
 visualization/phase_residual_dataset*.npz
 visualization/hom_33_44_residual_pathologies.py
 visualization/hom_phase_anchor_investigation.py
