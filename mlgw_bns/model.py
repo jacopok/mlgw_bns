@@ -34,9 +34,12 @@ from typing import IO, Optional, Union
 
 import numpy as np
 from importlib.resources import files
+from joblib import Parallel, delayed
 from numba import njit, prange  # type: ignore
 
+from .data_management import Residuals
 from .dataset_generation import Dataset
+from .progress import joblib_progress
 from .higher_order_modes import (
     Mode,
     ModeGeneratorFactory,
@@ -47,8 +50,10 @@ from .higher_order_modes import (
 from .mode_model import ModeModel, ParametersWithExtrinsic
 from .neural_network import (
     Hyperparameters,
+    ModePhasesNN,
     TimeshiftsGPR,
     TimeshiftsNN,
+    load_mode_phases_predictor_from_file,
     load_timeshifts_predictor_from_file,
 )
 from .special_func import spinsphericalharm
@@ -60,7 +65,15 @@ PRETRAINED_MODEL_FOLDER = "data/"
 MODELS_AVAILABLE = ["default_hom"]
 
 #: Modes covered by the pretrained models.
-DEFAULT_MODES = [Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
+DEFAULT_MODES = [
+    Mode(2, 2),
+    Mode(2, 1),
+    Mode(3, 1),
+    Mode(3, 2),
+    Mode(3, 3),
+    Mode(4, 3),
+    Mode(4, 4),
+]
 
 
 @njit(parallel=True, fastmath=True)
@@ -294,6 +307,8 @@ class _LazyModeModelsDict(dict):
         # `Model._propagate_time_shifts_predictor`. It may still be
         # None here, if this model has not been trained or loaded yet.
         mode_model.timeshifts_predictor = self._model.time_shifts_predictor
+        mode_model.mode_phases_predictor = self._model.mode_phases_predictor
+        mode_model.mode_phases_index = self._model.modes.index(mode)
         self[mode] = mode_model
         return mode_model
 
@@ -361,6 +376,7 @@ class Model:
         modes: list[Mode],
         generator_factory: ModeGeneratorFactory = teob_mode_generator_factory,
         time_shifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None,
+        mode_phases_predictor: Optional[ModePhasesNN] = None,
         **model_kwargs,
     ):
         if not modes:
@@ -373,6 +389,17 @@ class Model:
             self.time_shifts_predictor = self._load_default_time_shifts_predictor()
         else:
             self.time_shifts_predictor = time_shifts_predictor
+
+        # Shared, cross-mode predictor of the per-mode reference phases
+        # ``[phi_lm[f0] for lm in modes]``. Trained by
+        # :meth:`_train_reference_predictors` alongside the time-shift
+        # predictor, on a small dedicated pre-pass dataset.
+        if mode_phases_predictor is None:
+            self.mode_phases_predictor: Optional[ModePhasesNN] = (
+                self._load_default_mode_phases_predictor()
+            )
+        else:
+            self.mode_phases_predictor = mode_phases_predictor
 
         # Stored for lazy construction of the per-mode `ModeModel` objects.
         self._generator_factory = generator_factory
@@ -406,6 +433,21 @@ class Model:
     def filename_timeshifts(self) -> str:
         """File name in which to save the shared mode time-shifts predictor."""
         return f"{self.base_filename}_timeshifts.pkl"
+
+    def _load_default_mode_phases_predictor(self) -> Optional[ModePhasesNN]:
+        """Try to load the mode-phases predictor saved alongside this model."""
+        if not self.base_filename:
+            return None
+        try:
+            return load_mode_phases_predictor_from_file(self.filename_mode_phases)
+        except (FileNotFoundError, ValueError) as e:
+            logging.warning("Could not load default mode-phases predictor (%s).", e)
+            return None
+
+    @property
+    def filename_mode_phases(self) -> str:
+        """File name in which to save the shared per-mode reference-phase predictor."""
+        return f"{self.base_filename}_mode_phases.pkl"
 
     def mode_filename(self, mode: Mode) -> str:
         """Return the on-disk filename for a single mode.
@@ -535,15 +577,26 @@ class Model:
 
         base_filename = PRETRAINED_MODEL_FOLDER + model_name
 
-        # Load the shared predictor up front and hand it to the constructor:
-        # letting the constructor look for it on disk would only find it if
-        # the cwd happened to mirror the package layout.
+        # Load the shared predictors up front and hand them to the
+        # constructor: letting the constructor look for them on disk would
+        # only find them if the cwd happened to mirror the package layout.
         kwargs.setdefault(
             "time_shifts_predictor",
             load_timeshifts_predictor_from_file(
                 files(__name__).joinpath(f"{base_filename}_timeshifts.pkl").open("rb")
             ),
         )
+        try:
+            kwargs.setdefault(
+                "mode_phases_predictor",
+                load_mode_phases_predictor_from_file(
+                    files(__name__).joinpath(f"{base_filename}_mode_phases.pkl").open("rb")
+                ),
+            )
+        except (FileNotFoundError, ValueError):
+            logging.warning(
+                "Pretrained model %s has no mode-phases predictor.", model_name
+            )
 
         model = cls(modes=modes, filename=base_filename, **kwargs)
 
@@ -570,21 +623,29 @@ class Model:
         training_downsampling_dataset_size: Optional[int] = 64,
         training_pca_dataset_size: Optional[int] = 256,
         training_nn_dataset_size: Optional[int] = 256,
+        reference_dataset_size: int = 2000,
+        reference_grid_points: int = 64,
+        reference_fmax_hz: float = 512.0,
+        reference_batch_size: Optional[int] = None,
+        seed: int = 0,
+        n_jobs: int = 1,
     ) -> None:
         """Run :meth:`ModeModel.generate` for every mode.
 
         Builds the downsampling indices, PCA data and training residuals
-        for each per-mode :class:`ModeModel`. The three dataset sizes have the
-        same meaning as in :meth:`ModeModel.generate`; setting one of them to
-        ``None`` reuses pre-existing data for that step.
+        for each per-mode :class:`ModeModel`. The three ``training_*``
+        dataset sizes have the same meaning as in :meth:`ModeModel.generate`;
+        setting one of them to ``None`` reuses pre-existing data for that step.
 
-        The (2,2) mode is generated *first*, on its own. Its result is
-        then used to fit the shared cross-mode time-shift predictor (see
-        :meth:`train_time_shifts_predictor`) before any other mode is
-        generated, so that every other mode's PCA/NN training residuals
-        are flattened using this same, shared :math:`\\Delta t(\\theta)`
-        rather than one independently (and more noisily) fit from that
-        mode's own residuals.
+        When ``training_nn_dataset_size`` is not ``None``, a reference
+        pre-pass (:meth:`_train_reference_predictors`) runs *first*: it fits
+        the shared cross-mode time-shift predictor :math:`\\Delta t(\\theta)`
+        and the shared per-mode reference-phase predictor
+        :math:`\\phi_{\\ell m}(f_0)` on ``reference_dataset_size`` waveforms
+        sampled on a coarse ``reference_grid_points``-node geometric grid
+        (``f_0 -> reference_fmax_hz``). Both predictions are then subtracted
+        from every mode's training residuals before the downsampling, PCA
+        and NN steps see them, and added back at predict time.
 
         Parameters
         ----------
@@ -597,6 +658,30 @@ class Model:
         training_nn_dataset_size : int, optional
             Size of the dataset used to train the neural network on the
             PCA residuals. Defaults to 256.
+        reference_dataset_size : int, optional
+            Number of waveforms for the shared time-shift / reference-phase
+            pre-pass. Defaults to 2000.
+        reference_grid_points : int, optional
+            Number of geometric frequency nodes for the pre-pass. Defaults
+            to 64.
+        reference_fmax_hz : float, optional
+            Upper frequency of the pre-pass grid, in Hz. Defaults to 512.
+        reference_batch_size : int, optional
+            Number of pre-pass waveforms generated per EOB sweep. The full
+            ``(batch, reference_grid_points)`` residual arrays are reduced to
+            their per-point regression targets and discarded before the next
+            batch, so peak memory scales with
+            ``reference_batch_size * reference_grid_points`` rather than
+            ``reference_dataset_size * reference_grid_points``. ``None`` (the
+            default) runs the whole pre-pass as a single batch.
+        seed : int, optional
+            Seed for the pre-pass parameter generator. Defaults to 0.
+        n_jobs : int, optional
+            Number of parallel worker processes used for every EOB sweep in
+            this call (the reference pre-pass, the per-mode downsampling
+            training, and the shared PCA/NN sweep). Sequential (``1``) by
+            default -- parallelism is opt-in; pass a higher value
+            explicitly to use multiple workers.
 
         Raises
         ------
@@ -607,72 +692,434 @@ class Model:
         if reference_mode not in self.modes:
             raise ValueError(
                 "Model.generate() requires Mode(2, 2) to be among "
-                "`self.modes`, since the shared time-shift predictor is "
-                "trained from it."
+                "`self.modes`, since the shared predictors are trained from it."
             )
 
-        self.mode_models[reference_mode].generate(
-            training_downsampling_dataset_size=training_downsampling_dataset_size,
-            training_pca_dataset_size=training_pca_dataset_size,
-            training_nn_dataset_size=training_nn_dataset_size,
-        )
-
         if training_nn_dataset_size is not None:
-            self.train_time_shifts_predictor()
+            self._train_reference_predictors(
+                reference_dataset_size,
+                reference_grid_points,
+                reference_fmax_hz,
+                seed,
+                reference_batch_size=reference_batch_size,
+                n_jobs=n_jobs,
+            )
+
+        # Per-mode downsampling indices first: each still trains on its own
+        # (small) EOB waveform sweep -- see the plan's Step C.
+        if training_downsampling_dataset_size is not None:
+            for mode in self.modes:
+                mode_model = self.mode_models[mode]
+                logging.info("Training the downsampling for mode %s", mode)
+                mode_model.downsampling_training.n_jobs = n_jobs
+                mode_model.downsampling_indices = mode_model.downsampling_training.train(
+                    training_downsampling_dataset_size
+                )
+
+        # One shared multi-mode EOB sweep feeds the PCA and NN training of
+        # every mode, instead of one sweep per (mode, stage).
+        precomputed_by_mode: Optional[dict] = None
+        if training_pca_dataset_size is not None or training_nn_dataset_size is not None:
+            precomputed_by_mode = self._multimode_training_residuals(
+                training_pca_dataset_size, training_nn_dataset_size, n_jobs=n_jobs
+            )
 
         for mode in self.modes:
-            if mode == reference_mode:
-                continue
             self.mode_models[mode].generate(
-                training_downsampling_dataset_size=training_downsampling_dataset_size,
+                training_downsampling_dataset_size=None,
                 training_pca_dataset_size=training_pca_dataset_size,
                 training_nn_dataset_size=training_nn_dataset_size,
                 timeshifts_predictor=self.time_shifts_predictor,
+                precomputed_residuals=(
+                    None if precomputed_by_mode is None
+                    else precomputed_by_mode[mode]
+                ),
+                n_jobs=n_jobs,
             )
 
-    def train_time_shifts_predictor(self) -> None:
-        """Adopt the (2,2) mode's predictor as the shared, cross-mode one.
+    def _multimode_training_residuals(
+        self,
+        training_pca_dataset_size: Optional[int],
+        training_nn_dataset_size: Optional[int],
+        n_jobs: int = 1,
+    ) -> dict:
+        """One multi-mode EOB sweep for the PCA + NN training sets.
 
-        There is exactly one merger-time-shift predictor per
-        :class:`Model`: the one the (2,2) mode's
-        :meth:`ModeModel.generate` fits from its own residuals. This method
-        does not fit a second copy, it takes that object and points every
-        mode at it (:attr:`time_shifts_predictor`), so that the same
-        :math:`\\Delta t(\\theta)` flattens the training residuals of every
-        mode and is added back by every mode's :meth:`ModeModel.predict`.
+        Draws ``max(pca_size, nn_size)`` parameters from the same
+        ``seed=2`` generator that ``Dataset.generate_residuals`` uses, runs
+        one EOB call per point via :meth:`_multimode_mode_residuals`, and
+        returns ``mode -> (freq_downsampled_natural, ParameterSet,
+        Residuals)`` shaped exactly like ``Dataset.generate_residuals``'s
+        return so :meth:`ModeModel.generate` can consume it directly.
 
-        Must be called after the (2,2) mode's own :meth:`ModeModel.generate`
-        (this is what :meth:`generate` does automatically) and before any
-        other mode is generated.
+        ``n_jobs`` is sequential (``1``) by default -- parallelism is
+        opt-in; pass a higher value explicitly to use multiple workers.
+        """
+        size = max(
+            s for s in (training_pca_dataset_size, training_nn_dataset_size)
+            if s is not None
+        )
+        dataset = self.mode_models[Mode(2, 2)].dataset
+        parameter_generator = dataset.make_parameter_generator(seed=2)
+        params_list = [next(parameter_generator) for _ in range(size)]
 
-        Raises
-        ------
-        ValueError
-            If ``Mode(2, 2)`` is not among :attr:`modes`, or if that
-            mode has not been through :meth:`ModeModel.generate` yet.
+        downsampling_indices_by_mode = {
+            mode: self.mode_models[mode].downsampling_indices for mode in self.modes
+        }
+        amplitude_reference_by_mode = {
+            mode: self.mode_models[mode].dataset.amplitude_reference_parameters
+            for mode in self.modes
+        }
+
+        parameter_array, amp_residuals, phase_residuals = self._multimode_mode_residuals(
+            params_list,
+            dataset.frequencies,
+            downsampling_indices_by_mode,
+            amplitude_reference_by_mode,
+            progress_desc="PCA/NN training sweep",
+            n_jobs=n_jobs,
+        )
+        if len(parameter_array) < size:
+            logging.warning(
+                "Multi-mode training sweep: only %d/%d valid waveforms",
+                len(parameter_array), size,
+            )
+
+        precomputed = {}
+        for mode in self.modes:
+            phase_indices = self.mode_models[mode].downsampling_indices.phase_indices
+            precomputed[mode] = (
+                dataset.frequencies[phase_indices],
+                # float64 params + phase residual: see the dtype note in
+                # Dataset.generate_residuals. Amplitude residual is O(1).
+                dataset.parameter_set_cls(np.asarray(parameter_array, dtype=np.float64)),
+                Residuals(
+                    amp_residuals[mode].astype(np.float32),
+                    np.asarray(phase_residuals[mode], dtype=np.float64),
+                ),
+            )
+        return precomputed
+
+    def _reference_grid(
+        self, reference_grid_points: int, reference_fmax_hz: float
+    ) -> "tuple[np.ndarray, np.ndarray, float]":
+        """Coarse geometric ``f_0 -> reference_fmax_hz`` grid for the pre-pass.
+
+        Returns ``(grid_hz, f_ref_natural, f0_natural)``; the first node is
+        pinned to the dataset's own ``f_0`` so the per-mode reference phase
+        is read at exactly the training grid's lowest node.
+        """
+        dataset = self.mode_models[Mode(2, 2)].dataset
+        f0_natural = float(dataset.frequencies[0])
+        grid_hz = np.geomspace(
+            dataset.natural_units_to_hz(f0_natural),
+            min(reference_fmax_hz, dataset.effective_srate_hz / 2),
+            reference_grid_points,
+        )
+        f_ref_natural = dataset.hz_to_natural_units(grid_hz)
+        f_ref_natural[0] = f0_natural
+        grid_hz = dataset.natural_units_to_hz(f_ref_natural)
+        return grid_hz, f_ref_natural, f0_natural
+
+    def _reference_sweep_targets(
+        self,
+        parameter_generator,
+        n_points: int,
+        grid_hz: np.ndarray,
+        f_ref_natural: np.ndarray,
+        batch_size: Optional[int] = None,
+        progress_label: str = "Reference pre-pass sweep",
+        n_jobs: int = 1,
+    ) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
+        r"""Draw ``n_points`` parameters and reduce them to regression targets.
+
+        Pulls ``n_points`` parameters from ``parameter_generator``, runs the
+        multi-mode EOB sweep in batches of ``batch_size`` (default: one
+        batch), and reduces each batch's full ``(batch, n_grid)`` phase
+        residual arrays --- discarded straight after --- to the per-point
+        targets the two shared predictors consume:
+
+        * ``timeshifts`` --- the scalar low-frequency slope of the (2,2)
+          phase residual (``Residuals.phase_timeshifts``);
+        * ``reference_phases`` --- each mode's phase residual at ``f_0``,
+          column-ordered like :attr:`modes`.
+
+        Peak memory scales with ``batch_size * len(f_ref_natural)`` rather
+        than ``n_points * len(f_ref_natural)``.
+
+        ``n_jobs`` is sequential (``1``) by default -- parallelism is
+        opt-in; pass a higher value explicitly to use multiple workers.
+
+        Returns
+        -------
+        tuple
+            ``(parameter_array, timeshifts, reference_phases)`` with shapes
+            ``(n_valid, 5)``, ``(n_valid,)`` and ``(n_valid, n_modes)``.
+        """
+        reference_mode = Mode(2, 2)
+        batch_size = batch_size or n_points
+        batch_size = max(1, min(int(batch_size), n_points))
+
+        params_batches: list[np.ndarray] = []
+        timeshift_batches: list[np.ndarray] = []
+        mode_phase_batches: list[np.ndarray] = []
+
+        n_done = 0
+        while n_done < n_points:
+            this_batch = min(batch_size, n_points - n_done)
+            params_list = [next(parameter_generator) for _ in range(this_batch)]
+            n_done += this_batch
+
+            parameter_array, _, phase_residuals = self._multimode_mode_residuals(
+                params_list,
+                f_ref_natural,
+                progress_desc=f"{progress_label} ({n_done}/{n_points})",
+                n_jobs=n_jobs,
+            )
+            if len(parameter_array) == 0:
+                continue
+
+            reference_phase_residuals = phase_residuals[reference_mode]
+            timeshifts = Residuals(
+                np.zeros_like(reference_phase_residuals), reference_phase_residuals
+            ).phase_timeshifts(frequencies=grid_hz)
+            reference_phases = np.stack(
+                [phase_residuals[mode][:, 0] for mode in self.modes], axis=1
+            )
+
+            params_batches.append(parameter_array)
+            timeshift_batches.append(np.asarray(timeshifts, dtype=float))
+            mode_phase_batches.append(np.asarray(reference_phases, dtype=float))
+
+        if sum(len(p) for p in params_batches) < 2:
+            raise RuntimeError(
+                "The reference pre-pass produced fewer than 2 valid waveforms."
+            )
+
+        return (
+            np.concatenate(params_batches, axis=0),
+            np.concatenate(timeshift_batches, axis=0),
+            np.concatenate(mode_phase_batches, axis=0),
+        )
+
+    def _train_reference_predictors(
+        self,
+        reference_dataset_size: int,
+        reference_grid_points: int,
+        reference_fmax_hz: float,
+        seed: int,
+        reference_batch_size: Optional[int] = None,
+        n_jobs: int = 1,
+    ) -> None:
+        r"""Fit the shared time-shift and per-mode reference-phase predictors.
+
+        Runs *before* any per-mode :meth:`ModeModel.generate`, on its own
+        small parameter sample and a coarse geometric frequency grid
+        (``f_0 -> reference_fmax_hz``). One EOB residual draw per mode
+        feeds both:
+
+        * :class:`~mlgw_bns.neural_network.TimeshiftsNN` --- the
+          least-squares low-frequency slope of the (2,2) phase residual
+          (``Residuals.phase_timeshifts``), the shared cross-mode
+          :math:`\Delta t(\theta)`;
+        * :class:`~mlgw_bns.neural_network.ModePhasesNN` --- the raw
+          per-mode reference phase :math:`\phi_{\ell m}(f_0)`, which it
+          models as an analytic stationary-phase backbone plus a smooth
+          ridge-fit leftover (see
+          :func:`~mlgw_bns.pn_modes.reference_phase_backbone`).
+
+        Both predictions are subtracted from the per-mode training
+        residuals by ``remove_linear_trend`` and added back at predict
+        time, so the downstream PCA/NN only ever see small residuals.
+
+        The EOB sweep is run in batches of ``reference_batch_size``: each
+        batch's full ``(batch, reference_grid_points)`` residual arrays are
+        immediately reduced to the per-point regression targets (the scalar
+        (2,2) time shift and each mode's phase residual at :math:`f_0`) and
+        then discarded, so peak memory scales with the batch size rather
+        than ``reference_dataset_size``.
+
+        ``n_jobs`` is sequential (``1``) by default -- parallelism is
+        opt-in; pass a higher value explicitly to use multiple workers.
         """
         reference_mode = Mode(2, 2)
         if reference_mode not in self.modes:
             raise ValueError(
-                "The shared time-shift predictor is trained from the (2,2) "
-                "mode, which is not among this Model's modes."
+                "Model.generate() requires Mode(2, 2) to be among "
+                "`self.modes`, since the shared predictors are trained from it."
             )
 
-        reference_model = self.mode_models[reference_mode]
-        if reference_model.timeshifts_predictor is None:
-            raise ValueError(
-                "The (2,2) mode has no time-shift predictor available; "
-                "call `generate()` before training the time-shift predictor."
-            )
+        grid_hz, f_ref_natural, f0_natural = self._reference_grid(
+            reference_grid_points, reference_fmax_hz
+        )
+        parameter_generator = self.mode_models[
+            reference_mode
+        ].dataset.make_parameter_generator(seed=seed)
 
-        # Adopt the object the (2,2) mode's `generate()` already fitted,
-        # rather than fitting a second one on the same data. The two must
-        # agree exactly: `remove_linear_trend` subtracts this predictor's
-        # output from the training residuals and `ModeModel.predict` adds it
-        # back, so the term cancels only as long as it is literally the
-        # same function on both sides.
-        self.time_shifts_predictor = reference_model.timeshifts_predictor
+        parameter_array, timeshifts, reference_phases = self._reference_sweep_targets(
+            parameter_generator,
+            reference_dataset_size,
+            grid_hz,
+            f_ref_natural,
+            batch_size=reference_batch_size,
+            n_jobs=n_jobs,
+        )
+
+        logging.info(
+            "Reference pre-pass: %d/%d valid waveforms on a %d-point grid "
+            "[%.1f, %.1f] Hz",
+            len(parameter_array), reference_dataset_size, len(grid_hz),
+            grid_hz[0], grid_hz[-1],
+        )
+
+        self.time_shifts_predictor = TimeshiftsNN(
+            training_params=parameter_array,
+            training_timeshifts=timeshifts,
+        ).fit()
         self._propagate_time_shifts_predictor()
+
+        self.mode_phases_predictor = ModePhasesNN(
+            modes=[(m.l, m.m) for m in self.modes],
+            f0_natural=f0_natural,
+            training_params=parameter_array,
+            training_mode_phases=reference_phases,
+        ).fit()
+        self._propagate_mode_phases_predictor()
+
+    def _multimode_mode_residuals(
+        self,
+        params_list: list,
+        frequencies_natural: np.ndarray,
+        downsampling_indices_by_mode: Optional[dict] = None,
+        amplitude_reference_by_mode: Optional[dict] = None,
+        progress_desc: str = "Multi-mode EOB sweep",
+        n_jobs: int = 1,
+    ):
+        r"""One EOB call per parameter point, residuals for every mode.
+
+        For each :class:`~mlgw_bns.dataset_generation.WaveformParameters` in
+        ``params_list`` a single
+        :meth:`~mlgw_bns.higher_order_modes.TEOBResumSModeGenerator.all_modes_amplitude_phase`
+        call produces all of :attr:`modes`; the per-mode Post-Newtonian
+        amplitude/phase are then divided/subtracted and the result optionally
+        cropped to that mode's downsampling indices. This replaces the
+        one-EOB-call-per-(mode, parameter) pattern in the training path.
+
+        Parameters
+        ----------
+        params_list
+            Shared parameter sample; every mode is evaluated at the same points.
+        frequencies_natural
+            Grid (natural units) handed to the EOB call.
+        downsampling_indices_by_mode
+            Optional ``mode -> DownsamplingIndices``; when given the returned
+            residuals are already restricted to those indices (per mode).
+        amplitude_reference_by_mode
+            Optional ``mode -> WaveformParameters`` for the fixed-reference
+            amplitude normalisation (see
+            :meth:`WaveformGenerator.generate_residuals`).
+        progress_desc
+            Label for the progress reporting of the parallel EOB sweep.
+        n_jobs
+            Number of parallel worker processes for the EOB sweep.
+            Sequential (``1``) by default -- parallelism is opt-in; pass a
+            higher value explicitly to use multiple workers.
+
+        Returns
+        -------
+        tuple
+            ``(parameter_array, amp_residuals, phase_residuals)`` where the
+            two dicts map ``mode -> np.ndarray`` of shape
+            ``(n_valid, n_points_for_that_mode)``; a parameter is dropped from
+            *all* modes if the EOB call fails or returns non-finite / wrong-shape
+            output for any of them. ``parameter_array`` has shape
+            ``(n_valid, 5)``.
+        """
+        modes = list(self.modes)
+        generator = self.mode_models[modes[0]].waveform_generator
+        frequencies_natural = np.asarray(frequencies_natural, dtype=float)
+        n_points = len(frequencies_natural)
+
+        pn_generators = {m: self.mode_models[m].waveform_generator for m in modes}
+        ds_idx = downsampling_indices_by_mode or {}
+        amp_ref = amplitude_reference_by_mode or {}
+
+        def _one(params):
+            try:
+                waveforms = generator.all_modes_amplitude_phase(
+                    params, modes, frequencies_natural
+                )
+            except Exception:  # pragma: no cover - EOB blowups
+                return None
+            out = {}
+            for mode in modes:
+                f_eob, amp_eob, phi_eob = waveforms[mode]
+                if (
+                    len(amp_eob) != n_points
+                    or not np.all(np.isfinite(amp_eob))
+                    or not np.all(np.isfinite(phi_eob))
+                ):
+                    return None
+                pn_gen = pn_generators[mode]
+                reference = amp_ref.get(mode)
+                amp_pn = pn_gen.post_newtonian_amplitude(
+                    params if reference is None else reference, f_eob
+                )
+                phi_pn = pn_gen.post_newtonian_phase(params, f_eob)
+                amp_res = amp_eob / amp_pn
+                phi_res = phi_eob - phi_pn
+                if mode in ds_idx:
+                    amp_indices, phi_indices = ds_idx[mode]
+                    amp_res = amp_res[amp_indices]
+                    phi_res = phi_res[phi_indices]
+                out[mode] = (
+                    np.asarray(amp_res, dtype=float),
+                    np.asarray(phi_res, dtype=float),
+                )
+            return out
+
+        with joblib_progress(progress_desc, len(params_list)):
+            results = Parallel(n_jobs=n_jobs)(delayed(_one)(p) for p in params_list)
+
+        keep = [i for i, r in enumerate(results) if r is not None]
+        parameter_array = np.array(
+            [params_list[i].array for i in keep], dtype=float
+        )
+        amp_residuals = {
+            mode: np.stack([results[i][mode][0] for i in keep])
+            if keep
+            else np.empty((0, 0))
+            for mode in modes
+        }
+        phase_residuals = {
+            mode: np.stack([results[i][mode][1] for i in keep])
+            if keep
+            else np.empty((0, 0))
+            for mode in modes
+        }
+        return parameter_array, amp_residuals, phase_residuals
+
+    def _propagate_mode_phases_predictor(self) -> None:
+        """Point every already-built per-mode model at the shared
+        mode-phases predictor, tagging each with its output column.
+
+        The column index is looked up in the *predictor's own*
+        ``modes`` list (its training order), not ``self.modes`` ---
+        which may list the same modes in a different order (e.g. a
+        caller requesting ``modes=[...]`` in a different sequence than
+        the pretrained checkpoint was fit with). Indexing off
+        ``self.modes`` instead silently feeds every mismatched mode
+        another mode's reference-phase column.
+        """
+        predictor = self.mode_phases_predictor
+        if predictor is None or predictor.modes is None:
+            return
+        predictor_index = {tuple(lm): idx for idx, lm in enumerate(predictor.modes)}
+        for mode in self.modes:
+            if mode in self.mode_models and (mode.l, mode.m) in predictor_index:
+                mm = self.mode_models[mode]
+                mm.mode_phases_predictor = predictor
+                mm.mode_phases_index = predictor_index[(mode.l, mode.m)]
 
     def _propagate_time_shifts_predictor(self) -> None:
         """Point every already-built per-mode model at the shared predictor.
@@ -734,7 +1181,14 @@ class Model:
                 save_mode(mode)
 
         if self.time_shifts_predictor is not None:
-            self.time_shifts_predictor.save_model(self.filename_timeshifts)
+            self.time_shifts_predictor.save_model(
+                self.filename_timeshifts, include_training_data=include_training_data
+            )
+
+        if self.mode_phases_predictor is not None:
+            self.mode_phases_predictor.save_model(
+                self.filename_mode_phases, include_training_data=include_training_data
+            )
 
     def load(
         self,
@@ -756,7 +1210,13 @@ class Model:
         # Per-mode checkpoints carry no predictor of their own (older ones
         # may, in which case this overwrites the redundant copy with the
         # shared one they were all identical to anyway).
+        if self.time_shifts_predictor is None:
+            self.time_shifts_predictor = self._load_default_time_shifts_predictor()
         self._propagate_time_shifts_predictor()
+
+        if self.mode_phases_predictor is None:
+            self.mode_phases_predictor = self._load_default_mode_phases_predictor()
+        self._propagate_mode_phases_predictor()
 
     def predict_amplitude_phase_mode(
         self,
@@ -1020,6 +1480,20 @@ class Model:
         amps_list: list[np.ndarray] = []
         phases_list: list[np.ndarray] = []
         dataset = self.dataset
+        # Fixed anchor for the time-shift phase trend below, in the same
+        # (observer-frame Hz) units as `frequencies`: the dataset's own
+        # first downsampling node (`effective_initial_frequency_hz`, at
+        # `dataset.total_mass`), rescaled to `params.total_mass`. Must be
+        # independent of `frequencies` itself --- using `frequencies[0]`
+        # made the reconstructed phase depend on wherever the caller's own
+        # query grid happened to start, invisible as long as every caller
+        # queried from the trained band's edge; the post-Newtonian
+        # low-frequency extension is the one case where `frequencies[0]`
+        # legitimately varies per call, and it exposed this as a
+        # call-dependent phase offset shared by every mode.
+        reference_frequency_hz = dataset.effective_initial_frequency_hz * (
+            dataset.total_mass / params.total_mass
+        )
 
         for idx, mode in enumerate(self.modes):
             if use_pn:
@@ -1033,14 +1507,18 @@ class Model:
                     frequencies * params.mass_sum_seconds,
                 )
             else:
+                # `apply_time_shift=False`: the linear-in-frequency phase
+                # trend is applied here, once, from `time_shifts_per_mode`
+                # (which may be user-supplied) --- not a second time inside
+                # `predict_amplitude_phase_optimized`.
                 amp, phase = self.mode_models[mode].predict_amplitude_phase_optimized(
-                    frequencies, params
+                    frequencies, params, apply_time_shift=False
                 )
                 ts = time_shifts_per_mode[idx]
                 # Time shifts are stored in units of the reference total mass
                 # of the dataset, so we rescale to the requested total mass.
                 ts_scaled = ts * (params.total_mass / self.dataset.total_mass)
-                phase += 2 * np.pi * frequencies * ts_scaled
+                phase += 2 * np.pi * (frequencies - reference_frequency_hz) * ts_scaled
             active_indices.append(idx)
             amps_list.append(amp)
             phases_list.append(phase)
@@ -1163,12 +1641,14 @@ class Model:
             iota=inclination,
         )
 
+        modes = list(self.modes)
+        generator = self.mode_models[modes[0]].waveform_generator
+        waveforms = generator.all_modes_amplitude_phase(params_teob, modes, f_natural)
+
         amps_list: list[np.ndarray] = []
         phases_list: list[np.ndarray] = []
-        for mode in self.modes:
-            _f_spa, amp, phase = self.mode_models[mode].waveform_generator.get_amplitude_phase_at_inclination(
-                params_teob, f_natural, inclination=inclination
-            )
+        for mode in modes:
+            _f_eob, amp, phase = waveforms[mode]
             amps_list.append(amp)
             phases_list.append(phase)
 
@@ -1250,6 +1730,12 @@ class Model:
         phases_list: list[np.ndarray] = []
 
         dataset = self.dataset
+        # See the matching comment in `_hpc_waveform_per_mode`: a fixed
+        # anchor, independent of `frequencies` itself, so the reconstructed
+        # phase doesn't depend on wherever the caller's query grid starts.
+        reference_frequency_hz = dataset.effective_initial_frequency_hz * (
+            dataset.total_mass / params.total_mass
+        )
         for idx, mode in enumerate(self.modes):
             if use_pn:
                 parameters_intrinsic = params.intrinsic(dataset)
@@ -1262,14 +1748,18 @@ class Model:
                     frequencies * params.mass_sum_seconds,
                 )
             else:
+                # `apply_time_shift=False`: the linear-in-frequency phase
+                # trend is applied here, once, from `time_shifts_per_mode`
+                # --- not a second time inside
+                # `predict_amplitude_phase_optimized`.
                 amp, phase = self.mode_models[mode].predict_amplitude_phase_optimized(
-                    frequencies, params
+                    frequencies, params, apply_time_shift=False
                 )
                 ts = time_shifts_per_mode[idx]
                 # Time shifts are stored in units of the reference total mass
                 # of the dataset, so we rescale to the requested total mass.
                 ts_scaled = ts * (params.total_mass / self.dataset.total_mass)
-                phase += 2 * np.pi * frequencies * ts_scaled
+                phase += 2 * np.pi * (frequencies - reference_frequency_hz) * ts_scaled
 
             active_indices.append(idx)
             amps_list.append(amp)

@@ -3,6 +3,7 @@ import dataclasses
 import numpy as np
 import pytest
 
+from mlgw_bns.data_management import ParameterRanges
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.model import (
     DEFAULT_MODES,
@@ -12,6 +13,23 @@ from mlgw_bns.model import (
 )
 from mlgw_bns.mode_model import ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
+
+# The packaged default model is trained with lambda up to 12000, but the
+# PyPI-released TEOBResumS (unlike the locally patched one) crashes on
+# root-bracketing for some high-q, high-Lambda combinations. These tests
+# only need ground-truth EOB waveforms to validate against, so they draw
+# from a narrower, crash-free slice of the model's own parameter space
+# rather than its full training range.
+REDUCED_TEOB_SAFE_RANGES = ParameterRanges(
+    q_range=(1.0, 3.0), lambda1_range=(5.0, 5000.0), lambda2_range=(5.0, 5000.0)
+)
+
+
+def reduced_range_parameter_generator(model, seed):
+    dataset = model.dataset
+    return dataset.parameter_generator_class(
+        parameter_ranges=REDUCED_TEOB_SAFE_RANGES, dataset=dataset, seed=seed
+    )
 
 
 def assert_waveforms_close(first, second):
@@ -127,11 +145,28 @@ def test_default_for_testing_rejects_unknown_name():
         Model.default_for_testing("not_a_model")
 
 
-# The packaged model currently sits at a median full-waveform mismatch of
-# ~1.5e-4 with a worst case of ~3e-3; these are those numbers with an order
-# of magnitude of headroom, and should be tightened as the model improves.
-DEFAULT_MODEL_MAX_MISMATCH = 1e-2
-DEFAULT_MODEL_MEDIAN_MISMATCH = 1e-3
+# Measured on the packaged model over the sixteen binaries this test draws
+# (seed 7, inclination 1.0): median 3.0e-4, worst 1.8e-3. Over 64 binaries
+# the median is 8.4e-5 and the worst 3.0e-3, so the sixteen drawn here are a
+# slightly unlucky sample rather than a lucky one.
+#
+# Both bounds carry a factor of two, which is headroom for library changes
+# rather than for the model: nothing here is random, since the model is
+# loaded from disk and the parameters come from a fixed seed. They cannot
+# be tightened much further without retraining the packaged model --- the
+# limit is what that model achieves, not the test.
+DEFAULT_MODEL_MAX_MISMATCH = 4e-3
+DEFAULT_MODEL_MEDIAN_MISMATCH = 6e-4
+
+# Measured on the packaged 7-mode model (hom7_big) over the eight binaries
+# `test_full_waveform_mismatch_is_flat_in_total_mass` draws (seed 7): medians
+# of 4.1e-5, 7.9e-5 and 1.5e-4 at total_mass 2.2, 2.8 and 3.6 respectively --
+# rising smoothly with mass rather than jumping at the 2.8 dataset reference,
+# so the PN-splice bug the test guards against is not back. The floor moved
+# up an order of magnitude from the old 4-mode default (odd-m HOM modes are
+# harder to fit, see mode21-q1-boundary-singularity); this carries about the
+# same 2x headroom as `DEFAULT_MODEL_MEDIAN_MISMATCH` above.
+FLAT_MASS_MEDIAN_MISMATCH = 3e-4
 
 
 def test_default_model_full_waveform_mismatch(default_model):
@@ -139,7 +174,7 @@ def test_default_model_full_waveform_mismatch(default_model):
 
     validator = ValidateModel(default_model.mode_models[Mode(2, 2)])
     frequencies = validator.frequencies
-    parameter_generator = default_model.dataset.make_parameter_generator(seed=7)
+    parameter_generator = reduced_range_parameter_generator(default_model, seed=7)
 
     mismatches = []
     for _ in range(16):
@@ -177,6 +212,65 @@ def test_default_model_full_waveform_mismatch(default_model):
     mismatches = np.array(mismatches)
     assert np.max(mismatches) < DEFAULT_MODEL_MAX_MISMATCH
     assert np.median(mismatches) < DEFAULT_MODEL_MEDIAN_MISMATCH
+
+
+@pytest.mark.parametrize("total_mass", [2.2, 2.8, 3.6])
+def test_full_waveform_mismatch_is_flat_in_total_mass(default_model, total_mass):
+    """The multi-mode mismatch must not jump when the total mass crosses
+    the dataset reference (2.8): below it the rescaled grid dips under
+    ``effective_initial_frequency_hz`` and the PN low-frequency extension
+    fires, which used to overwrite each mode's inter-mode phase constant
+    with the PN one and mis-phase the HOM modes by ~1e-4."""
+
+    validator = ValidateModel(default_model.mode_models[Mode(2, 2)])
+    frequencies = validator.frequencies
+    band = (frequencies >= 20.0) & (frequencies <= 2048.0)
+    parameter_generator = reduced_range_parameter_generator(default_model, seed=7)
+
+    mismatches = []
+    for _ in range(8):
+        intrinsic = next(parameter_generator)
+        params = ParametersWithExtrinsic(
+            mass_ratio=intrinsic.mass_ratio,
+            lambda_1=intrinsic.lambda_1,
+            lambda_2=intrinsic.lambda_2,
+            chi_1=intrinsic.chi_1,
+            chi_2=intrinsic.chi_2,
+            distance_mpc=100.0,
+            inclination=1.0,
+            total_mass=total_mass,
+        )
+        predicted = default_model.predict_modes_dict(frequencies, params)
+        true = default_model.get_teob_modes_dict(frequencies, params)
+        mismatches.append(
+            validator.full_waveform_mismatch(
+                {k: v[band] for k, v in true.items()},
+                {k: v[band] for k, v in predicted.items()},
+                frequencies=frequencies[band],
+            )
+        )
+
+    assert np.median(mismatches) < FLAT_MASS_MEDIAN_MISMATCH
+
+
+def test_reference_phase_is_a_coalescence_phase(default_model):
+    """Shifting ``reference_phase`` by ``phi_c`` must rotate the ``(l, m)``
+    mode by ``exp(i m phi_c)`` --- not the same phase for every mode."""
+
+    frequencies = np.linspace(30.0, 1500.0, 400)
+    phi_c = 0.37
+    base = ParametersWithExtrinsic(
+        mass_ratio=1.6, lambda_1=500.0, lambda_2=500.0, chi_1=0.1, chi_2=0.05,
+        distance_mpc=100.0, inclination=1.1, total_mass=2.8, reference_phase=0.0,
+    )
+    shifted = dataclasses.replace(base, reference_phase=phi_c)
+
+    modes_base = default_model.predict_modes_dict(frequencies, base)
+    modes_shifted = default_model.predict_modes_dict(frequencies, shifted)
+
+    for (l, m), array in modes_base.items():
+        ratio = modes_shifted[(l, m)] / array
+        np.testing.assert_allclose(ratio, np.exp(1j * m * phi_c), rtol=1e-6)
 
 
 def test_model_generate_sets_availability_flags(generated_model):

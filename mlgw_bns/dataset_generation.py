@@ -13,9 +13,8 @@ import h5py
 import numpy as np
 from numpy.random import default_rng
 from joblib import Parallel, delayed
-from tqdm_joblib import tqdm_joblib
-from tqdm import tqdm  # type: ignore
 
+from .progress import joblib_progress
 from .data_management import (
     DownsamplingIndices,
     array_memory,
@@ -253,8 +252,9 @@ class WaveformGenerator(ABC):
         params: "WaveformParameters",
         frequencies: Optional[np.ndarray] = None,
         downsampling_indices: Optional[DownsamplingIndices] = None,
+        amplitude_reference: Optional["WaveformParameters"] = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Compute the residuals of the :func:`effective_one_body_waveform`
+        r"""Compute the residuals of the :func:`effective_one_body_waveform`
         from the Post-Newtonian one computed with
         :func:`post_newtonian_amplitude` and
         :func:`post_newtonian_phase`.
@@ -277,6 +277,26 @@ class WaveformGenerator(ABC):
                 Indices at which to compute the residuals.
                 If not provided (default) the waveform is given at
                 all indices corresponding to the default FFT grid.
+        amplitude_reference : Optional[WaveformParameters]
+                If given, divide the EOB amplitude by the PN amplitude of
+                *these* parameters rather than each waveform's own, so
+                that the modelled quantity is
+                :math:`A_{\rm EOB}(\theta) / A_{\rm PN}(\theta_{\rm ref})`.
+
+                This matters for the (2,1) and (3,3) modes. Their PN
+                amplitude has a deep minimum at a frequency that moves
+                with the parameters --- over a training set of 8192 it
+                dips to 5e-6 of its typical size on the (3,3) and 3e-5 on
+                the (2,1) --- and dividing by it there sends the ratio to
+                twenty or sixty while the waveform itself does nothing
+                remarkable. A handful of such waveforms then set the
+                normalisation for the whole training set. A fixed
+                reference has no such dip, so the modelled quantity stays
+                smooth; on the (3,3) mode this is worth a factor of
+                eighteen in mismatch.
+
+                Defaults to None, which reproduces the original
+                :math:`A_{\rm EOB} / A_{\rm PN}` definition.
         Returns
         -------
         tuple[np.ndarray, np.ndarray]
@@ -287,7 +307,10 @@ class WaveformGenerator(ABC):
             params, frequencies
         )
 
-        amplitude_pn_ = self.post_newtonian_amplitude(params, frequencies_eob)
+        amplitude_pn_ = self.post_newtonian_amplitude(
+            params if amplitude_reference is None else amplitude_reference,
+            frequencies_eob,
+        )
         phase_pn_ = self.post_newtonian_phase(params, frequencies_eob)
 
         if downsampling_indices:
@@ -401,8 +424,12 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
 
         waveform = (rhpf - 1j * ihpf)[to_slice]
 
-        amplitude, phase = phase_unwrapping(waveform)
-        
+        # Do not anchor the phase at the first sample: keep the EOB baseline
+        # sourced the same (absolute) way as the PN one. The anchoring happens
+        # downstream (`remove_linear_trend` at training time, phase re-zeroing
+        # at prediction time).
+        amplitude, phase = phase_unwrapping(waveform, set_zero_at_start=False)
+
         return (f_spa, amplitude, phase)
 
 
@@ -539,6 +566,8 @@ class WaveformParameters:
             "LambdaBl2": self.lambda_2,
             "chi1": self.chi_1,
             "chi2": self.chi_2,
+            "chi1z": self.chi_1,
+            "chi2z": self.chi_2,
             "M": self.dataset.total_mass,
             "distance": 1.0,
             "initial_frequency": initial_freq,
@@ -784,6 +813,177 @@ class UniformParameterGenerator(ParameterGenerator):
         )
 
 
+class SobolParameterGenerator(UniformParameterGenerator):
+    r"""Low-discrepancy analogue of :class:`UniformParameterGenerator`.
+
+    Draws :math:`(q, \Lambda_1, \Lambda_2, \chi_1, \chi_2)` from a Sobol
+    sequence scaled to the parameter ranges, so that the five-dimensional
+    box is covered far more evenly than by independent uniform draws --
+    the sample never leaves large empty pockets or tight clumps, which is
+    what limits a smooth regressor trained on the resulting dataset.
+
+    Same construction contract as :class:`UniformParameterGenerator`; the
+    ``seed`` is passed straight to :class:`scipy.stats.qmc.Sobol`.  Points
+    are produced in internally-buffered power-of-two blocks so the
+    sequence keeps its balance however many are requested.
+    """
+
+    _BLOCK_LOG2 = 10  # 1024 points per Sobol block
+
+    def __init__(
+        self,
+        dataset: Dataset,
+        parameter_ranges: ParameterRanges,
+        seed: Optional[int] = None,
+    ):
+        super().__init__(
+            dataset=dataset, parameter_ranges=parameter_ranges, seed=seed
+        )
+        from scipy.stats import qmc
+
+        self._lows = np.array(
+            [self.q_range[0], self.lambda1_range[0], self.lambda2_range[0],
+             self.chi1_range[0], self.chi2_range[0]]
+        )
+        self._highs = np.array(
+            [self.q_range[1], self.lambda1_range[1], self.lambda2_range[1],
+             self.chi1_range[1], self.chi2_range[1]]
+        )
+        self._sobol = qmc.Sobol(d=5, scramble=True, seed=seed)
+        self._buffer: np.ndarray = np.empty((0, 5))
+        self._cursor = 0
+
+    def __next__(self) -> WaveformParameters:
+        if self._cursor >= len(self._buffer):
+            unit = self._sobol.random_base2(self._BLOCK_LOG2)
+            self._buffer = self._lows + unit * (self._highs - self._lows)
+            self._cursor = 0
+        q, l1, l2, c1, c2 = self._buffer[self._cursor]
+        self._cursor += 1
+        return WaveformParameters(q, l1, l2, c1, c2, self.dataset)
+
+
+class GWPriorParameterGenerator(UniformParameterGenerator):
+    r"""Generator matching the priors commonly used in GW parameter estimation.
+
+    Compared to :class:`UniformParameterGenerator`:
+
+    * the mass ratio :math:`q = m_1/m_2 \geq 1` is drawn uniformly in
+      :math:`1/q`, i.e. :math:`p(q) \propto 1/q^2`.  Concretely
+      :math:`1/q \sim \mathcal{U}(1/q_\max, 1/q_\min)`;
+    * each aligned spin component :math:`\chi = \chi_z` follows the
+      distribution obtained by projecting an isotropic spin (magnitude
+      uniform on :math:`[0, a]`, direction uniform on the sphere) onto the
+      :math:`z` axis:
+
+      .. math::
+          p(\chi) = -\frac{1}{2a}\,\ln\!\frac{|\chi|}{a},
+          \qquad |\chi| \leq a,
+
+      where :math:`a` is the larger magnitude of the corresponding
+      ``chi_range`` endpoints.  This density is already normalised (it
+      integrates to 1 over :math:`[-a, a]`) and finite everywhere, so no
+      low-magnitude cutoff is needed.  Sampling is by inverse-CDF: with
+      :math:`y = |\chi|/a`, the modulus CDF is :math:`y(1 - \ln y) = U`,
+      inverted as :math:`y = e^{1 + W_{-1}(-U/e)}` using the lower branch
+      of the Lambert :math:`W` function; the sign is drawn uniformly.
+
+    The tidal deformabilities keep the uniform distribution of the parent
+    class, since GW analyses have no single standard prior for them.
+
+    Either family of priors can be individually switched back to a plain
+    uniform distribution over the range, via ``q_prior`` and ``spin_prior``.
+    For example ``q_prior="gw", spin_prior="uniform"`` gives the GW mass-ratio
+    prior with spins drawn uniformly over ``chi1_range`` / ``chi2_range``.
+
+    Parameters
+    ----------
+    dataset : Dataset
+    parameter_ranges : ParameterRanges
+    seed : Optional[int]
+    q_prior : {"gw", "uniform"}
+            Prior on the mass ratio. ``"gw"`` (default) draws uniformly in
+            :math:`1/q`; ``"uniform"`` draws uniformly in :math:`q`.
+    spin_prior : {"gw", "uniform"}
+            Prior on each aligned spin component. ``"gw"`` (default) is the
+            projected-isotropic density above; ``"uniform"`` draws uniformly
+            over the corresponding ``chi`` range.
+    """
+
+    def __init__(
+        self,
+        dataset: Dataset,
+        parameter_ranges: ParameterRanges,
+        seed: Optional[int] = None,
+        q_prior: str = "gw",
+        spin_prior: str = "gw",
+    ):
+        super().__init__(
+            dataset=dataset, parameter_ranges=parameter_ranges, seed=seed
+        )
+        if q_prior not in ("gw", "uniform"):
+            raise ValueError(f"unknown q_prior {q_prior!r}")
+        if spin_prior not in ("gw", "uniform"):
+            raise ValueError(f"unknown spin_prior {spin_prior!r}")
+        self.q_prior = q_prior
+        self.spin_prior = spin_prior
+        self.chi1_abs_max = max(abs(self.chi1_range[0]), abs(self.chi1_range[1]))
+        self.chi2_abs_max = max(abs(self.chi2_range[0]), abs(self.chi2_range[1]))
+
+    def _projected_isotropic_spin(self, abs_max: float) -> float:
+        from scipy.special import lambertw
+
+        u = self.rng.uniform(0.0, 1.0)
+        y = np.exp(1.0 + np.real(lambertw(-u / np.e, k=-1)))
+        sign = self.rng.choice([-1.0, 1.0])
+        return float(sign * y * abs_max)
+
+    def _draw_q(self) -> float:
+        if self.q_prior == "uniform":
+            return self.rng.uniform(*self.q_range)
+        inverse_q = self.rng.uniform(1.0 / self.q_range[1], 1.0 / self.q_range[0])
+        return 1.0 / inverse_q
+
+    def _draw_spin(self, chi_range: tuple, abs_max: float) -> float:
+        if self.spin_prior == "uniform":
+            return self.rng.uniform(*chi_range)
+        return self._projected_isotropic_spin(abs_max)
+
+    def __next__(self) -> WaveformParameters:
+        mass_ratio = self._draw_q()
+        lambda_1 = self.rng.uniform(*self.lambda1_range)
+        lambda_2 = self.rng.uniform(*self.lambda2_range)
+        chi_1 = self._draw_spin(self.chi1_range, self.chi1_abs_max)
+        chi_2 = self._draw_spin(self.chi2_range, self.chi2_abs_max)
+
+        return WaveformParameters(
+            mass_ratio, lambda_1, lambda_2, chi_1, chi_2, self.dataset
+        )
+
+
+class GWPriorUniformSpinParameterGenerator(GWPriorParameterGenerator):
+    """:class:`GWPriorParameterGenerator` with ``spin_prior="uniform"`` baked in.
+
+    A named, zero-configuration class (so it can be passed as
+    ``parameter_generator_class`` and pickled): GW prior on the mass ratio
+    (uniform in :math:`1/q`), uniform prior on each aligned spin component.
+    """
+
+    def __init__(
+        self,
+        dataset: Dataset,
+        parameter_ranges: ParameterRanges,
+        seed: Optional[int] = None,
+    ):
+        super().__init__(
+            dataset=dataset,
+            parameter_ranges=parameter_ranges,
+            seed=seed,
+            q_prior="gw",
+            spin_prior="uniform",
+        )
+
+
 class Dataset:
     r"""Metadata for a dataset.
 
@@ -880,8 +1080,10 @@ class Dataset:
         seed: int = 42,
         multibanding: bool = True,
         f_pivot_hz: float = 160.0,
+        reference_amplitude: bool = False,
     ):
 
+        self.reference_amplitude = reference_amplitude
         self.initial_frequency_hz = initial_frequency_hz
         self.srate_hz = srate_hz
 
@@ -910,6 +1112,39 @@ class Dataset:
 
         self.residuals_amp: list[np.ndarray] = []
         self.residuals_phi: list[np.ndarray] = []
+
+    @property
+    def amplitude_reference_parameters(self) -> "Optional[WaveformParameters]":
+        r"""Parameters whose PN amplitude divides the EOB one, or ``None``.
+
+        ``None`` --- the default --- means each waveform is divided by its
+        own PN amplitude, which is the original definition of the
+        amplitude residual. When :attr:`reference_amplitude` is set, this
+        is instead the centre of :attr:`parameter_ranges`, with zero
+        spins.
+
+        The centre is an arbitrary but reproducible choice: what matters
+        is only that the divisor is the same for every waveform and has no
+        deep minimum in the band, so that the (2,1) and (3,3) amplitude
+        ratios stay bounded. Zero spins and central masses put it in the
+        smooth part of the box --- its own PN amplitude falls
+        monotonically across the band for every mode --- and it is
+        derived from the parameter ranges rather than stored, so a saved
+        model reconstructs it exactly from metadata it already carries.
+        """
+        if not self.reference_amplitude:
+            return None
+
+        ranges = self.parameter_ranges
+        return WaveformParameters(
+            mass_ratio=float(np.mean(ranges.q_range)),
+            lambda_1=float(np.mean(ranges.lambda1_range)),
+            lambda_2=float(np.mean(ranges.lambda2_range)),
+            chi_1=0.0,
+            chi_2=0.0,
+            dataset=self,
+        )
+
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}("
@@ -942,7 +1177,13 @@ class Dataset:
 
         return self._frequencies()
 
-    @lru_cache(maxsize=1)
+    # `maxsize=None`, not 1: a multi-mode `Model` holds one `Dataset` per
+    # mode, the cache is keyed on `self`, and every mode's dataset shares
+    # the same ~519k-point grid. `maxsize=1` made the modes evict each
+    # other, so `predict` reconverted the grid to natural units once per
+    # mode on every call. The number of live `Dataset` objects is small
+    # and they outlive any single prediction.
+    @lru_cache(maxsize=None)
     def _frequencies(self):
         if self.waveform_generator.frequencies is not None:
             return self.waveform_generator.frequencies
@@ -956,7 +1197,7 @@ class Dataset:
         """
         return self._frequencies_hz()
 
-    @lru_cache(maxsize=1)
+    @lru_cache(maxsize=None)  # keyed on `self`; see `_frequencies` above
     def _frequencies_hz(self):
 
         if self.waveform_generator.frequencies is not None:
@@ -1144,7 +1385,7 @@ class Dataset:
         downsampling_indices: Optional[DownsamplingIndices] = None,
         flatten_phase: bool = True,
         oversample: float = 1.0,
-        n_jobs: int = 16,
+        n_jobs: int = 1,
     ) -> tuple[np.ndarray, ParameterSet, Residuals]:
         """Generate a set of waveform residuals.
 
@@ -1197,10 +1438,17 @@ class Dataset:
         parameters = [next(parameter_generator) for _ in range(n_generate)]
 
         # Parallel generation
+        # Resolved once: building it per waveform would rebuild the same
+        # `WaveformParameters` for every one of them, inside the workers.
+        reference = self.amplitude_reference_parameters
+
         def generate_single(params):
             try:
                 result = self.waveform_generator.generate_residuals(
-                    params, self.frequencies, downsampling_indices
+                    params,
+                    self.frequencies,
+                    downsampling_indices,
+                    amplitude_reference=reference,
                 )
                 if result is not None:
                     amp_res, phi_res = result
@@ -1209,7 +1457,7 @@ class Dataset:
                 pass
             return None
 
-        with tqdm_joblib(tqdm(desc="Generating residuals", total=n_generate)):
+        with joblib_progress("Generating residuals", n_generate):
             results = Parallel(n_jobs=n_jobs)(
                 delayed(generate_single)(p) for p in parameters
             )
@@ -1227,10 +1475,20 @@ class Dataset:
         #         f"Increase oversample factor (currently {oversample})"
         #     )
 
-        # Take first 'size' valid results
+        # Take first 'size' valid results.
+        #
+        # The phase residual and the parameter array are kept in float64.
+        # With the per-mode ``phase = -phase`` convention the phase residual
+        # carries the full ``arg H_lm(f0)`` constant (~1e4-1e6 rad for the
+        # HOM) until ``remove_linear_trend`` subtracts it, and the mode-phase
+        # predictor reproduces that constant from the parameters; a float32
+        # cast of either stamps a ~1e-3 rad floor onto the training data,
+        # and a float32 parameter array additionally makes the training-time
+        # anchor subtraction disagree with the float64 prediction added back
+        # at predict time. The amplitude residual is O(1), so float32.
         amp_residuals = np.array([r[0] for r in valid_results[:size]], dtype=np.float32)
-        phi_residuals = np.array([r[1] for r in valid_results[:size]], dtype=np.float32)
-        parameter_array = np.array([r[2] for r in valid_results[:size]], dtype=np.float32)
+        phi_residuals = np.array([r[1] for r in valid_results[:size]], dtype=np.float64)
+        parameter_array = np.array([r[2] for r in valid_results[:size]], dtype=np.float64)
 
         logging.info(
             "Generated %i valid residuals, using the first %i: "
@@ -1297,10 +1555,14 @@ class Dataset:
             amp_indices = downsampling_indices.amplitude_indices
             phi_indices = downsampling_indices.phase_indices
 
+        # Must mirror `generate_residuals`: whatever divided the EOB
+        # amplitude there has to multiply it back here.
+        reference = self.amplitude_reference_parameters
         pn_amps = np.array(
             [
                 self.waveform_generator.post_newtonian_amplitude(
-                    par, self.frequencies[amp_indices]
+                    par if reference is None else reference,
+                    self.frequencies[amp_indices],
                 )
                 for par in waveform_param_list
             ]
@@ -1323,7 +1585,7 @@ class Dataset:
         self,
         parameters: ParameterSet,
         downsampling_indices: Optional[DownsamplingIndices] = None,
-        n_jobs: int = 16,
+        n_jobs: int = 1,
     ) -> FDWaveforms:
         """Generate full effective-one-body waveforms
         at each of the parameters in the given parameter set.
@@ -1335,7 +1597,9 @@ class Dataset:
         downsampling_indices : DownsamplingIndices, optional
             Indices to downsample the waveforms at, by default None
         n_jobs : int
-            Number of parallel jobs for waveform generation. Defaults to 16.
+            Number of parallel jobs for waveform generation. Sequential
+            (``1``) by default -- parallelism is opt-in; pass a higher
+            value explicitly to use multiple worker processes.
 
         Returns
         -------
@@ -1374,12 +1638,21 @@ class Dataset:
         )
 
         def generate_single(par):
-            _, amp, phi = self.waveform_generator.effective_one_body_waveform(
-                par, self.frequencies
-            )
-            return amp[amp_indices], phi[phi_indices], par.array
+            # Mirrors `generate_residuals`'s `generate_single`: a handful of
+            # parameter draws make the EOB tidal root finder fail to bracket
+            # (extreme, but in-range, mass-ratio/lambda combinations); skip
+            # them rather than losing the whole batch, since the callers
+            # here already tolerate fewer waveforms than requested (see
+            # `DownsamplingTraining.train`'s `n_use`).
+            try:
+                _, amp, phi = self.waveform_generator.effective_one_body_waveform(
+                    par, self.frequencies
+                )
+                return amp[amp_indices], phi[phi_indices], par.array
+            except Exception:
+                return None
 
-        with tqdm_joblib(tqdm(desc="Generating waveforms", total=len(waveform_param_list))):
+        with joblib_progress("Generating waveforms", len(waveform_param_list)):
             results = Parallel(n_jobs=n_jobs)(
                 delayed(generate_single)(par) for par in waveform_param_list
             )

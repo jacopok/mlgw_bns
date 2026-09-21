@@ -1,9 +1,14 @@
 (higher_order_modes)=
 # Higher order modes
 
-```{danger} 
-These notes are unreviewed at the moment --- some wrong stuff might 
-have made it in! 
+```{note}
+The algebra in these notes has been cross-checked against the primary
+references (in particular {cite:t}`ajithDataFormatsNumerical2011` for the
+conventions and {cite:t}`garcia-quirosIMRPhenomXHMMultimodeFrequencydomain2020`,
+section II A, equations 2.1--2.12, for the frequency-domain
+mode-to-polarization map). Conventions
+still vary between sources, so double-check signs and complex-conjugation
+choices against the reference relevant to your waveform model.
 ```
 
 This section will give some mathematical notes on how 
@@ -49,7 +54,13 @@ of the source, parametrized as $\iota$ (inclination angle, between the
 observation direction and the source angular momentum) and $\phi_0$ (initial phase 
 of the source's rotation).
 The formulas given here are again from 
-{cite:t}`ajithDataFormatsNumerical2011`, if anything does not make sense check there.
+{cite:t}`ajithDataFormatsNumerical2011` (their equations II.7 and II.8); the
+spin-weighted harmonics were originally introduced by
+{cite:t}`goldbergSpinsSphericalHarmonics1967`, and
+{cite:t}`kidderUsingFullInformation2008` and section 9 of
+{cite:t}`blanchetGravitationalRadiationPostNewtonian2014` collect the conventions
+and mode symmetries used in the compact-binary literature. If anything does not
+make sense check there.
 
 Explicitly, they are given as:
 
@@ -75,14 +86,18 @@ $$
 
 ### Identities
 
-These harmonics are an orthogonal basis: 
+These harmonics are an orthonormal basis. Note the complex conjugation on one
+factor: it is required because the ${}^{(-2)}Y_{\ell m}$ are complex-valued, and
+it is what makes the projection integral for $H_{\ell m}$ given above consistent
+with the mode sum.
 
-$$ \int \mathrm{d}\Omega {}^{(-2)}Y_{\ell m} {}^{(-2)}Y_{\ell' m'} = \delta _{\ell \ell'} \delta _{m m'}
+$$ \int \mathrm{d}\Omega \; {}^{(-2)}Y_{\ell m} \, {}^{(-2)}Y^*_{\ell' m'} = \delta _{\ell \ell'} \delta _{m m'}
 $$
 
-Also, they satisfy:
+Also, they satisfy the conjugation identity (the spin weight flips sign on the
+right-hand side):
 
-$$ {}^sY_{\ell m} = (-1)^{s+m} Y^*_{\ell -m}
+$$ {}^{s}Y_{\ell m} = (-1)^{s+m} \, {}^{-s}Y^*_{\ell, -m}
 $$
 
 
@@ -104,7 +119,9 @@ $$
 
 Now, we can make use of the fact that, thanks to symmetry under reflection across the orbital plane, 
 we have $H_{\ell m} = (-1)^\ell H_{\ell -m}^*$, which in this case reduces to 
-$H_{22} = H_{2-2}^*$ (see section II.D in {cite:p}`ossokineMultipolarEffectiveOneBodyWaveforms2020`). 
+$H_{22} = H_{2-2}^*$ (see section II.D in {cite:p}`ossokineMultipolarEffectiveOneBodyWaveforms2020`,
+equation 2.3 in {cite:p}`garcia-quirosIMRPhenomXHMMultimodeFrequencydomain2020`, or
+{cite:p}`kidderUsingFullInformation2008`). 
 Therefore, if we define $\widetilde{H}_{22} = H_{22} e^{2i \phi_0 }$, we 
 will have 
 
@@ -145,7 +162,7 @@ anymore --- their Fourier transforms will not be.
 
 Most discussions about how to go from the frequency-domain modes $H_{\ell m} (f)$
 to the polarizations $\widetilde{h}_{+, \times } (f)$ 
-({cite:t}`khanIncludingHigherOrder2020`, appendix E in 
+({cite:t}`khanIncludingHigherOrder2020`; section II A of
 {cite:t}`garcia-quirosIMRPhenomXHMMultimodeFrequencydomain2020`) 
 also discuss the issue of performing 
 a time-dependent rotation to move from the precessing case to the non-precessing one. 
@@ -153,81 +170,100 @@ a time-dependent rotation to move from the precessing case to the non-precessing
 We shall write the expressions without the rotation matrices, one may refer
 to those papers for the general case.
 
-The frequency-domain polarizations are the Fourier transforms of the real and imaginary
-parts of the waveform $h(t)$: 
+Since $h = h_+ - i h_\times$ with $h_+, h_\times$ real, we have
+$h_+ = (h + h^*)/2$ and $h_\times = i (h - h^*)/2$ (equivalently $h_\times = -\Im h$).
+Using the linearity of the Fourier transform together with
+$\text{FT}[h(t)^*]\,(f) = \text{FT}[h(t)]^* (-f)$, this gives
 
-$$ \widetilde{h}_+ (f) = \text{FT}[\Re h(t)] = \frac{1}{2} \left( \widetilde{h}(f) + \widetilde{h}^*(-f)\right)
+$$ \widetilde{h}_+ (f) = \frac{1}{2} \left( \widetilde{h}(f) + \widetilde{h}^*(-f)\right)
 $$
 
-$$ \widetilde{h}_\times (f) = \text{FT}[\Im h(t)] = \frac{i}{2} \left( \widetilde{h}(f) - \widetilde{h}^*(-f)\right)
+$$ \widetilde{h}_\times (f) = \frac{i}{2} \left( \widetilde{h}(f) - \widetilde{h}^*(-f)\right)
 $$
 
-where we used the facts that $\Re h = (h + h^*) / 2$, $\Im h = (h - h^*) / 2$, 
-and $\text{FT}[h(t)^*]\,(f) = \text{FT}[h(t)]^* (-f)$.
-
-The aforementioned relation $\widetilde{h}_{\ell m} =(-1)^\ell \widetilde{h}^* _{\ell -m} (-f)$ 
-allows us to simplify the summation we get when substuting $h(f)$ and $h^*(-f)$ with their 
-expression in terms of the Fourier transforms of the modes, $\widetilde{H}_{\ell m}$:
+Fourier transforming the time-domain equatorial-symmetry relation
+$H_{\ell m}(t) = (-1)^\ell H^*_{\ell -m}(t)$ gives its frequency-domain form
+$\widetilde{H}_{\ell m} (f) = (-1)^\ell \widetilde{H}^*_{\ell -m} (-f)$
+(equation 2.5 in {cite:t}`garcia-quirosIMRPhenomXHMMultimodeFrequencydomain2020`),
+which lets us simplify the summation we get when substituting $\widetilde{h}(f)$ and
+$\widetilde{h}^*(-f)$ with their expansions in terms of the Fourier-domain modes
+$\widetilde{H}_{\ell m}$. The one subtlety is that conjugating $\widetilde{h}(-f)$
+also conjugates the spherical harmonics, so the second sum carries
+${}^{(-2)}Y^*_{\ell m}$:
 
 $$ \begin{align}
 \widetilde{h}_+ (f) &= \frac{1}{2} \left( \widetilde{h}(f) + \widetilde{h}^*(-f)\right)  \\
 &= \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{|m|\leq \ell} \left(
-    \widetilde{H}_{\ell m} (f) {}^{(-2)}Y_{\ell m} +
-    \widetilde{H}^*_{\ell m} (-f) {}^{(-2)}Y_{\ell m}
+    \widetilde{H}_{\ell m} (f) \, {}^{(-2)}Y_{\ell m} +
+    \widetilde{H}^*_{\ell m} (-f) \, {}^{(-2)}Y^*_{\ell m}
 \right)  \\
-&\approx \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{1 < m \leq \ell} \left(
-    \widetilde{H}_{\ell m} (f) {}^{(-2)}Y_{\ell m} +
-    \widetilde{H}^*_{\ell m} (-f) {}^{(-2)}Y_{\ell m} +
-    \widetilde{H}_{\ell -m} (f) {}^{(-2)}Y_{\ell -m} +
-    \widetilde{H}^*_{\ell -m} (-f) {}^{(-2)}Y_{\ell - m}
+&\approx \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{0 < m \leq \ell} \left(
+    \widetilde{H}_{\ell m} (f) \, {}^{(-2)}Y_{\ell m} +
+    \widetilde{H}^*_{\ell m} (-f) \, {}^{(-2)}Y^*_{\ell m} +
+    \widetilde{H}_{\ell -m} (f) \, {}^{(-2)}Y_{\ell -m} +
+    \widetilde{H}^*_{\ell -m} (-f) \, {}^{(-2)}Y^*_{\ell - m}
 \right)  \\
-&= \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{1 < m \leq \ell} \left(
-    \widetilde{H}_{\ell m} (f) {}^{(-2)}Y_{\ell m} +
-    (-1)^\ell\widetilde{H}_{\ell -m} (f) {}^{(-2)}Y_{\ell m} +
-    \widetilde{H}_{\ell -m} (f) {}^{(-2)}Y_{\ell -m} +
-    (-1)^\ell \widetilde{H}_{\ell m} (f) {}^{(-2)}Y_{\ell - m}
+&= \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{0 < m \leq \ell} \left(
+    \widetilde{H}_{\ell m} (f) \, {}^{(-2)}Y_{\ell m} +
+    (-1)^\ell\widetilde{H}_{\ell -m} (f) \, {}^{(-2)}Y^*_{\ell m} +
+    \widetilde{H}_{\ell -m} (f) \, {}^{(-2)}Y_{\ell -m} +
+    (-1)^\ell \widetilde{H}_{\ell m} (f) \, {}^{(-2)}Y^*_{\ell - m}
 \right)  \\
-&= \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{1 < m \leq \ell} \left(
+&= \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{0 < m \leq \ell} \left(
     \widetilde{H}_{\ell m} (f) 
     \left(
         {}^{(-2)}Y_{\ell m} +
-        (-1)^\ell {}^{(-2)}Y_{\ell - m}
+        (-1)^\ell {}^{(-2)}Y^*_{\ell - m}
     \right)
     +
     \widetilde{H}_{\ell -m} (f) 
     \left(
-        (-1)^\ell {}^{(-2)}Y_{\ell m} +
-        {}^{(-2)}Y_{\ell -m}
+        {}^{(-2)}Y_{\ell -m} +
+        (-1)^\ell {}^{(-2)}Y^*_{\ell m}
     \right)
 \right)  \\
-&\approx \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{1 < m \leq \ell} \left(
+&\approx \frac{1}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{0 < m \leq \ell}
     \widetilde{H}_{\ell m} (f) 
     \left(
         {}^{(-2)}Y_{\ell m} +
-        (-1)^\ell {}^{(-2)}Y_{\ell - m}
+        (-1)^\ell {}^{(-2)}Y^*_{\ell - m}
     \right)
-\right) 
 \end{align}
 $$
 
-In the last step, we have approximated the contribution of the $\widetilde{H}_{\ell -m}$
-modes as zero. This is because we are working with positive frequencies, and modes with 
-negative (positive) $m$ computed at positive (negative) frequency are negligible.
+Going to the third line we split the sum over $|m| \leq \ell$ into its $\pm m$
+halves (dropping $m = 0$); going to the fourth we used
+$\widetilde{H}^*_{\ell m}(-f) = (-1)^\ell \widetilde{H}_{\ell -m}(f)$ and
+$\widetilde{H}^*_{\ell -m}(-f) = (-1)^\ell \widetilde{H}_{\ell m}(f)$; the fifth just
+regroups by mode. In the last step we approximated the contribution of the
+$\widetilde{H}_{\ell -m}$ modes as zero.
+This is because we are working with positive frequencies, and in this convention
+a mode with negative $m$ evaluated at positive frequency is negligible: the
+$\ell m$ and $\ell,-m$ modes are supported on opposite frequency ranges, as
+follows from the stationary-phase approximation (see e.g.
+{cite:t}`damourFrequencydomainPapproximantFilters2000`, and the discussion around
+equations 2.5--2.8 in {cite:t}`garcia-quirosIMRPhenomXHMMultimodeFrequencydomain2020`).
 
-Also, we have been neglecting the $m = 0$ term, which is also typically small.
+We have also dropped the $m = 0$ terms, which carry the (non-oscillatory)
+gravitational-wave memory and are negligible for the quasi-circular inspiral
+signal considered here; higher-mode frequency-domain models such as
+{cite:t}`garcia-quirosIMRPhenomXHMMultimodeFrequencydomain2020` and
+{cite:t}`khanIncludingHigherOrder2020` likewise restrict to $m \neq 0$.
 
-```{danger}
-Find references for these statements! 
-```
+An identical computation for $\widetilde{h}_\times(f) = \frac{i}{2}(\widetilde{h}(f) - \widetilde{h}^*(-f))$
+leads to 
 
-A similar computation leads to 
-
-$$ h_\times(f) = - \frac{i}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{0<m \leq \ell}
+$$ \widetilde{h}_\times(f) = \frac{i}{2} \frac{M}{d_L} \sum _{\ell \geq 2} \sum _{0<m \leq \ell}
 \widetilde{H}_{\ell m} (f) \left(
     {}^{(-2)}Y_{\ell m} -
-    (-1)^\ell {}^{(-2)}Y_{\ell - m}
+    (-1)^\ell {}^{(-2)}Y^*_{\ell - m}
 \right)
 $$
+
+These match equations 2.7 and 2.8 of
+{cite:t}`garcia-quirosIMRPhenomXHMMultimodeFrequencydomain2020` (there written for
+the retained mode $\widetilde{h}_{\ell -m}$, i.e. with the roles of $m$ and $-m$
+swapped relative to the frequency convention used here).
 
 These are the final expressions we need, since they express the frequency-domain
 polarizations $h_+(f)$ and $h_\times(f)$ as a function of the frequency-domain modes

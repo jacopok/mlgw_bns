@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
@@ -10,11 +11,33 @@ import time
 import h5py
 import joblib  # type: ignore
 import numpy as np
+import sklearn
 from numpy.ma import indices
 import yaml
 from dacite import from_dict
 from numba import njit  # type: ignore
 from scipy.interpolate import interp1d
+
+
+def _with_fast_sklearn_config(func):
+    """Run ``func`` with scikit-learn's per-call input validation disabled.
+
+    Every ``predict`` here feeds a single, already-clean parameter row to
+    fitted ``KernelRidge`` / ``MLPRegressor`` estimators. scikit-learn's
+    default ``check_array`` finiteness scan and ``@validate_params``
+    introspection then cost more than the linear algebra they guard. The
+    context manager is scoped to the call, so it never leaks to a caller
+    that uses scikit-learn itself.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with sklearn.config_context(
+            assume_finite=True, skip_parameter_validation=True
+        ):
+            return func(*args, **kwargs)
+
+    return wrapper
 
 from .data_management import (
     array_memory,
@@ -32,6 +55,7 @@ from .dataset_generation import (
     Dataset,
     ParameterGenerator,
     ParameterSet,
+    UniformParameterGenerator,
     TEOBResumSGenerator,
     WaveformGenerator,
     WaveformParameters,
@@ -49,6 +73,7 @@ from .downsampling_interpolation import (
 )
 from .neural_network import (
     Hyperparameters,
+    KernelRidgeNetwork,
     NeuralNetwork,
     SklearnNetwork,
     TimeshiftsGPR,
@@ -58,9 +83,20 @@ from .neural_network import (
 from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
     PrincipalComponentTraining,
+    remove_linear_trend,
 )
 from .taylorf2 import SUN_MASS_SECONDS, smoothing_func
 from .higher_order_modes import mode_to_k
+
+
+#: The regressor backends a saved model may name in its metadata. The
+#: network is the historical default; the kernel is far more accurate on
+#: the same training data, at the cost of a prediction time that grows
+#: with the training set. See :class:`~mlgw_bns.neural_network.KernelRidgeNetwork`.
+NN_KINDS: dict[str, Type[NeuralNetwork]] = {
+    "SklearnNetwork": SklearnNetwork,
+    "KernelRidgeNetwork": KernelRidgeNetwork,
+}
 
 
 class FrequencyTooLowError(ValueError):
@@ -185,6 +221,80 @@ class ParametersWithExtrinsic:
         # the phase and the time shift to TEOB.
 
 
+def mode_power_weights(
+    amplitude_residuals: np.ndarray,
+    frequencies_hz: np.ndarray,
+    pn_amplitude: Optional[np.ndarray] = None,
+    exponent: float = 1.0,
+) -> np.ndarray:
+    r"""Per-waveform regression weights from the integrated mode power.
+
+    :math:`\omega_i = (P_i / \max_j P_j)^{\text{exponent}}` with
+    :math:`P_i = \int A_i(f)^2 \mathrm{d}f`, so :math:`\omega \in (0, 1]`
+    with a maximum of exactly 1.
+
+    The point is the odd-:math:`m` modes. Their amplitude vanishes
+    identically on the equal-mass, equal-spin locus --- for (2,1) the
+    residual is exactly zero at :math:`q = 1` and grows linearly in
+    :math:`q - 1` --- so the extracted phase there is
+    :math:`\arg(0)`: undefined, and poorly conditioned in a whole
+    neighbourhood of it. A smooth global regressor forced to fit that
+    boundary layer rings across the low-:math:`q` region that does carry
+    power. Weighting by the mode's own power lets the fit relax exactly
+    where the target is ill-conditioned *and* contributes nothing to the
+    summed waveform, without dropping any training data. See
+    `arXiv:2609.03025 <https://arxiv.org/abs/2609.03025>`_, which
+    introduces the same weighting for the same reason.
+
+    Parameters
+    ----------
+    amplitude_residuals : np.ndarray
+        Shape ``(n_waveforms, n_amplitude_nodes)``; the modelled
+        amplitude quantity :math:`A_{\rm EOB} / A_{\rm PN}`.
+    frequencies_hz : np.ndarray
+        The amplitude nodes, in Hz, matching the second axis.
+    pn_amplitude : np.ndarray, optional
+        The fixed :math:`A_{\rm PN}(\theta_{\rm ref})` divisor, which
+        turns the residual back into the physical mode amplitude. This
+        is available whenever the dataset was built with
+        ``reference_amplitude=True`` (every shipped model), since the
+        divisor is then parameter-independent. If ``None``, the power is
+        computed from the bare residual instead --- a proxy, since the
+        per-waveform divisor has not been undone.
+    exponent : float, optional
+        Applied to the normalised power. ``1.0`` (the default) is the
+        plain power weighting; smaller values soften it.
+
+    Returns
+    -------
+    np.ndarray
+        Shape ``(n_waveforms,)``, maximum 1.
+    """
+
+    amplitudes = np.asarray(amplitude_residuals, dtype=np.float64)
+
+    if pn_amplitude is None:
+        logging.warning(
+            "No fixed reference amplitude available (reference_amplitude=False): "
+            "weighting on the bare residual power, which does not undo the "
+            "per-waveform Post-Newtonian divisor."
+        )
+    else:
+        amplitudes = amplitudes * np.asarray(pn_amplitude, dtype=np.float64)[np.newaxis, :]
+
+    power = np.trapezoid(amplitudes ** 2, np.asarray(frequencies_hz), axis=1)
+
+    maximum = np.max(power)
+    if not np.isfinite(maximum) or maximum <= 0.0:
+        logging.warning(
+            "Mode power is degenerate (max = %s); falling back to uniform weights",
+            maximum,
+        )
+        return np.ones(len(power))
+
+    return (power / maximum) ** exponent
+
+
 class ModeModel:
     """``mlgw_bns`` model.
     This class incorporates all the functionality required to
@@ -256,9 +366,24 @@ class ModeModel:
         nn_kind: Type[NeuralNetwork] = SklearnNetwork,
         parameter_ranges: ParameterRanges = ParameterRanges(),
         parameter_generator : Optional[ParameterGenerator] = None,
-        mode: Optional[Mode] = None
+        parameter_generator_class: Optional[Type[ParameterGenerator]] = None,
+        mode: Optional[Mode] = None,
+        reference_amplitude: bool = False,
+        power_weighting: bool = True,
+        power_weight_exponent: float = 1.0,
     ):
 
+        self.reference_amplitude = reference_amplitude
+        #: Whether :meth:`train_nn` weights each training waveform by its
+        #: integrated mode power (see :func:`mode_power_weights`). Only
+        #: odd-``m`` modes are affected --- their amplitude vanishes on
+        #: the equal-mass, equal-spin locus, which is what makes the
+        #: weighting necessary; even-``m`` modes are fit unweighted, and
+        #: so is the (2,2)-only model.
+        self.power_weighting = power_weighting
+        #: Exponent applied to the normalised power in
+        #: :func:`mode_power_weights`.
+        self.power_weight_exponent = power_weight_exponent
         self.filename = filename
 
         if waveform_generator is None:
@@ -282,6 +407,11 @@ class ModeModel:
         self.initial_frequency_hz = initial_frequency_hz
         self.srate_hz = srate_hz
         self.multibanding = multibanding
+        self.parameter_generator_class = (
+            parameter_generator_class
+            if parameter_generator_class is not None
+            else UniformParameterGenerator
+        )
         self.parameter_generator = parameter_generator
         self.extend_with_post_newtonian = extend_with_post_newtonian
         self.extend_with_zeros_at_high_frequency = extend_with_zeros_at_high_frequency 
@@ -289,8 +419,15 @@ class ModeModel:
         self.dataset = self._make_dataset()
 
         if downsampling_training is None:
+            # For the higher-order modes, cap the frequency ratio between
+            # adjacent phase nodes so the high-frequency band (where the
+            # (4,4) waveform phase looks locally linear but its residual
+            # does not) stays populated.
             self.downsampling_training: DownsamplingTraining = (
-                GreedyDownsamplingTraining(self.dataset)
+                GreedyDownsamplingTraining(
+                    self.dataset,
+                    max_phi_gap_ratio=1.03 if mode is not None else None,
+                )
             )
         elif isinstance(downsampling_training, type) and issubclass(
             downsampling_training, DownsamplingTraining
@@ -303,6 +440,12 @@ class ModeModel:
 
         self.nn: Optional[NeuralNetwork] = None
         self.timeshifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None
+
+        # Shared per-mode reference-phase predictor and this mode's column
+        # in its output. Set by `Model` for HOM models; when None the
+        # phase reconstruction adds no per-mode constant.
+        self.mode_phases_predictor = None
+        self.mode_phases_index: Optional[int] = None
 
         self.training_dataset: Optional[Residuals] = None
         self.training_parameters: Optional[ParameterSet] = None
@@ -341,6 +484,10 @@ class ModeModel:
             'parameter_ranges': asdict(self.parameter_ranges),
             'extend_with_post_newtonian': self.extend_with_post_newtonian,
             'extend_with_zeros_at_high_frequency': self.extend_with_zeros_at_high_frequency,
+            'nn_kind': self.nn_kind.__name__,
+            'reference_amplitude': self.reference_amplitude,
+            'power_weighting': self.power_weighting,
+            'power_weight_exponent': self.power_weight_exponent,
         }
 
     def _make_dataset(self) -> Dataset:
@@ -352,6 +499,8 @@ class ModeModel:
             multibanding=self.multibanding,
             parameter_ranges=self.parameter_ranges,
             parameter_generator=self.parameter_generator,
+            parameter_generator_class=self.parameter_generator_class,
+            reference_amplitude=self.reference_amplitude,
         )
     
     @property
@@ -425,10 +574,22 @@ class ModeModel:
         
 
     def set_metadata(self, meta_dict: dict) -> None:
-        
+        """Apply a metadata dictionary read back from the YAML sidecar.
+
+        Two keys need decoding rather than a plain ``setattr``: the
+        parameter ranges, which are a nested dataclass, and the regressor
+        backend, which is stored by name so that the YAML stays readable
+        and free of Python references. A file written before ``nn_kind``
+        was recorded simply does not carry the key, which leaves the
+        constructor default in place --- and that default is the network,
+        which is what those models were trained with.
+        """
+
         for key, value in meta_dict.items():
             if key == 'parameter_ranges':
                 value = from_dict(data_class=ParameterRanges, data=value)
+            elif key == 'nn_kind':
+                value = NN_KINDS[value]
             setattr(self, key, value)
 
     @property
@@ -469,12 +630,44 @@ class ModeModel:
 
         return f"{self.filename}_timeshifts.pkl"
 
+    def _predicted_mode_phase0(self, intrinsic_params) -> float:
+        """Per-mode reference phase to restore at the anchor node.
+
+        Non-zero only for HOM models, where ``remove_linear_trend``
+        subtracted the shared
+        :class:`~mlgw_bns.neural_network.ModePhasesNN` prediction of
+        :math:`\\phi_{\\ell m}(f_0)` from the training residuals; this
+        returns the very same prediction so it cancels.
+
+        The predictor is shared across every mode of a :class:`Model` and
+        returns all modes' phases at once, so a summed waveform would call
+        it once per mode with identical parameters. A one-entry cache on
+        the (shared) predictor object collapses those to a single
+        evaluation, which is worth roughly a quarter of ``predict``'s
+        fixed cost on the four-mode model.
+        """
+        predictor = self.mode_phases_predictor
+        if predictor is None or self.mode_phases_index is None:
+            return 0.0
+        param_array = np.asarray(intrinsic_params.array)
+        key = param_array.tobytes()
+        cached = getattr(predictor, "_phase0_cache", None)
+        if cached is None or cached[0] != key:
+            phases = np.asarray(
+                predictor.predict([param_array])[0], dtype=float
+            )
+            cached = (key, phases)
+            predictor._phase0_cache = cached
+        return float(cached[1][self.mode_phases_index])
+
     def generate(
         self,
         training_downsampling_dataset_size: Optional[int] = 64,
         training_pca_dataset_size: Optional[int] = 256,
         training_nn_dataset_size: Optional[int] = 256,
         timeshifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None,
+        precomputed_residuals: Optional[tuple] = None,
+        n_jobs: int = 1,
     ) -> None:
         """Generate a new model from scratch.
 
@@ -501,6 +694,20 @@ class ModeModel:
                 fitting a new one from this model's own residuals. Used by
                 :class:`~mlgw_bns.model.Model` to share a single
                 predictor, trained on the (2,2) mode, across every mode.
+        precomputed_residuals : tuple, optional
+                ``(freq_downsampled_natural, ParameterSet, Residuals)`` for
+                this mode, already downsampled to
+                :attr:`downsampling_indices`, sized
+                ``max(training_pca_dataset_size, training_nn_dataset_size)``.
+                Supplied by :meth:`~mlgw_bns.model.Model.generate` from one
+                shared multi-mode EOB sweep; when given, the per-mode
+                ``Dataset.generate_residuals`` calls for the PCA and NN
+                training sets are skipped.
+        n_jobs : int, optional
+                Number of parallel worker processes for every EOB sweep in
+                this call. Sequential (``1``) by default -- parallelism is
+                opt-in; pass a higher value explicitly to use multiple
+                workers.
 
         """
 
@@ -515,6 +722,7 @@ class ModeModel:
 
         if training_downsampling_dataset_size is not None:
             logging.info("Training the downsampling")
+            self.downsampling_training.n_jobs = n_jobs
             self.downsampling_indices = self.downsampling_training.train(
                 training_downsampling_dataset_size
             )
@@ -535,14 +743,22 @@ class ModeModel:
             # full-resolution grid buys nothing here while costing a factor
             # `waveform_length / (amp_length + phi_length)` --- of order a
             # thousand --- in memory.
-            logging.info("Generating the training dataset")
-            freq_downsampled, parameters, residuals = (
-                self.dataset.generate_residuals(
-                    training_nn_dataset_size,
-                    self.downsampling_indices,
-                    flatten_phase=False,
+            if precomputed_residuals is not None:
+                freq_downsampled, all_parameters, all_residuals = precomputed_residuals
+                parameters = self.dataset.parameter_set_cls(
+                    all_parameters.parameter_array[:training_nn_dataset_size]
                 )
-            )
+                residuals = all_residuals[:training_nn_dataset_size]
+            else:
+                logging.info("Generating the training dataset")
+                freq_downsampled, parameters, residuals = (
+                    self.dataset.generate_residuals(
+                        training_nn_dataset_size,
+                        self.downsampling_indices,
+                        flatten_phase=False,
+                        n_jobs=n_jobs,
+                    )
+                )
             frequencies_hz = self.dataset.natural_units_to_hz(freq_downsampled)
 
         # LEARN Δt(θ), needed below to remove the linear trend
@@ -576,9 +792,24 @@ class ModeModel:
                 self.downsampling_indices,
                 self.pca_components_number,
                 self.timeshifts_predictor,
+                subtract_mode_phase_anchor=self.mode is not None,
+                mode_phases_predictor=self.mode_phases_predictor,
+                mode_index=self.mode_phases_index,
             )
 
-            self.pca_data = self.pca_training.train(training_pca_dataset_size)
+            if precomputed_residuals is not None:
+                freq_ds_pca, all_parameters, all_residuals = precomputed_residuals
+                self.pca_data = self.pca_training.train_on(
+                    self.dataset.parameter_set_cls(
+                        all_parameters.parameter_array[:training_pca_dataset_size]
+                    ),
+                    all_residuals[:training_pca_dataset_size],
+                    self.dataset.natural_units_to_hz(freq_ds_pca),
+                )
+            else:
+                self.pca_data = self.pca_training.train(
+                    training_pca_dataset_size, n_jobs=n_jobs
+                )
         else:
             assert self.pca_data is not None
 
@@ -589,6 +820,9 @@ class ModeModel:
                 phi_diff=residuals.phase_residuals,
                 frq=frequencies_hz,
                 timeshifts_predictor=self.timeshifts_predictor,
+                subtract_mode_phase_anchor=self.mode is not None,
+                mode_phases_predictor=self.mode_phases_predictor,
+                mode_index=self.mode_phases_index,
             )
 
             self.training_dataset = residuals
@@ -701,14 +935,6 @@ class ModeModel:
         if include_timeshifts_predictor and self.timeshifts_predictor is not None:
             self.timeshifts_predictor.save_model(self.filename_timeshifts)
 
-    def save_new(self, include_training_data: bool = True) -> None:
-        self.save_metadata()
-        self.save_arrays(include_training_data)
-        if self.nn is not None:
-            self.nn.save(self.filename_nn)
-        if self.timeshifts_predictor is not None:
-            self.timeshifts_predictor.save_model(self.filename_timeshifts)
-
     def load(
         self,
         streams: Optional[
@@ -803,6 +1029,46 @@ class ModeModel:
         return PrincipalComponentAnalysisModel(self.pca_components_number)
 
 
+    def _training_power_weights(self) -> Optional[np.ndarray]:
+        """Power weights for the training set, or ``None`` for a flat fit.
+
+        Returns ``None`` --- meaning "fit unweighted", byte-identical to
+        the behaviour before power weighting existed --- unless
+        :attr:`power_weighting` is set *and* this is an odd-``m`` mode.
+        Even-``m`` modes have no vanishing-amplitude locus, and measuring
+        their weights on the shipped model gives an almost flat
+        distribution (0.42-0.99 for (4,4), 0.73-0.99 for (2,2)), so
+        weighting them would perturb two modes that are already accurate
+        for no benefit. See :func:`mode_power_weights`.
+        """
+
+        if not self.power_weighting or self.mode is None or self.mode.m % 2 == 0:
+            return None
+
+        assert self.training_dataset is not None
+        assert self.downsampling_indices is not None
+
+        amplitude_indices = self.downsampling_indices.amplitude_indices
+
+        # Mirrors `WaveformGenerator.generate_residuals`: with a fixed
+        # amplitude reference the divisor is parameter-independent, so
+        # multiplying it back in recovers the physical mode amplitude.
+        reference = self.dataset.amplitude_reference_parameters
+        pn_amplitude = (
+            None
+            if reference is None
+            else self.dataset.waveform_generator.post_newtonian_amplitude(
+                reference, self.dataset.frequencies[amplitude_indices]
+            )
+        )
+
+        return mode_power_weights(
+            self.training_dataset.amplitude_residuals,
+            self.dataset.frequencies_hz[amplitude_indices],
+            pn_amplitude=pn_amplitude,
+            exponent=self.power_weight_exponent,
+        )
+
     def train_nn(
         self, hyper: Hyperparameters, indices: Union[list[int], slice] = slice(None)
     ) -> NeuralNetwork:
@@ -817,6 +1083,13 @@ class ModeModel:
             Indices used to perform a selection of a subsection
             of the training data; by default ``slice(None)``
             which means all available training data is used.
+
+        Notes
+        -----
+        For odd-``m`` modes the fit is weighted by each waveform's
+        integrated mode power (:meth:`_training_power_weights`), which
+        keeps the near-vanishing-amplitude waveforms around equal mass
+        from distorting it. Every other case fits unweighted.
 
         Returns
         -------
@@ -835,20 +1108,28 @@ class ModeModel:
 
         nn = self.nn_kind(hyper)
 
+        sample_weight = self._training_power_weights()
+        if sample_weight is not None:
+            sample_weight = sample_weight[indices]
+
         start_time = time.time()  # Record the start time
 
         nn.fit(
             self.training_parameters.parameter_array[indices],
             training_residuals[indices],
+            sample_weight=sample_weight,
         )
 
         end_time = time.time()  # Record the end time
 
         training_duration = end_time - start_time  # Compute the duration
         logging.info(
-            "Training the network on %i waveforms took %.2f seconds "
+            "Training the network on %i %s waveforms took %.2f seconds "
             "(peak memory usage so far: %s)",
             len(training_residuals[indices]),
+            "unweighted"
+            if sample_weight is None
+            else f"power-weighted (median omega {np.median(sample_weight):.3g})",
             training_duration,
             format_bytes(peak_memory_usage()),
         )
@@ -873,8 +1154,12 @@ class ModeModel:
 
         if hyper is None:
             assert self.training_dataset is not None
-            hyper = Hyperparameters.default(len(self.training_dataset))
-            # hyper = Hyperparameters.from_trial(n_train_max = 50)
+            if self.nn_kind is KernelRidgeNetwork:
+                hyper = Hyperparameters.default_kernel_ridge(
+                    len(self.training_dataset), mode=self.mode
+                )
+            else:
+                hyper = Hyperparameters.default(len(self.training_dataset))
 
         logging.info("Training the network with hyperparameters %s", hyper)
 
@@ -950,10 +1235,13 @@ class ModeModel:
 
         residuals = self.predict_residuals_bulk(params, nn)
 
-        return self.dataset.recompose_residuals(
+        waveforms = self.dataset.recompose_residuals(
             residuals, params, self.downsampling_indices
         )
 
+        return waveforms
+
+    @_with_fast_sklearn_config
     def predict_amplitude_phase(
         self, frequencies: np.ndarray, params: ParametersWithExtrinsic
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -1012,7 +1300,13 @@ class ModeModel:
             # this should never happen! 
             raise ValueError('At least one point should be in the model band')
 
-        if rescaled_frequencies[-1] > self.dataset.effective_srate_hz / 2.0:
+        # The trained band's own top edge, not the theoretical
+        # `effective_srate_hz / 2`: the dataset's frequency grid can land a
+        # hair past that nominal value by construction, which would
+        # otherwise make this model's own last trained point count as
+        # "out of band" and get zeroed out (see `[[predict-amplitude-phase-hf-edge]]`).
+        trained_fmax_hz = self.dataset.frequencies_hz[-1]
+        if rescaled_frequencies[-1] > trained_fmax_hz:
             if not self.extend_with_zeros_at_high_frequency:
                 raise FrequencyTooHighError(
                     "This model is not configured to be extended with zeros at high frequency."
@@ -1021,7 +1315,7 @@ class ModeModel:
                 )
             else:
                 extend_hf = True
-                high_frequency_index = int(np.searchsorted(rescaled_frequencies, self.dataset.effective_srate_hz / 2.0))
+                high_frequency_index = int(np.searchsorted(rescaled_frequencies, trained_fmax_hz))
                 hf_segment_length = len(rescaled_frequencies) - high_frequency_index
                 rescaled_frequencies = rescaled_frequencies[:high_frequency_index]
 
@@ -1037,8 +1331,12 @@ class ModeModel:
             ParameterSet.from_list_of_waveform_parameters([intrinsic_params]), self.nn
         )
 
+        # None unless this model was trained against a fixed reference
+        # amplitude, in which case the same divisor has to be put back
+        # here; see `WaveformGenerator.generate_residuals`.
+        reference = self.dataset.amplitude_reference_parameters
         pn_amplitude = self.dataset.waveform_generator.post_newtonian_amplitude(
-            intrinsic_params,
+            intrinsic_params if reference is None else reference,
             self.dataset.frequencies[self.downsampling_indices.amplitude_indices],
         )
         pn_phase = self.dataset.waveform_generator.post_newtonian_phase(
@@ -1060,6 +1358,8 @@ class ModeModel:
                 [intrinsic_params.array]
             )[0]
             phi_ds = phi_ds + 2 * np.pi * (phase_freqs_hz - phase_freqs_hz[0]) * time_shift
+
+        phi_ds = phi_ds + self._predicted_mode_phase0(intrinsic_params)
 
         pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
 
@@ -1110,11 +1410,26 @@ class ModeModel:
                 intrinsic_params,
                 low_freqs,
             )
-            
+
+            # Glue the PN segment onto the *bottom* of the model band, shifting
+            # the PN piece to match the band at the connection frequency --- not
+            # the band to match the PN, which would overwrite the band's
+            # per-mode phase constant (`_predicted_mode_phase0`, carrying the
+            # inter-mode alignment) with the PN one and mis-phase the HOM modes
+            # relative to each other for every `total_mass` below the dataset
+            # reference. `- low_f_phi[-1]` zeroes the PN phase at the connection
+            # first, so this is correct for an absolute-backbone PN phase too.
             resampled_phi = np.concatenate((
-                low_f_phi[:-1],
-                resampled_phi[1:] + low_f_phi[-1]
+                low_f_phi[:-1] - low_f_phi[-1] + resampled_phi[0],
+                resampled_phi[1:]
             ))
+
+        # Anchor the phase to zero at the first node so that `reference_phase`
+        # continues to set the phase there. HOM models keep the per-mode
+        # constant restored by `_predicted_mode_phase0`, which carries the
+        # inter-mode alignment.
+        if self.mode_phases_predictor is None:
+            resampled_phi = resampled_phi - resampled_phi[0]
 
         if extend_hf:
             resampled_amp = np.concatenate((resampled_amp, np.zeros(hf_segment_length)))
@@ -1126,15 +1441,37 @@ class ModeModel:
             / params.distance_mpc
         )
 
+        # `reference_phase` is the coalescence phase: shifting it by phi_c
+        # rotates the (l, m) mode by exp(i m phi_c). A mode-less model is the
+        # (2,2). `time_shift` is a genuine time-domain shift, the same for
+        # every mode.
+        m_mode = 2 if self.mode is None else self.mode.m
         phi = (
             resampled_phi
-            + params.reference_phase
-            + (2 * np.pi * params.time_shift) * frequencies # TODO: changed `+` to `-` 
+            + m_mode * params.reference_phase
+            + (2 * np.pi * params.time_shift) * frequencies # TODO: changed `+` to `-`
         )
         
         return amp, phi
 
-    def predict_amplitude_phase_optimized(self, frequencies: np.ndarray, params: ParametersWithExtrinsic) -> tuple[np.ndarray, np.ndarray]:
+    @_with_fast_sklearn_config
+    def predict_amplitude_phase_optimized(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        apply_time_shift: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Amplitude and phase for one mode.
+
+        ``apply_time_shift`` (default ``True``) adds back the
+        linear-in-frequency phase trend that ``remove_linear_trend``
+        stripped from the training residuals, using this model's
+        :attr:`timeshifts_predictor`. :meth:`Model._hpc_waveform` and
+        :meth:`Model._hpc_waveform_per_mode` pass ``False`` because they
+        apply that shift themselves (with the requested time shift, which
+        may be user-supplied, and the total-mass rescaling); passing
+        ``True`` there would apply it twice.
+        """
         # from time import perf_counter
         # t0 = perf_counter()
 
@@ -1146,7 +1483,6 @@ class ModeModel:
         # Rescale frequencies early
         rescaled_frequencies = frequencies * (params.total_mass / self.dataset.total_mass)
         eff_fmin_hz = self.dataset.effective_initial_frequency_hz
-        eff_srate_hz = self.dataset.effective_srate_hz
         rescaled_f_min = rescaled_frequencies[0]
         rescaled_f_max = rescaled_frequencies[-1]
 
@@ -1172,11 +1508,17 @@ class ModeModel:
         # ----------------------------
         # High-frequency extension
         # ----------------------------
-        extend_hf = rescaled_f_max > eff_srate_hz / 2.0
+        # The trained band's own top edge, not the theoretical
+        # `eff_srate_hz / 2`: the dataset's frequency grid can land a hair
+        # past that nominal value by construction, which would otherwise
+        # make this model's own last trained point count as "out of band"
+        # and get zeroed out (see `[[predict-amplitude-phase-hf-edge]]`).
+        trained_fmax_hz = self.dataset.frequencies_hz[-1]
+        extend_hf = rescaled_f_max > trained_fmax_hz
         if extend_hf:
             if not self.extend_with_zeros_at_high_frequency:
                 raise FrequencyTooHighError("ModeModel not configured to extend with zeros at high frequency.")
-            high_frequency_index = np.searchsorted(rescaled_frequencies, eff_srate_hz / 2.0)
+            high_frequency_index = np.searchsorted(rescaled_frequencies, trained_fmax_hz)
             hf_segment_length = len(rescaled_frequencies) - high_frequency_index
             rescaled_frequencies = rescaled_frequencies[:high_frequency_index]
 
@@ -1197,8 +1539,11 @@ class ModeModel:
         ds = self.downsampling_indices
         freqs_hz = self.dataset.frequencies_hz
 
+        # See the note in `predict`: mirrors `generate_residuals`.
+        reference = self.dataset.amplitude_reference_parameters
         pn_amp = self.dataset.waveform_generator.post_newtonian_amplitude(
-            intrinsic_params, self.dataset.frequencies[ds.amplitude_indices]
+            intrinsic_params if reference is None else reference,
+            self.dataset.frequencies[ds.amplitude_indices],
         )
         pn_phi = self.dataset.waveform_generator.post_newtonian_phase(
             intrinsic_params, self.dataset.frequencies[ds.phase_indices]
@@ -1207,7 +1552,7 @@ class ModeModel:
         amp_ds = combine_residuals_amp(residuals.amplitude_residuals[0], pn_amp)
         phi_ds = combine_residuals_phi(residuals.phase_residuals[0], pn_phi)
 
-        if self.timeshifts_predictor is not None:
+        if self.timeshifts_predictor is not None and apply_time_shift:
             # add back the linear-in-frequency phase trend that
             # `remove_linear_trend` subtracted from the training residuals
             phase_freqs_hz = freqs_hz[ds.phase_indices]
@@ -1215,6 +1560,8 @@ class ModeModel:
                 [intrinsic_params.array]
             )[0]
             phi_ds = phi_ds + 2 * np.pi * (phase_freqs_hz - phase_freqs_hz[0]) * time_shift
+
+        phi_ds = phi_ds + self._predicted_mode_phase0(intrinsic_params)
 
         # t6 = perf_counter()
 
@@ -1242,7 +1589,24 @@ class ModeModel:
             low_amp[mask] += smoothing_func(zero_to_one) * amp_diff
 
             resampled_amp = np.concatenate((low_amp[:-1], resampled_amp[1:]))
-            resampled_phi = np.concatenate((low_phi[:-1], resampled_phi[1:] + low_phi[-1]))
+            # Glue the PN segment onto the *bottom* of the model band, shifting
+            # the PN piece to match the band at the connection frequency --- not
+            # the other way round. Shifting the band would overwrite its
+            # per-mode phase constant (`_predicted_mode_phase0`, which carries
+            # the inter-mode alignment) with the PN one, mis-phasing the HOM
+            # modes relative to each other for every `total_mass` below the
+            # dataset reference (the only regime in which `extend_with_pn` fires).
+            # `- low_phi[-1]` zeroes the PN phase at the connection first, so
+            # this is correct for an absolute-backbone PN phase too.
+            resampled_phi = np.concatenate(
+                (low_phi[:-1] - low_phi[-1] + resampled_phi[0], resampled_phi[1:])
+            )
+
+        # Anchor to zero at the first node for non-HOM models so that
+        # `reference_phase` sets the phase there; HOM per-mode constants are
+        # kept (they carry the inter-mode alignment).
+        if self.mode_phases_predictor is None:
+            resampled_phi = resampled_phi - resampled_phi[0]
 
         # t8 = perf_counter()
 
@@ -1261,9 +1625,15 @@ class ModeModel:
         # ----------------------------
         pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
         amp = resampled_amp * pre / params.distance_mpc
+
+        # `reference_phase` is the coalescence phase: shifting it by phi_c
+        # rotates the (l, m) mode by exp(i m phi_c). A mode-less model is the
+        # (2,2). `time_shift` is a genuine time-domain shift, the same for
+        # every mode.
+        m_mode = 2 if self.mode is None else self.mode.m
         phi = (
             resampled_phi
-            + params.reference_phase
+            + m_mode * params.reference_phase
             + (2 * np.pi * params.time_shift) * frequencies
         )
 
@@ -1556,13 +1926,3 @@ def compute_polarizations(
     hc = pre_cross * waveform_imag - 1j * pre_cross * waveform_real
 
     return hp, hc
-
-def remove_linear_trend(parameters, phi_diff, frq, timeshifts_predictor):
-    for i in range(parameters.parameter_array.shape[0]):
-        phi_diff[i] = (
-            phi_diff[i]
-            - 2 * np.pi * (frq - frq[0]) * timeshifts_predictor.predict([parameters.parameter_array[i]])
-            - phi_diff[i,0]
-        )
-
-    return phi_diff
