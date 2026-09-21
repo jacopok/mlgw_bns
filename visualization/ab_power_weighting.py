@@ -14,14 +14,14 @@ megabytes rather than an EOB sweep and half a gigabyte.
 
 Run with::
 
-    python ab_power_weighting.py                    # writes pw_off_*, pw_on_*
-    python ab_power_weighting.py --modes 2,1
+    python visualization/ab_power_weighting.py                    # writes pw_off_*, pw_on_*
+    python visualization/ab_power_weighting.py --modes 2,1
 
 Then compare::
 
-    python slice_mode_pca.py --model pw_off --modes 2,1 --range q,1.0,1.6 \
+    python visualization/slice_mode_pca.py --model pw_off --modes 2,1 --range q,1.0,1.6 \
         --out-prefix slice_pw_off
-    python slice_mode_pca.py --model pw_on  --modes 2,1 --range q,1.0,1.6 \
+    python visualization/slice_mode_pca.py --model pw_on  --modes 2,1 --range q,1.0,1.6 \
         --out-prefix slice_pw_on
     python visualization/validate_model.py --model pw_on --n-mismatches 1000
 """

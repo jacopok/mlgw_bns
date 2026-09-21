@@ -10,8 +10,8 @@ comparison is paired: the same binaries, the same EOB ground truth.
 
 Run with::
 
-    python compare_power_weighting.py                       # pw_off vs pw_on
-    python compare_power_weighting.py --models default_hom;pw_on -n 200
+    python visualization/compare_power_weighting.py                       # pw_off vs pw_on
+    python visualization/compare_power_weighting.py --models default_hom;pw_on -n 200
 """
 
 from __future__ import annotations

@@ -20,8 +20,8 @@ Taylor-F2 (l,m) PN subtraction.
 
 Run with::
 
-    python slice_reference_targets.py                       # default base point
-    python slice_reference_targets.py --n 121 --base-chi1 0.3 --base-lambda 1000
+    python visualization/slice_reference_targets.py                       # default base point
+    python visualization/slice_reference_targets.py --n 121 --base-chi1 0.3 --base-lambda 1000
 """
 
 from __future__ import annotations

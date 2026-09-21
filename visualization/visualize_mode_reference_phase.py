@@ -9,7 +9,7 @@ parameter.
 
 Run with::
 
-    python visualize_mode_reference_phase.py --n 4000 --mode 4,4
+    python visualization/visualize_mode_reference_phase.py --n 4000 --mode 4,4
 """
 
 from __future__ import annotations
