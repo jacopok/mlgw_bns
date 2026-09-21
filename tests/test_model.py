@@ -3,6 +3,7 @@ import dataclasses
 import numpy as np
 import pytest
 
+from mlgw_bns.data_management import ParameterRanges
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.model import (
     DEFAULT_MODES,
@@ -12,6 +13,23 @@ from mlgw_bns.model import (
 )
 from mlgw_bns.mode_model import ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
+
+# The packaged default model is trained with lambda up to 12000, but the
+# PyPI-released TEOBResumS (unlike the locally patched one) crashes on
+# root-bracketing for some high-q, high-Lambda combinations. These tests
+# only need ground-truth EOB waveforms to validate against, so they draw
+# from a narrower, crash-free slice of the model's own parameter space
+# rather than its full training range.
+REDUCED_TEOB_SAFE_RANGES = ParameterRanges(
+    q_range=(1.0, 3.0), lambda1_range=(5.0, 5000.0), lambda2_range=(5.0, 5000.0)
+)
+
+
+def reduced_range_parameter_generator(model, seed):
+    dataset = model.dataset
+    return dataset.parameter_generator_class(
+        parameter_ranges=REDUCED_TEOB_SAFE_RANGES, dataset=dataset, seed=seed
+    )
 
 
 def assert_waveforms_close(first, second):
@@ -156,7 +174,7 @@ def test_default_model_full_waveform_mismatch(default_model):
 
     validator = ValidateModel(default_model.mode_models[Mode(2, 2)])
     frequencies = validator.frequencies
-    parameter_generator = default_model.dataset.make_parameter_generator(seed=7)
+    parameter_generator = reduced_range_parameter_generator(default_model, seed=7)
 
     mismatches = []
     for _ in range(16):
@@ -207,7 +225,7 @@ def test_full_waveform_mismatch_is_flat_in_total_mass(default_model, total_mass)
     validator = ValidateModel(default_model.mode_models[Mode(2, 2)])
     frequencies = validator.frequencies
     band = (frequencies >= 20.0) & (frequencies <= 2048.0)
-    parameter_generator = default_model.dataset.make_parameter_generator(seed=7)
+    parameter_generator = reduced_range_parameter_generator(default_model, seed=7)
 
     mismatches = []
     for _ in range(8):

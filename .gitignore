@@ -70,3 +70,13 @@ visualization/teob_self_consistency_*.png
 visualization/validate_low_frequency_pn.npz
 visualization/validate_low_frequency_pn.png
 CLAUDE.md
+
+# TEOBResumS debug dump, written to cwd on a crashed/failed configuration
+data/
+
+# hom7 model training artifacts (metadata + log)
+hom7*.yaml
+hom7.log
+visualization/benchmark_evaluation_time.npz
+visualization/recover_frequency_remapping.npz
+visualization/validate_precessing_against_teob.npz
