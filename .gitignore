@@ -80,3 +80,19 @@ hom7.log
 visualization/benchmark_evaluation_time.npz
 visualization/recover_frequency_remapping.npz
 visualization/validate_precessing_against_teob.npz
+
+# regressor-experiments: investigation scripts for issues since fixed/decided
+explore_multiband_grid.py
+geometric_grid_convergence.py
+compare_mode_phase_regressor.py
+compare_phase_regressors.py
+compare_relative_phase_target.py
+retrain_nystroem_moderate.py
+repro_2pi_jump.py
+probe_reference_kink_source.py
+slice_mode_phase_common.py
+visualization/teob_hom_start_frequency.py
+visualization/mismatch_vs_total_mass.py
+visualization/multimode_eob_equivalence.py
+visualization/train_comparison_models.py
+visualization/eob_start_freq_sensitivity.py
