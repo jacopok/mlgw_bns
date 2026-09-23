@@ -303,15 +303,14 @@ def main() -> None:
     # curves give at that same formula value, not by comparing momega
     # numbers (which would be identical by construction).
     raw_momega = np.pi * fb * mass_sum_seconds
-    # reanchored() unwraps the reference mode's phase over the whole
-    # array passed to it; TEOB's own native FD grid runs to its Nyquist
-    # (~2000+ Hz beyond real (2,2) signal, all numerical noise), and
-    # unwrapping across that corrupts the reconstructed SPA time -- in
-    # the real pipeline this is always called on the surrogate's own
-    # band-limited frequency grid, so restrict to a comparable band here.
+    # TEOB's native FD grid is uniform and fine (df = 1/512 Hz), so its
+    # phase can be unwrapped here, but it runs to its Nyquist (~2000+ Hz
+    # beyond real (2,2) signal, all numerical noise), and unwrapping
+    # across that corrupts the reconstructed SPA time: restrict to a
+    # comparable band to the surrogate's.
     anchor_band = (frequencies > 0) & (frequencies <= 2.0 * BAND_HI)
     anchored = angles.reanchored(
-        frequencies[anchor_band], coprecessing[anchor_band],
+        frequencies[anchor_band], np.unwrap(np.angle(coprecessing[anchor_band])),
         mass_sum_seconds, BAND_LO,
     )
 

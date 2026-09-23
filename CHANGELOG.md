@@ -31,18 +31,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Out-of-range rows come back as NaN instead of raising, so that one bad row
     does not abort a batch; `BatchedSurrogate.valid` gives the mask.
 - `Model.parameter_ranges`, whose setter applies new ranges to every mode.
-
-### Changed
-
-- `mlgw_bns.jax_predict.model_to_jax_waveform` is now a thin wrapper around
-    the batched pipeline instead of a separate port; its internal helpers
-    (`mode_model_to_jax_residuals`, `make_not_a_knot_spline_jax`, ...) are
-    gone. It compiles in seconds rather than ~40 s.
-- `pn_modes.reference_phase_backbone` is vectorised over the parameter rows
-    (shared with the batched path); its output changes at the ~1e-7 rad level.
+- Precessing waveforms: `mlgw_bns.precessing_model.PrecessingModel` twists the
+    surrogate's co-precessing multipoles into the inertial frame, along the
+    Euler angles obtained by integrating the PN spin-precession dynamics
+    (`mlgw_bns.twist_waveform`). The twist is done in the frequency domain, with
+    each multipole's angles looked up at its own stationary-phase orbital
+    frequency. `check_aligned_spin_limit` asserts that it reduces to
+    `Model.predict` when the in-plane spins vanish.
+- `Model.coprecessing_modes_dict`, returning the bare multipoles
+    `A exp(i phi) / eta` without any sky projection, which is what the twist
+    needs. The surrogate, post-Newtonian and EOB sources of amplitude and phase
+    now all go through one internal helper rather than three copies of the same
+    loop.
+- `visualization/plot_twisted_waveforms.py`, which checks the twist against its
+    analytic limits and plots the PN angles and the resulting polarizations, and
+    `visualization/precessing_mismatches.py`, which computes precessing-waveform
+    mismatches over random source positions and inclinations.
+- `visualization/validate_twist_against_teob.py`, which validates the twist
+    against TEOBResumS itself: it takes the co-precessing multipoles from an
+    aligned-spin run, twists them here, and compares against the inertial-frame
+    multipoles of a generic-spin run of the same binary. The dominant multipoles
+    agree to a few times 1e-5, the polarizations to 6e-5 on average, and the
+    residual is shown to vanish linearly with the opening angle, and to be
+    entirely in the Euler angles: fitting the three angles at each time
+    reproduces TEOBResumS' multipoles to 2e-14, so the rotation itself is
+    exact, and the recovered angles agree with the ones integrated here to
+    8e-06 rad in the combination the multipoles constrain sharply and to 3e-04
+    rad in the opening angle.
+- `visualization/validate_precessing_against_teob.py`, which closes the loop by
+    comparing the full frequency-domain polarizations of
+    `PrecessingModel.predict` against the `h+`, `hx` that TEOBResumS returns for
+    the same precessing binary, over random orientations, with the surrogate's
+    and with TEOBResumS' own co-precessing multipoles. See its docstring for the
+    current numbers.
+- `PrecessingModel.EulerAngles.reanchored`, and `reanchor=` on
+    `PrecessingModel.predict` / `predict_modes_dict`: re-tabulate the Euler
+    angles against the time-frequency relation of the (2,2) phase rather than
+    the 3.5PN one the precession is integrated along. Off by default: TEOBResumS
+    reads its angles against the PN orbital frequency, and against it
+    re-anchoring is ~6x worse.
+- `twist_waveform.integrate_pn_spin_precession(independent_variable=
+    "orbital_frequency", omega_dot=...)` and
+    `precessing_model.eob_orbital_frequency_rate` /
+    `PrecessingModel.euler_angles(anchor_to_reference_phase=True)`: march the PN
+    spin precession *against* orbital frequency, along a `dOmega/dt` taken from
+    an accurate `(2,2)` phase rather than the PN flux -- the surrogate analogue
+    of the `SPIN_FLX_EOB` hand-off TEOBResumS does once its spin dynamics
+    reaches the EOB band, and a way to fix the angle *trajectory* rather than
+    just re-label it. Investigated because the `reanchored` residual scales with
+    `beta`; over 10 binaries it came out a wash with `reanchored` (median
+    mismatch `4.2e-3` vs `3.6e-3`), so the orbital-frequency evolution is not
+    what limits a precessing waveform (measured before the fixes below). Kept as
+    an opt-in; all defaults
+    unchanged. The shared PN precession r.h.s. was factored into
+    `_pn_precession_derivatives`, with `_pn_spin_precession_rhs` now a thin
+    time-domain wrapper (no behaviour change).
+- `PrecessingParametersWithExtrinsic.reference_frequency_hz`: the frequency at
+    which the spin vectors (and `Lhat = z`) are given. The PN spin precession
+    is integrated both ways from it (`integrate_pn_spin_precession(f_start=)`).
+    `None` keeps the previous behaviour, the start of the integration.
+    TEOBResumS' frequency-domain path imposes its spins at 0.95 times its
+    `initial_frequency` (its time-domain path at `initial_frequency` itself);
+    matching that cuts the mismatch against it ~5x.
+- `Model.coprecessing_amplitudes_and_phases`, the multipoles of
+    `coprecessing_modes_dict` as amplitude and continuous phase.
+- Investigation scripts under `visualization/`:
+    `compare_fd_twist_with_teob_formula.py` (our twist against a verbatim port
+    of TEOBResumS' `twist_hlm_FD`), `precession_error_vs_inplane_spin.py`,
+    `probe_hcross_sign.py`, `ab_precession_floor.py`,
+    `probe_mismatch_quadrature.py`, `probe_coprecessing_network_error.py`.
 
 ### Fixed
 
+- `twist_modes_frequency_domain` rotated the surrogate's multipoles by
+    `D(alpha, beta, gamma)`; being the complex conjugates of the multipoles'
+    transforms, they need `D* = D(-alpha, beta, -gamma)`. The precession came
+    out mirrored -- invisible in the aligned-spin limit, ~9e-2 against
+    TEOBResumS at `beta ~ 0.27`, 5e-4 once fixed.
+- The PN spin-precession `dOmega/dt` lacked the leading-order tidal term
+    TEOBResumS adds for a BNS (`twist_waveform.tidal_flux_coefficient`,
+    `lambdas=`): the angles drifted by ~0.1 rad by 400 Hz, ~1 rad by 1.5 kHz.
+- `EulerAngles.reanchored` took the phase from `np.unwrap(np.angle(h22))` on
+    the model's sparse grid, aliased below a few hundred Hz; it now takes the
+    model's own phase (`reference_phase`, **breaking** for direct callers).
+- `validate_precessing_against_teob.py` started TEOBResumS at 15 Hz, leaving
+    its reference without (4,4) below 28.5 Hz and (3,3) below 21.4 Hz; and it
+    mapped the azimuth to TEOBResumS' `coalescence_angle` as `pi/2 - phi`.
+    `PrecessingModel` at azimuth `phi` is TEOBResumS at `pi/2 + phi` with `hx`
+    negated -- a consequence of `Model.predict`'s `hx` sign, below.
 - A `Model` built with a subset (or a reordering) of its trained modes -- e.g.
     `Model.default_for_testing(modes=[(2,2), (2,1), (3,3), (4,4)])` of the
     7-mode `default_hom` -- read each mode's reference phase from the column of
@@ -53,6 +129,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     up correctly; the lazily built per-mode models (all that
     `default_for_testing` uses) did not. The full 7-mode model, as validated
     for the README, was unaffected. `visualization/probe_intermode_phase.py`.
+
+### Changed
+
+- `mlgw_bns.jax_predict.model_to_jax_waveform` is now a thin wrapper around
+    the batched pipeline instead of a separate port; its internal helpers
+    (`mode_model_to_jax_residuals`, `make_not_a_knot_spline_jax`, ...) are
+    gone. It compiles in seconds rather than ~40 s.
+- `pn_modes.reference_phase_backbone` is vectorised over the parameter rows
+    (shared with the batched path); its output changes at the ~1e-7 rad level.
+- `reanchor` now defaults to `False` on `PrecessingModel.predict` and
+    `predict_modes_dict`.
+- `twist_waveform.compute_hpc` returned `h+ + i hx` rather than `h+ - i hx`;
+    with the sign corrected it reproduces TEOBResumS' polarizations to machine
+    precision, given that the C code's `coalescence_angle` is the azimuth
+    measured as `pi/2 - phi`. `PrecessingModel` was unaffected: it combines the
+    multipoles through `polarizations_from_inertial_modes` instead.
+- `twist_waveform.integrate_pn_spin_precession` now refines its output with the
+    integrator's dense output. DOP853 covers a whole inspiral in a couple of
+    hundred steps, which is accurate at those points but far too coarse to
+    interpolate the precession between them.
+- The Wigner d-function and the spin-weighted spherical harmonics now live only
+    in `mlgw_bns.special_func`, vectorized over the angle;
+    `higher_order_modes.wigner_d_function_spin_2`, the named harmonics in
+    `mlgw_bns.spherical_harmonics` and `mlgw_bns.twist_waveform` all delegate to
+    it instead of carrying their own copy.
 
 ### Known issues
 
@@ -66,6 +167,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     as SNR^2). Evaluating the sum in 80-bit precision removes it (6e-6 rad)
     but costs ~20x; the lasting fix is a better-conditioned regressor, which
     needs retraining.
+- `PrecessingModel` does not fix the orbital phase of the co-precessing
+    multipoles at the spin reference frequency (the angle between the
+    separation vector and the in-plane spins, which precession makes physical):
+    it inherits whatever the aligned-spin model's phase convention gives.
+    Against TEOBResumS this is a binary-dependent rotation `exp(i n phi0)` of
+    the co-precessing multipoles and a ~2e-3 median mismatch, ~4e-3 edge-on,
+    independent of the opening angle; with the rotation applied the mismatch
+    drops to the aligned-spin floor. TEOBResumS' convention for it is not
+    reproduced yet.
+- `Model.predict` (and so `PrecessingModel.predict`) returns `hx` with the
+    opposite sign to TEOBResumS' (and LAL's) convention relative to `h+`:
+    `hx/h+ = +0.836i` at inclination 1 against TEOBResumS' `-0.836i`
+    (`visualization/probe_hcross_sign.py`), i.e. the polarizations of inclination
+    `pi - iota`. For an aligned-spin binary this is an exact symmetry, so no
+    mismatch can see it; in multi-detector inference it mirrors the inclination
+    posterior. Not changed here, since it changes the shipped model's output.
 
 ## [1.0.1] - 2026-09-21
 
@@ -154,68 +271,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
         one `Dataset` per mode and they were evicting each other, so the
         ~519k-point grid was reconverted to natural units once per mode on
         every call.
-- Precessing waveforms: `mlgw_bns.precessing_model.PrecessingModel` twists the
-    surrogate's co-precessing multipoles into the inertial frame, along the
-    Euler angles obtained by integrating the PN spin-precession dynamics
-    (`mlgw_bns.twist_waveform`). The twist is done in the frequency domain, with
-    each multipole's angles looked up at its own stationary-phase orbital
-    frequency. `check_aligned_spin_limit` asserts that it reduces to
-    `Model.predict` when the in-plane spins vanish.
-- `Model.coprecessing_modes_dict`, returning the bare multipoles
-    `A exp(i phi) / eta` without any sky projection, which is what the twist
-    needs. The surrogate, post-Newtonian and EOB sources of amplitude and phase
-    now all go through one internal helper rather than three copies of the same
-    loop.
-- `visualization/plot_twisted_waveforms.py`, which checks the twist against its
-    analytic limits and plots the PN angles and the resulting polarizations, and
-    `visualization/precessing_mismatches.py`, which computes precessing-waveform
-    mismatches over random source positions and inclinations.
-- `visualization/validate_twist_against_teob.py`, which validates the twist
-    against TEOBResumS itself: it takes the co-precessing multipoles from an
-    aligned-spin run, twists them here, and compares against the inertial-frame
-    multipoles of a generic-spin run of the same binary. The dominant multipoles
-    agree to a few times 1e-5, the polarizations to 6e-5 on average, and the
-    residual is shown to vanish linearly with the opening angle, and to be
-    entirely in the Euler angles: fitting the three angles at each time
-    reproduces TEOBResumS' multipoles to 2e-14, so the rotation itself is
-    exact, and the recovered angles agree with the ones integrated here to
-    8e-06 rad in the combination the multipoles constrain sharply and to 3e-04
-    rad in the opening angle.
-- `visualization/validate_precessing_against_teob.py`, which closes the loop by
-    comparing the full frequency-domain polarizations of
-    `PrecessingModel.predict` against the `h+`, `hx` that TEOBResumS returns for
-    the same precessing binary, over random orientations. Feeding the same
-    pipeline TEOBResumS' own co-precessing multipoles instead of the surrogate's
-    isolates the cost of *modelling* the precession (the PN angles, the
-    stationary-phase multipoles, the resampling) from the network reconstruction
-    error, which comes out at ~1e-6: the networks are not what limits a
-    precessing waveform. The precession model is, and it climbs with the opening
-    angle -- driven by the PN spin-precession angles.
-- `PrecessingModel.EulerAngles.reanchored`, and `reanchor=True` (the default) on
-    `PrecessingModel.predict` / `predict_modes_dict`. The Euler angles are
-    integrated against `M Omega_orb` as advanced by a 3.5PN energy-balance
-    `dOmega/dt`, which runs fast through the late inspiral, so the frequency the
-    angles are labelled with drifts from the true one. `reanchored` re-tabulates
-    them against the time-frequency relation carried by the surrogate's own
-    (2,2) phase -- an EOB-accurate map -- which halves the mismatch against
-    TEOBResumS at moderate-to-large opening angles (`beta ~ 0.2` rad: `1e-1` to
-    `5e-2`), with no effect on the aligned-spin limit and no retrain. The
-    residual still scales with `beta`.
-- `twist_waveform.integrate_pn_spin_precession(independent_variable=
-    "orbital_frequency", omega_dot=...)` and
-    `precessing_model.eob_orbital_frequency_rate` /
-    `PrecessingModel.euler_angles(anchor_to_reference_phase=True)`: march the PN
-    spin precession *against* orbital frequency, along a `dOmega/dt` taken from
-    an accurate `(2,2)` phase rather than the PN flux -- the surrogate analogue
-    of the `SPIN_FLX_EOB` hand-off TEOBResumS does once its spin dynamics
-    reaches the EOB band, and a way to fix the angle *trajectory* rather than
-    just re-label it. Investigated because the `reanchored` residual scales with
-    `beta`; over 10 binaries it came out a wash with `reanchored` (median
-    mismatch `4.2e-3` vs `3.6e-3`), so the orbital-frequency evolution is not
-    what limits a precessing waveform. Kept as an opt-in; all defaults
-    unchanged. The shared PN precession r.h.s. was factored into
-    `_pn_precession_derivatives`, with `_pn_spin_precession_rhs` now a thin
-    time-domain wrapper (no behaviour change).
 - Odd-m mode regressors are now weighted by each training waveform's integrated
     mode power, following arXiv:2609.03025: near equal mass the (2,1) and (3,3)
     amplitude residuals grow linearly out of the odd-m zero, a boundary layer
@@ -224,23 +279,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `power_weight_exponent` on `ModeModel`, on by default, recorded in the
     metadata) improves the (2,1) optimised per-mode mismatch by 23x and (3,3) by
     11x on `default_hom`, with (2,2) and (4,4) bit-identical.
-
-### Changed
-
-- `twist_waveform.compute_hpc` returned `h+ + i hx` rather than `h+ - i hx`;
-    with the sign corrected it reproduces TEOBResumS' polarizations to machine
-    precision, given that the C code's `coalescence_angle` is the azimuth
-    measured as `pi/2 - phi`. `PrecessingModel` was unaffected: it combines the
-    multipoles through `polarizations_from_inertial_modes` instead.
-- `twist_waveform.integrate_pn_spin_precession` now refines its output with the
-    integrator's dense output. DOP853 covers a whole inspiral in a couple of
-    hundred steps, which is accurate at those points but far too coarse to
-    interpolate the precession between them.
-- The Wigner d-function and the spin-weighted spherical harmonics now live only
-    in `mlgw_bns.special_func`, vectorized over the angle;
-    `higher_order_modes.wigner_d_function_spin_2`, the named harmonics in
-    `mlgw_bns.spherical_harmonics` and `mlgw_bns.twist_waveform` all delegate to
-    it instead of carrying their own copy.
 - **Breaking**: `Model` is now the multi-mode surrogate, holding one `ModeModel`
     per spherical-harmonic mode. What used to be called `Model` --- the single-mode
     workhorse --- is now `ModeModel`, and lives in `mlgw_bns.mode_model`.
