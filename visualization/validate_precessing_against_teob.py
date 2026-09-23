@@ -33,49 +33,52 @@ It tracks three mismatches per observation:
   binary (it barely depends on the line of sight).
 
 TEOBResumS is called in the frequency domain (``domain = 1``) with
-``df = 1 / 512`` s so the inspiral does not wrap, resampled onto the
+``df = 1 / 2048`` Hz so the inspiral does not wrap, resampled onto the
 model grid through amplitude and unwrapped phase (never the complex
 strain, which aliases), and conjugated for its opposite Fourier-sign
 convention. Its frequency-domain output is sky-projected, so it is
 re-run for each inclination.
 
-Findings (12 binaries x 6 orientations, total mass 2.8, |chi_perp| < 0.4,
-seed 20). The ``network`` error is ~1.5e-6, worst ~6e-5 -- the same as in
-the aligned-spin validation. The trained networks are not what limits a
-precessing waveform; the precession model is, and it climbs with the
-opening angle beta:
+Findings (12 binaries x 4 orientations, total mass 2.8, |chi_perp| < 0.4,
+seed 20; 2 binaries skipped where TEOBResumS' root finder fails), after
+the fixes of 2026-09 -- the twist's rotation (D*, not D), the spins given
+at TEOBResumS' own reference point, the LO tidal term in the PN
+dOmega/dt, the mode-subset reference-phase bug of Model, and this
+script's band edge and azimuth mapping:
 
-                       plain      reanchored   gain
-    beta < 0.05 rad :  4.4e-3     3.5e-3       1.3x
-    0.05 - 0.10     :  8.9e-3     5.9e-3       1.5x
-    0.10 - 0.20     :  3.2e-2     9.3e-3       3.4x
-    0.20 - 0.30     :  1.2e-1     4.7e-2       2.7x
+                       plain      reanchored
+    all             :  2.0e-3     1.4e-2
+    beta 0.05-0.10  :  2.5e-3     3.1e-3
+    beta 0.10-0.20  :  1.6e-3     5.9e-3
+    beta 0.20-0.50  :  2.1e-3     3.0e-2
+    network         :  1.1e-5 (worst 1.3e-4)
 
-Re-anchoring the Euler-angle lookup to the surrogate's (2,2) phase --
-an EOB-accurate time-frequency map, in place of the 3.5PN one the
-integration marches with -- cuts the mismatch by ~2x overall and ~3x
-through the mid-beta range where the frequency-map error dominates.
-Below beta ~ 0.05 rad a ~3.5e-3 floor from the stationary-phase
-co-precessing multipoles and the resampling takes over, and it is not
-touched. The astrophysically expected BNS range is beta <~ 0.1 rad,
-where a precessing waveform is now good to ~5e-3.
+(before them: 1.7e-2 plain, 8.1e-3 reanchored). The plain lookup is what
+TEOBResumS itself does -- its twist reads the PN-integrated angles against
+the PN orbital frequency, in both domains -- so re-anchoring moves *away*
+from it, and ``reanchor`` is now off by default.
 
-The residual above the floor still scales with beta. It was tempting to
-blame the angle *trajectory* -- integrated along the PN v(t) even after
-the lookup axis is re-anchored -- so the precession was reworked to
-march against orbital frequency directly, along the surrogate's own
-EOB-accurate dOmega/dt (twist_waveform.integrate_pn_spin_precession with
-independent_variable="orbital_frequency" and an omega_dot from
-precessing_model.eob_orbital_frequency_rate; this is the surrogate
-analogue of TEOBResumS' internal SPIN_FLX_EOB hand-off). Over 10
-binaries x 3 orientations it came out a wash with the re-anchoring:
-median 4.2e-3 vs 3.6e-3, and no better through any beta bin. So the
-orbital-frequency evolution is *not* what limits a precessing waveform
-here. What is left is the frequency-domain stationary-phase twist
-itself, the co-precessing-mode approximation under precession, and the
-N4LO PN precession equations -- consistent with
-validate_twist_against_teob, which isolates the angle error at ~1% in
-beta and finds it insensitive to the ODE tolerance.
+What is left does not grow with beta and does not depend on the surrogate
+(``network``; precession_error_vs_inplane_spin.py shows it already there
+for aligned spins), but on inclination: ~2e-4 face-on, ~4e-3 edge-on. It
+is the co-precessing orbital phase at the reference frequency. Our
+multipoles and those TEOBResumS twists agree mode by mode only up to a
+rotation exp(i n phi0), phi0 binary-dependent; applying it brings the
+precessing mismatch to the aligned-spin floor (4e-6, 1.7e-4 on two
+binaries at chi_perp 0.35). The SPA orbital phase read off our (2,2) at
+the reference frequency is ~0 (as for an orbit started there), that of
+TEOBResumS' multipoles is not: its convention for the initial orbital
+phase of the co-precessing multipoles (plausibly tied to its initial
+Euler angles, alpha_0 = gamma_0) is not reproduced yet. Without
+precession the same rotation is an observer rotation, which the
+single-phase marginalisation absorbs only for the (2, 2).
+
+The earlier explanations of the floor -- the stationary-phase twist, the
+co-precessing approximation, the N4LO PN equations, the orbital-frequency
+evolution -- were ruled out along the way: our twist is the same formula
+as TEOBResumS' twist_hlm_FD (compare_fd_twist_with_teob_formula.py), and
+with the reference point and tidal term fixed our angles match its own
+(``output_dynamics``) to 2e-4 rad from 15 Hz to 1.5 kHz.
 
 Run with: python visualization/validate_precessing_against_teob.py
 """
@@ -114,13 +117,28 @@ DISTANCE_MPC = 100.0
 
 #: TEOBResumS frequency-domain resolution, in Hz. Fine enough that
 #: ``1 / DF`` exceeds the full inspiral length from ``F0_TEOB``.
-DF = 1.0 / 512.0
-#: Where to start the TEOBResumS integration, in Hz --- below the
-#: comparison band so its own low-frequency taper stays out of it.
-F0_TEOB = 15.0
+DF = 1.0 / 2048.0
+#: Where to start the TEOBResumS integration, in Hz --- low enough that
+#: every multipole is present throughout the comparison band. TEOBResumS'
+#: (l, m) multipole is identically zero below (m / 2) * 0.95 * F0_TEOB
+#: (see SPIN_REFERENCE_FREQUENCY_HZ for the 0.95): starting at 15 Hz, as
+#: this script used to, left the reference with no (4, 4) below 28.5 Hz
+#: and no (3, 3) below 21.4 Hz, against a surrogate that has both --- a
+#: ~1e-2 mismatch on its own for edge-on views, where those multipoles
+#: weigh most.
+F0_TEOB = 10.0
 #: Comparison band, in Hz.
 BAND_LO = 20.0
 BAND_HI = 2048.0
+#: Frequency at which PrecessingModel takes the spin vectors to be given.
+#: In the frequency domain (``domain = 1``) TEOBResumS starts both its EOB
+#: and its PN spin dynamics at 0.95 * initial_frequency, and imposes the
+#: input spins (and Lhat = z) *there* -- read off its own ``dynspin.txt``
+#: (``output_dynamics``); in the time domain it is initial_frequency
+#: itself. ``None`` is PrecessingModel's own default, the start of its PN
+#: integration, a few Hz. Either of those is a different binary as far as
+#: the precession goes, by an amount that grows with the opening angle.
+SPIN_REFERENCE_FREQUENCY_HZ = 0.95 * F0_TEOB
 
 SEED = 20
 
@@ -188,9 +206,14 @@ def teob_polarizations(params, chi_1, chi_2, inclination, azimuth, frequencies):
         domain=1,
         df=DF,
         inclination=inclination,
-        # PrecessingModel projects with exp(i m azimuth); TEOBResumS uses
-        # coalescence_angle = pi/2 - azimuth (see twist_waveform.compute_hpc).
-        coalescence_angle=np.pi / 2.0 - azimuth,
+        # PrecessingModel at azimuth phi is TEOBResumS at coalescence_angle
+        # pi/2 + phi with h_x negated -- the mirror image of the pi/2 - phi
+        # of twist_waveform.compute_hpc, which the multipoles' conjugate
+        # Fourier convention introduces. Invisible without precession
+        # (an aligned binary is symmetric under it), unambiguous with it:
+        # checked against the Fourier transform of TEOBResumS' time-domain
+        # h+, hx (1e-3 at beta ~ 0.36, against 0.16 with pi/2 - phi).
+        coalescence_angle=np.pi / 2.0 + azimuth,
         output_hpc="no",
         arg_out="no",
         use_spins=2,
@@ -201,7 +224,7 @@ def teob_polarizations(params, chi_1, chi_2, inclination, azimuth, frequencies):
     f, real_hp, imag_hp, real_hc, imag_hc = EOBRunPy(par)
     f = np.asarray(f)
     hp = np.conj(np.asarray(real_hp) + 1j * np.asarray(imag_hp))
-    hc = np.conj(np.asarray(real_hc) + 1j * np.asarray(imag_hc))
+    hc = -np.conj(np.asarray(real_hc) + 1j * np.asarray(imag_hc))
 
     inside = (frequencies >= max(BAND_LO, f[0])) & (frequencies <= min(BAND_HI, f[-1]))
     hp_out = interp_fd(frequencies[inside], f, hp)
@@ -243,6 +266,8 @@ def validate(model: Model, n_binaries: int, n_orientations: int):
             distance_mpc=DISTANCE_MPC,
             inclination=0.0,
             total_mass=TOTAL_MASS,
+            # the spins are drawn as TEOBResumS' own, at its initial_frequency
+            reference_frequency_hz=SPIN_REFERENCE_FREQUENCY_HZ,
         )
         angles = precessing.euler_angles(precessing_params, float(frequencies[0]))
 
@@ -257,9 +282,13 @@ def validate(model: Model, n_binaries: int, n_orientations: int):
             precessing_params.inclination = iota
             precessing_params.azimuth = azimuth
 
-            hp_teob, hc_teob, inside = teob_polarizations(
-                intrinsic, chi_1, chi_2, iota, azimuth, frequencies
-            )
+            try:
+                hp_teob, hc_teob, inside = teob_polarizations(
+                    intrinsic, chi_1, chi_2, iota, azimuth, frequencies
+                )
+            except RuntimeError as error:  # TEOBResumS' root finder, occasionally
+                print(f"  binary {index + 1}: TEOBResumS failed ({error}), skipped")
+                break
             strain_teob = f_plus * hp_teob + f_cross * hc_teob
 
             strains = {}
@@ -283,17 +312,17 @@ def validate(model: Model, n_binaries: int, n_orientations: int):
                 plain_mismatch = validator.full_waveform_mismatch(
                     {(2, 2): strain_teob}, {(2, 2): strains["plain"]}, frequencies=fb,
                 )
-                # The network error barely depends on the line of sight and
-                # is ~1e-6; one sample per binary is enough and the
-                # optimisation is the expensive part of the loop.
+                # The network error barely depends on the line of sight;
+                # one sample per binary is enough and the optimisation is
+                # the expensive part of the loop.
                 if orientation_index == 0:
                     hp_e, hc_e = precessing.predict(
                         frequencies, precessing_params, source="eob",
-                        angles=angles, reanchor=True,
+                        angles=angles, reanchor=False,
                     )
                     strain_eob = (f_plus * hp_e + f_cross * hc_e)[inside]
                     network_mismatch = validator.full_waveform_mismatch(
-                        {(2, 2): strain_eob}, {(2, 2): strains["reanchored"]},
+                        {(2, 2): strain_eob}, {(2, 2): strains["plain"]},
                         frequencies=fb,
                     )
                 else:
