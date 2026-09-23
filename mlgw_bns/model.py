@@ -308,7 +308,7 @@ class _LazyModeModelsDict(dict):
         # None here, if this model has not been trained or loaded yet.
         mode_model.timeshifts_predictor = self._model.time_shifts_predictor
         mode_model.mode_phases_predictor = self._model.mode_phases_predictor
-        mode_model.mode_phases_index = self._model.modes.index(mode)
+        mode_model.mode_phases_index = self._model._mode_phases_column(mode)
         self[mode] = mode_model
         return mode_model
 
@@ -1114,12 +1114,27 @@ class Model:
         predictor = self.mode_phases_predictor
         if predictor is None or predictor.modes is None:
             return
-        predictor_index = {tuple(lm): idx for idx, lm in enumerate(predictor.modes)}
         for mode in self.modes:
-            if mode in self.mode_models and (mode.l, mode.m) in predictor_index:
+            if mode in self.mode_models and (mode.l, mode.m) in map(tuple, predictor.modes):
                 mm = self.mode_models[mode]
                 mm.mode_phases_predictor = predictor
-                mm.mode_phases_index = predictor_index[(mode.l, mode.m)]
+                mm.mode_phases_index = self._mode_phases_column(mode)
+
+    def _mode_phases_column(self, mode: Mode) -> int:
+        """Output column of :attr:`mode_phases_predictor` belonging to ``mode``.
+
+        Looked up in the predictor's own ``modes`` (its training order)
+        whenever it records them; ``self.modes`` is only the fallback. A
+        model loaded with a subset of the trained modes --- e.g.
+        ``default_for_testing(modes=[(2,2), (2,1), (3,3), (4,4)])`` of the
+        7-mode ``default_hom`` --- otherwise hands (3,3) and (4,4) the
+        (3,1) and (3,2) columns: an O(1) rad error in their phase relative
+        to the (2,2), up to ~1e-3 in the full-waveform mismatch.
+        """
+        predictor = self.mode_phases_predictor
+        if predictor is not None and predictor.modes is not None:
+            return [tuple(lm) for lm in predictor.modes].index((mode.l, mode.m))
+        return self.modes.index(mode)
 
     def _propagate_time_shifts_predictor(self) -> None:
         """Point every already-built per-mode model at the shared predictor.
