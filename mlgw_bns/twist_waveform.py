@@ -215,7 +215,20 @@ def alpha_initial_condition(q, chi1x, chi1y, chi1z, chi2x, chi2y, chi2z, f0):
     return math.atan2(alpha_y_NLO, alpha_x_NLO)
 
 
-def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh):
+def tidal_flux_coefficient(nu, lambda_1, lambda_2):
+    """
+    Coefficient of the leading-order (5PN) tidal term TEOBResumS adds to
+    the PN dOmega/dt of its spin dynamics for a BNS: Eq. A21 of
+    arXiv:1402.5156, `a10_tidal` in eob_spin_dyn_rhs_PN(). `lambda_1` is
+    the heavier body's quadrupolar tidal polarizability (LambdaAl2).
+    """
+    MA = nu_to_X1(nu)
+    MB = 1.0 - MA
+    return (6.0 * MA ** 4 * (12.0 - 11.0 * MA) * lambda_1
+            + 6.0 * MB ** 4 * (12.0 - 11.0 * MB) * lambda_2)
+
+
+def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0):
     """
     Core of the PN spin-precession ODE system, EOBPars->spin_flx ==
     SPIN_FLX_PN branch: N4LO spin-orbit + spin-spin precession of SA, SB,
@@ -225,7 +238,8 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh):
     including which higher-order (4PN+) coefficients it computes but never
     actually adds to the sum (the C code's `for (i=2;i<8;i++)` loop caps
     the frequency evolution at 3.5PN even though a[8..11]/b[8..11] and
-    beta8A/B are computed) -- those unused terms are simply omitted here.
+    beta8A/B are computed) -- those unused terms are simply omitted here --
+    plus, for a BNS, the LO 5PN tidal term it does add (``a10_tidal``).
 
     Parameters
     ----------
@@ -233,6 +247,10 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh):
     omg : orbital frequency M*Omega_orb.
     SA, SB, Lh : length-3 arrays, the two spins and the unit orbital
         angular momentum.
+    a10_tidal : float
+        See :func:`tidal_flux_coefficient`; the C code adds this LO 5PN
+        tidal term to the 3.5PN dOmega/dt whenever ``use_tidal`` is on,
+        i.e. for every BNS. Zero (the default) for black holes.
 
     Returns
     -------
@@ -399,6 +417,7 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh):
     for i in range(2, 8):
         domg += (a[i] + b[i] * lnomg) * omg ** (i * oothree)
     domg += 1.0
+    domg += a10_tidal * omg ** (10.0 * oothree)
     domg *= a[0] * omg ** eleven_o_three
 
     # Same sum truncated at 2PN (i = 2, 3, 4): Newtonian + 1PN + 1.5PN
@@ -413,7 +432,7 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh):
     return dSA, dSB, dLh, dgamma, domg, domg_leading
 
 
-def _pn_spin_precession_rhs(nu, q, y):
+def _pn_spin_precession_rhs(nu, q, y, a10_tidal=0.0):
     """
     Time-domain r.h.s. of the PN spin-precession system.
 
@@ -422,7 +441,7 @@ def _pn_spin_precession_rhs(nu, q, y):
     in integrate_pn_spin_precession().)
     """
     dSA, dSB, dLh, dgamma, domg, _ = _pn_precession_derivatives(
-        nu, q, y[10], y[0:3], y[3:6], y[6:9]
+        nu, q, y[10], y[0:3], y[3:6], y[6:9], a10_tidal
     )
     return np.concatenate([dSA, dSB, dLh, [dgamma, domg]])
 
@@ -454,7 +473,8 @@ def _pn_spin_precession_rhs_vs_frequency(nu, q, omg, y, omega_dot=None):
 
 def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step=None,
                                  refinement=32, rtol=1.0e-9, atol=1.0e-11,
-                                 independent_variable="time", omega_dot=None):
+                                 independent_variable="time", omega_dot=None,
+                                 f_start=None, lambdas=(0.0, 0.0)):
     """
     Integrate the closed PN spin-precession ODE system that TEOBResumS
     solves in eob_spin_dyn()/eob_spin_dyn_integrate() for
@@ -506,8 +526,23 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
     chi1vec, chi2vec : length-3 sequences
         Dimensionless spin vectors of body 1 (mass fraction MA) and body 2
         (mass fraction MB).
-    f0 : initial GW (2,2) frequency, M*f0 in geometric units (so the
-         initial M*Omega_orb = pi*f0, matching EOBPars->initial_frequency).
+    f0 : reference GW (2,2) frequency, M*f0 in geometric units (so the
+         reference M*Omega_orb = pi*f0, matching EOBPars->initial_frequency):
+         where ``chi1vec``, ``chi2vec`` are given and Lhat = z.
+    lambdas : (float, float)
+        Quadrupolar tidal polarizabilities of bodies 1 and 2, entering the
+        ``"time"`` branch's dOmega/dt through the LO 5PN tidal term (see
+        :func:`tidal_flux_coefficient`), as in TEOBResumS for a BNS.
+        Leaving it out on a BNS makes Momega(t) run slow through the late
+        inspiral: the angles, labelled by Momega, drift from TEOBResumS'
+        by ~0.1 rad by 400 Hz.
+    f_start : float or None
+        GW (2,2) frequency, geometric units, to start the returned angles
+        from. When below ``f0`` the system is also integrated *backwards*
+        from the reference state down to it, as TEOBResumS does
+        (``eob_spin_dyn_integrate_backwards``) when its EOB dynamics
+        starts below ``initial_frequency``; the spins keep their meaning
+        at ``f0``. ``None`` (default) or ``>= f0``: start at ``f0``.
     t_max : safety cutoff on the integration time (geometric units, M=1).
     refinement : int
         Number of sub-intervals each accepted step of the integrator is
@@ -550,11 +585,16 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
     omg_stop = 1.1 * eob_mrg_momg(nu, MA, MB, chi1vec[2], chi2vec[2])
     max_step = max_step if max_step is not None else np.inf
 
+    backwards = f_start is not None and f_start < f0
+    Momg_start = math.pi * f_start if backwards else None
+
     if independent_variable == "time":
         y0 = np.concatenate([SA0, SB0, Lh0, [gamma0, Momg0]])
 
+        a10_tidal = tidal_flux_coefficient(nu, *lambdas)
+
         def rhs(t, y):
-            return _pn_spin_precession_rhs(nu, q, y)
+            return _pn_spin_precession_rhs(nu, q, y, a10_tidal)
 
         def event_reach_merger(t, y):
             return y[10] - omg_stop
@@ -562,14 +602,16 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
         event_reach_merger.direction = 1
 
         def event_domega_negative(t, y):
-            return _pn_spin_precession_rhs(nu, q, y)[10]
+            return _pn_spin_precession_rhs(nu, q, y, a10_tidal)[10]
         event_domega_negative.terminal = True
         event_domega_negative.direction = -1
 
-        sol = solve_ivp(rhs, (0.0, t_max), y0, method="DOP853",
-                         rtol=rtol, atol=atol,
-                         events=[event_reach_merger, event_domega_negative],
-                         dense_output=True, max_step=max_step)
+        def event_reach_start(t, y):
+            return y[10] - Momg_start
+        event_reach_start.terminal = True
+
+        forward = ((0.0, t_max), [event_reach_merger, event_domega_negative])
+        backward = ((0.0, -t_max), [event_reach_start])
         independent = None
     elif independent_variable == "orbital_frequency":
         y0 = np.concatenate([SA0, SB0, Lh0, [gamma0, 0.0]])
@@ -577,9 +619,8 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
         def rhs(omg, y):
             return _pn_spin_precession_rhs_vs_frequency(nu, q, omg, y, omega_dot)
 
-        sol = solve_ivp(rhs, (Momg0, omg_stop), y0, method="DOP853",
-                         rtol=rtol, atol=atol, dense_output=True,
-                         max_step=max_step)
+        forward = ((Momg0, omg_stop), None)
+        backward = ((Momg0, Momg_start), None)
         independent = "Momega"
     else:
         raise ValueError(
@@ -587,16 +628,27 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
             f"got {independent_variable!r}"
         )
 
-    if not sol.success:
-        raise RuntimeError(f"PN spin-precession integration failed: {sol.message}")
+    def solve(span, events):
+        sol = solve_ivp(rhs, span, y0, method="DOP853", rtol=rtol, atol=atol,
+                        events=events, dense_output=True, max_step=max_step)
+        if not sol.success:
+            raise RuntimeError(
+                f"PN spin-precession integration failed: {sol.message}")
+        if refinement > 1 and sol.t.size > 1:
+            steps = np.diff(sol.t)[:, np.newaxis]
+            offsets = np.arange(refinement)[np.newaxis, :] / refinement
+            grid = np.append((sol.t[:-1, np.newaxis] + steps * offsets).ravel(),
+                             sol.t[-1])
+            return grid, sol.sol(grid)
+        return sol.t, sol.y
 
-    if refinement > 1 and sol.t.size > 1:
-        steps = np.diff(sol.t)[:, np.newaxis]
-        offsets = np.arange(refinement)[np.newaxis, :] / refinement
-        grid = np.append((sol.t[:-1, np.newaxis] + steps * offsets).ravel(), sol.t[-1])
-        y = sol.sol(grid)
-    else:
-        grid, y = sol.t, sol.y
+    grid, y = solve(*forward)
+    if backwards:
+        # the backward leg runs from the reference point downwards: reverse
+        # it and drop its first sample, the reference point itself
+        grid_back, y_back = solve(*backward)
+        grid = np.concatenate([grid_back[:0:-1], grid])
+        y = np.concatenate([y_back[:, :0:-1], y], axis=1)
 
     SA, SB, Lh = y[0:3].T, y[3:6].T, y[6:9].T
     gamma = y[9]
@@ -608,6 +660,10 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
 
     alpha = np.arctan2(Lh[:, 1], Lh[:, 0])
     beta = np.arccos(np.clip(Lh[:, 2], -1.0, 1.0))
+    # alpha is undefined where Lhat = z exactly, at the reference point
+    # (atan2(0, 0) = 0): take the next sample's, as the C code does
+    reference = np.flatnonzero((Lh[:, 0] == 0.0) & (Lh[:, 1] == 0.0))
+    alpha[reference] = alpha[np.minimum(reference + 1, alpha.size - 1)]
 
     return {"t": t, "alpha": alpha, "beta": beta, "gamma": gamma,
             "Momega": Momega, "SA": SA, "SB": SB, "Lh": Lh}

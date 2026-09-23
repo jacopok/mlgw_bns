@@ -1001,6 +1001,35 @@ class Model:
         dict[tuple[int, int], np.ndarray]
             Mapping ``(l, m) -> h_lm(f)``, one complex array per mode.
         """
+        return {
+            key: amplitude * np.exp(1j * phase)
+            for key, (amplitude, phase) in self.coprecessing_amplitudes_and_phases(
+                frequencies, params, source=source
+            ).items()
+        }
+
+    def coprecessing_amplitudes_and_phases(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        source: str = "surrogate",
+    ) -> dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]:
+        r"""The multipoles of :meth:`coprecessing_modes_dict`, as amplitude and phase.
+
+        :math:`A_{\ell m}(f) / \eta` and :math:`\phi_{\ell m}(f)`
+        separately. The phase is the model's own continuous one: on a
+        grid as sparse as the model's, recovering it from the complex
+        multipole with ``np.unwrap(np.angle(...))`` is aliased wherever
+        the phase advances by more than :math:`\pi` between samples ---
+        throughout the inspiral of a BNS.
+
+        Parameters are those of :meth:`coprecessing_modes_dict`.
+
+        Returns
+        -------
+        dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]
+            Mapping ``(l, m) -> (amplitude, phase)``.
+        """
         amp_arr, phase_arr = self._mode_amplitudes_and_phases(
             frequencies=frequencies,
             params=params,
@@ -1008,7 +1037,7 @@ class Model:
         )
         eta = params.intrinsic(self.dataset).eta
         return {
-            (mode.l, mode.m): amp_arr[i] * np.exp(1j * phase_arr[i]) / eta
+            (mode.l, mode.m): (amp_arr[i] / eta, phase_arr[i])
             for i, mode in enumerate(self.modes)
         }
 
