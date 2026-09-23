@@ -43,10 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A `Model` loaded with a subset of the trained modes, e.g.
-    `default_for_testing(modes=[(2,2), (2,1), (3,3), (4,4)])`, read the
-    mode-phases predictor's columns by position in its own mode list rather
-    than the predictor's, mis-phasing (3,3) and (4,4) by O(1) rad.
+- A `Model` built with a subset (or a reordering) of its trained modes -- e.g.
+    `Model.default_for_testing(modes=[(2,2), (2,1), (3,3), (4,4)])` of the
+    7-mode `default_hom` -- read each mode's reference phase from the column of
+    the shared mode-phases predictor at the mode's *position* in `modes`, not
+    the one it was trained on: (3,3) and (4,4) got the (3,1) and (3,2)
+    columns, an O(1) rad error in their phase relative to the (2,2) and up to
+    ~1e-3 in the full-waveform mismatch. `Model.load` already looked the column
+    up correctly; the lazily built per-mode models (all that
+    `default_for_testing` uses) did not. The full 7-mode model, as validated
+    for the README, was unaffected. `visualization/probe_intermode_phase.py`.
 
 ### Known issues
 

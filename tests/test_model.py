@@ -437,3 +437,22 @@ def test_model_save_and_load_roundtrip(
 
     assert_waveforms_close(hp_before, hp_after)
     assert_waveforms_close(hc_before, hc_after)
+
+
+def test_mode_subset_keeps_each_mode_s_reference_phase():
+    """A model loaded with a subset of its trained modes must predict each of
+    them exactly as the full model does: the shared mode-phases predictor's
+    output column belongs to the mode, not to its position in ``modes``."""
+
+    full = Model.default_for_testing()
+    subset_modes = [Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
+    subset = Model.default_for_testing(modes=subset_modes)
+    if full.mode_phases_predictor is None or list(full.modes) == subset_modes:
+        pytest.skip("default model has no mode-phases predictor or no extra modes")
+
+    frequencies = np.linspace(20.0, 1024.0, 256)
+    params = ParametersWithExtrinsic(1.3, 400.0, 600.0, 0.1, -0.05, 100.0, 1.0, 2.8)
+    expected = full.predict_modes_dict(frequencies, params)
+    predicted = subset.predict_modes_dict(frequencies, params)
+    for key, value in predicted.items():
+        np.testing.assert_allclose(value, expected[key], rtol=1e-10, atol=0.0)
