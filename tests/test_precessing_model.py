@@ -259,7 +259,7 @@ def test_reanchored_without_time_is_a_no_op():
         gamma=np.linspace(0.0, -2.0, 50),
     )
     frequencies = np.linspace(20.0, 1024.0, 128)
-    reference = np.exp(-1j * frequencies**2)  # any chirp-like phase
+    reference = -(frequencies**2)  # any chirp-like phase
 
     assert angles.reanchored(frequencies, reference, 1.0e-5, 20.0) is angles
 
@@ -272,12 +272,12 @@ def test_reanchoring_follows_the_reference_phase(frequencies, precessing_params)
     precessing = PrecessingModel(model)
     angles = precessing.euler_angles(precessing_params, float(frequencies[0]))
 
-    coprecessing = model.coprecessing_modes_dict(
+    _, phase_22 = model.coprecessing_amplitudes_and_phases(
         frequencies, precessing_params.aligned()
-    )
+    )[(2, 2)]
     mass_sum_seconds = precessing_params.aligned().mass_sum_seconds
     reanchored = angles.reanchored(
-        frequencies, coprecessing[(2, 2)], mass_sum_seconds, float(frequencies[0])
+        frequencies, phase_22, mass_sum_seconds, float(frequencies[0])
     )
 
     assert reanchored is not angles
@@ -322,3 +322,68 @@ def test_reanchoring_changes_a_precessing_waveform_but_not_an_aligned_one(
     with_reanchor = precessing.predict(frequencies, aligned, reanchor=True)
     without = precessing.predict(frequencies, aligned, reanchor=False)
     np.testing.assert_allclose(with_reanchor[0], without[0], rtol=1e-10, atol=0.0)
+
+
+def test_twist_reproduces_teobresums_frequency_domain_polarizations():
+    r"""Against TEOBResumS' own precessing :math:`h_+, h_\times`.
+
+    Fed TEOBResumS' co-precessing multipoles (``source="eob"``), spins
+    given where its frequency-domain path imposes them (0.95 times its
+    ``initial_frequency``), and compared where all its multipoles are
+    present (above ``m / 2`` times that), the twist must reproduce the
+    polarizations. This is the test the aligned-spin limit cannot be: a
+    mirrored precession (the rotation D applied in place of D*, since the
+    surrogate's multipoles are in the conjugate Fourier convention)
+    reduces to the identity there, and here costs a mismatch of ~3e-2.
+    """
+    from EOBRun_module import EOBRunPy
+
+    from mlgw_bns.model_validation import ValidateModel
+
+    model = Model.default_for_testing()
+    precessing = PrecessingModel(model)
+    initial_frequency = 30.0
+    chi_1, chi_2 = (0.4, 0.3, 0.05), (-0.2, 0.3, 0.0)
+    inclination, azimuth = 0.9, 0.4
+    params = PrecessingParametersWithExtrinsic(
+        mass_ratio=1.3, lambda_1=400.0, lambda_2=600.0, chi_1=chi_1, chi_2=chi_2,
+        distance_mpc=100.0, inclination=inclination, azimuth=azimuth,
+        total_mass=2.8, reference_frequency_hz=0.95 * initial_frequency,
+    )
+
+    frequencies, real_hp, imag_hp, real_hc, imag_hc = EOBRunPy(dict(
+        q=params.mass_ratio, LambdaAl2=params.lambda_1, LambdaBl2=params.lambda_2,
+        M=params.total_mass, distance=params.distance_mpc,
+        initial_frequency=initial_frequency, srate_interp=4096.0,
+        use_geometric_units="no", interp_uniform_grid="yes", domain=1, df=1.0 / 128.0,
+        # mirror of compute_hpc's pi/2 - azimuth, see
+        # visualization/validate_precessing_against_teob.teob_polarizations
+        inclination=inclination, coalescence_angle=np.pi / 2.0 + azimuth,
+        output_hpc="no", arg_out="no", use_spins=2,
+        chi1x=chi_1[0], chi1y=chi_1[1], chi1z=chi_1[2],
+        chi2x=chi_2[0], chi2y=chi_2[1], chi2z=chi_2[2],
+        use_mode_lm=[0, 1, 4, 8],  # (2,1), (2,2), (3,3), (4,4)
+    ))
+    frequencies = np.asarray(frequencies)
+
+    def resampled(real, imag, grid):
+        # through amplitude and phase (TEOBResumS' own grid is fine enough
+        # to unwrap), conjugated into the mlgw_bns Fourier convention
+        series = np.asarray(real) + 1j * np.asarray(imag)
+        amplitude = np.interp(grid, frequencies, np.abs(series))
+        phase = np.interp(grid, frequencies, np.unwrap(np.angle(series)))
+        return amplitude * np.exp(-1j * phase)
+
+    validator = ValidateModel(model.mode_models[Mode(2, 2)])
+    grid = validator.frequencies
+    grid = grid[(grid >= 2.0 * initial_frequency * 1.05) & (grid <= 1024.0)]
+    angles = precessing.euler_angles(params, float(grid[0]))
+    assert angles.beta.max() > 0.2
+
+    hp, hc = precessing.predict(grid, params, source="eob", angles=angles, reanchor=False)
+    for ours, (real, imag) in ((hp, (real_hp, imag_hp)), (-hc, (real_hc, imag_hc))):
+        mismatch = validator.full_waveform_mismatch(
+            {(2, 2): resampled(real, imag, grid)}, {(2, 2): ours}, frequencies=grid
+        )
+        # ~2e-3 (h+), ~5e-3 (hx); ~3e-2 with the rotation mirrored
+        assert mismatch < 1e-2
