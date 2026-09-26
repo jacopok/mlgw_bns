@@ -40,6 +40,7 @@ removed; only the scikit-learn backend is now supported.
 from __future__ import annotations
 
 import json
+import logging
 import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -95,12 +96,17 @@ def load_kernel_ridge_defaults() -> "dict[str, tuple[float, float]]":
             raw = json.load(f)
     except FileNotFoundError:
         return {}
-    return {key: (v["kernel_gamma"], v["kernel_alpha"]) for key, v in raw.items()}
+    return {key: (v["kernel_gamma"], v.get("kernel_alpha")) for key, v in raw.items()}
 
 
-def save_kernel_ridge_default(mode: "Optional[Mode]", kernel_gamma: float, kernel_alpha: float) -> None:
+def save_kernel_ridge_default(
+    mode: "Optional[Mode]", kernel_gamma: float, kernel_alpha: Optional[float]
+) -> None:
     """Persist ``(kernel_gamma, kernel_alpha)`` as the default for ``mode``,
     merging into whatever is already on disk for the other modes.
+
+    ``kernel_alpha`` is ``None`` (written as ``null``) for a mode tuned with
+    per-output leave-one-out penalties, which chooses them at fit time.
     """
     try:
         with open(KERNEL_DEFAULTS_PATH) as f:
@@ -113,6 +119,154 @@ def save_kernel_ridge_default(mode: "Optional[Mode]", kernel_gamma: float, kerne
     KERNEL_DEFAULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(KERNEL_DEFAULTS_PATH, "w") as f:
         json.dump(raw, f, indent=2, sort_keys=True)
+
+
+#: Grid of ridge penalties scanned, per output, by
+#: :func:`kernel_ridge_leave_one_out` when :class:`KernelRidgeNetwork` selects
+#: its regularization (``Hyperparameters.kernel_alpha_selection == "loo"``).
+#: The kernel has a unit diagonal and the targets are standardized, so these
+#: are relative to both; below ~1e-13 the penalty is lost in the rounding of
+#: the kernel itself.
+KERNEL_ALPHA_GRID = np.logspace(-13.0, 0.0, 53)
+
+
+@dataclass
+class KernelRidgeSelection:
+    r"""Outcome of :func:`kernel_ridge_leave_one_out`, kept on the fitted
+    :class:`KernelRidgeNetwork` as a diagnostic.
+
+    All errors are in the units of the standardized targets.
+
+    Attributes
+    ----------
+    alphas : np.ndarray
+        The scanned ridge penalties, shape ``(n_alpha,)``.
+    loo_mse : np.ndarray
+        Exact leave-one-out mean squared error, shape ``(n_alpha, n_outputs)``.
+    rounding_noise : np.ndarray
+        Estimated root-mean-square rounding error of a prediction in double
+        precision, shape ``(n_alpha, n_outputs)``; see
+        :func:`kernel_ridge_leave_one_out`.
+    chosen : np.ndarray
+        Index into :attr:`alphas` of the penalty chosen for each output,
+        shape ``(n_outputs,)``.
+    """
+
+    alphas: np.ndarray
+    loo_mse: np.ndarray
+    rounding_noise: np.ndarray
+    chosen: np.ndarray
+
+    @property
+    def alpha(self) -> np.ndarray:
+        """The chosen penalty of each output."""
+        return self.alphas[self.chosen]
+
+    @property
+    def expected_error(self) -> np.ndarray:
+        """Leave-one-out plus rounding error of each output, at its penalty."""
+        idx = (self.chosen, np.arange(len(self.chosen)))
+        return np.sqrt(self.loo_mse[idx] + self.rounding_noise[idx] ** 2)
+
+
+def kernel_ridge_leave_one_out(
+    kernel: np.ndarray,
+    targets: np.ndarray,
+    alphas: np.ndarray = KERNEL_ALPHA_GRID,
+    sample_weight: Optional[np.ndarray] = None,
+    noise_rows: Optional[np.ndarray] = None,
+    rounding_factor: float = 0.1,
+) -> tuple[np.ndarray, KernelRidgeSelection]:
+    r"""Kernel ridge regression with one penalty per output, chosen by exact
+    leave-one-out cross-validation *and* by the rounding error it implies.
+
+    Solves :math:`(K + \alpha_c I)\, a_c = y_c` for every output :math:`c`,
+    with :math:`\alpha_c` taken from ``alphas`` to minimize
+
+    .. math::
+        \mathrm{LOO}_c(\alpha) + \sigma_{{\rm round}, c}(\alpha)^2 .
+
+    The first term is the exact leave-one-out error, which one
+    eigendecomposition :math:`K = Q \Lambda Q^T` gives for every penalty at
+    once: the residual left by the fit without point :math:`i` is
+    :math:`[(K + \alpha I)^{-1} y]_i / [(K + \alpha I)^{-1}]_{ii}`. The
+    second is the error with which a prediction :math:`\sum_j K(x, x_j)
+    a_{jc}` can be *evaluated*: the sum cancels (for small penalties the
+    dual coefficients are many orders of magnitude larger than the
+    prediction), so its rounding error in double precision is about
+    :math:`\epsilon \sum_j |K(x, x_j)\, a_{jc}|` --- estimated here on the
+    kernel rows ``noise_rows``, and scaled by ``rounding_factor``. Without
+    it, the leave-one-out error, computed stably in the eigenbasis, keeps
+    favouring vanishing penalties whose predictions are then dominated by
+    rounding noise that depends on the batch size, the BLAS library and
+    the backend.
+
+    Parameters
+    ----------
+    kernel : np.ndarray
+        Training kernel matrix, ``(n, n)``. Overwritten.
+    targets : np.ndarray
+        Training targets, ``(n, n_outputs)``.
+    alphas : np.ndarray
+        Candidate penalties.
+    sample_weight : np.ndarray, optional
+        Per-sample weights, as in :class:`~sklearn.kernel_ridge.KernelRidge`;
+        the leave-one-out error is then weighted likewise.
+    noise_rows : np.ndarray, optional
+        Rows ``K(x, X_train)`` of the kernel at the points where to estimate
+        the rounding noise, ``(n_rows, n)``; typically a sample of training
+        points. Without them the noise is not considered.
+    rounding_factor : float
+        Multiplies the rounding-error estimate; 0 disables it.
+
+    Returns
+    -------
+    tuple[np.ndarray, KernelRidgeSelection]
+        The dual coefficients, ``(n, n_outputs)``, and the selection.
+    """
+    targets = np.asarray(targets, dtype=float)
+    squeeze = targets.ndim == 1
+    if squeeze:
+        targets = targets[:, None]
+    alphas = np.asarray(alphas, dtype=float)
+    n_samples, n_outputs = targets.shape
+
+    root_weight = (
+        np.ones(n_samples) if sample_weight is None else np.sqrt(np.asarray(sample_weight))
+    )
+    kernel *= root_weight[:, None]
+    kernel *= root_weight[None, :]
+    eigenvalues, eigenvectors = scipy.linalg.eigh(
+        kernel, overwrite_a=True, check_finite=False, driver="evr"
+    )
+    del kernel
+    # tiny negative eigenvalues are rounding: the kernel is positive semi-definite
+    eigenvalues = np.maximum(eigenvalues, 0.0)
+    projected = eigenvectors.T @ (targets * root_weight[:, None])  # (n, n_outputs)
+
+    loo_mse = np.empty((len(alphas), n_outputs))
+    rounding_noise = np.zeros((len(alphas), n_outputs))
+    eps = np.finfo(float).eps
+    for k, alpha in enumerate(alphas):
+        inverse = 1.0 / (eigenvalues + alpha)
+        beta = eigenvectors @ (inverse[:, None] * projected)
+        # diag((K + alpha I)^-1), without forming Q**2 all at once
+        diagonal = np.empty(n_samples)
+        for start in range(0, n_samples, 2048):
+            rows = eigenvectors[start : start + 2048]
+            diagonal[start : start + 2048] = (rows * rows) @ inverse
+        loo_mse[k] = np.mean((beta / diagonal[:, None]) ** 2, axis=0)
+        if noise_rows is not None and rounding_factor > 0:
+            dual = np.abs(beta * root_weight[:, None])
+            sums = np.abs(noise_rows) @ dual
+            rounding_noise[k] = rounding_factor * eps * np.sqrt(np.mean(sums**2, axis=0))
+
+    chosen = np.argmin(loo_mse + rounding_noise**2, axis=0)
+    selection = KernelRidgeSelection(alphas, loo_mse, rounding_noise, chosen)
+
+    inverse = 1.0 / (eigenvalues[:, None] + alphas[chosen][None, :])
+    dual = (eigenvectors @ (inverse * projected)) * root_weight[:, None]
+    return (dual[:, 0] if squeeze else dual), selection
 
 
 @dataclass
@@ -172,9 +326,22 @@ class Hyperparameters:
             Width of the RBF kernel used by :class:`KernelRidgeNetwork`,
             on standardized inputs. Ignored by :class:`SklearnNetwork`.
     kernel_alpha : float, optional
-            Ridge regularization used by :class:`KernelRidgeNetwork`.
-            Small values give the best median accuracy; larger ones trade
-            that against the worst case. Ignored by :class:`SklearnNetwork`.
+            Ridge regularization used by :class:`KernelRidgeNetwork` when
+            :attr:`kernel_alpha_selection` is ``"fixed"``: one penalty for
+            every output. Ignored by :class:`SklearnNetwork`.
+    kernel_alpha_selection : str, optional
+            How :class:`KernelRidgeNetwork` regularizes. ``"loo"`` (the
+            default) chooses a penalty for each output (principal
+            component) separately, minimizing its exact leave-one-out
+            error plus the rounding error of its predictions; see
+            :func:`kernel_ridge_leave_one_out`. ``"fixed"`` uses
+            :attr:`kernel_alpha` for all of them, as every model packaged
+            up to version 1.0 was trained.
+    kernel_rounding_factor : float, optional
+            Scale of the rounding-error estimate in the ``"loo"``
+            selection, relative to :math:`\epsilon \sum_j |K(x, x_j) a_j|`
+            (0.1 by default, calibrated on the packaged regressors; 0
+            selects on the leave-one-out error alone).
     """
 
     pc_exponent: float
@@ -201,6 +368,14 @@ class Hyperparameters:
     #: required like the rest.
     kernel_gamma: float = field(default=0.1)
     kernel_alpha: float = field(default=1e-10)
+    #: A dataclass default is a class attribute, so hyperparameters
+    #: unpickled from before these fields existed (every packaged model)
+    #: pick them up too; that only matters if they are used to refit.
+    kernel_alpha_selection: str = field(default="loo")
+    #: Calibrated on the packaged regressors: two evaluations of the same
+    #: prediction in different orders (a batch and single rows, or numpy
+    #: and JAX) differ by 0.07--0.14 times ``eps * sum_j |K_j a_j|``.
+    kernel_rounding_factor: float = field(default=0.1)
 
     @property
     def n_layers(self) -> int:
@@ -320,11 +495,19 @@ class Hyperparameters:
 
         if "n_layers" not in params:
             # A trial from from_trial_kernel_ridge: only n_train,
-            # kernel_gamma and kernel_alpha were ever sampled.
+            # kernel_gamma and (with a fixed penalty) kernel_alpha were
+            # ever sampled.
+            if "kernel_alpha" in params:
+                return cls.default_kernel_ridge(
+                    n_train=params["n_train"],
+                    kernel_gamma=params["kernel_gamma"],
+                    kernel_alpha=params["kernel_alpha"],
+                    kernel_alpha_selection="fixed",
+                )
             return cls.default_kernel_ridge(
                 n_train=params["n_train"],
                 kernel_gamma=params["kernel_gamma"],
-                kernel_alpha=params["kernel_alpha"],
+                kernel_alpha_selection="loo",
             )
 
         n_layers = params.pop("n_layers")
@@ -335,35 +518,47 @@ class Hyperparameters:
 
     @classmethod
     def from_trial_kernel_ridge(
-        cls, trial: "optuna.Trial", n_train: int
+        cls,
+        trial: "optuna.Trial",
+        n_train: int,
+        kernel_alpha_selection: str = "loo",
     ) -> "Hyperparameters":
         """Sample a :class:`Hyperparameters` for :class:`KernelRidgeNetwork`
         from an :class:`optuna.Trial`.
 
-        Unlike :meth:`from_trial`, this only samples the two parameters
-        :class:`KernelRidgeNetwork` actually reads, :attr:`kernel_gamma`
-        and :attr:`kernel_alpha`; ``n_train`` is fixed rather than
-        sampled, since the accuracy comparison across trials is only
-        fair at a fixed training-set size, and the MLP-specific fields
-        are filled with placeholders :class:`KernelRidgeNetwork` ignores.
+        Unlike :meth:`from_trial`, this only samples what
+        :class:`KernelRidgeNetwork` actually reads: :attr:`kernel_gamma`
+        and, with ``kernel_alpha_selection="fixed"``, :attr:`kernel_alpha`
+        (with ``"loo"``, the default, the fit chooses one penalty per
+        output itself). ``n_train`` is fixed rather than sampled, since
+        the accuracy comparison across trials is only fair at a fixed
+        training-set size, and the MLP-specific fields are filled with
+        placeholders :class:`KernelRidgeNetwork` ignores.
 
         Parameters
         ----------
         trial : optuna.Trial
-                Trial object used to draw ``kernel_gamma`` and ``kernel_alpha``.
+                Trial object used to draw the parameters.
         n_train : int
                 Fixed number of training waveforms.
+        kernel_alpha_selection : str
+                ``"loo"`` or ``"fixed"``; see :attr:`kernel_alpha_selection`.
 
         Returns
         -------
         Hyperparameters
         """
         trial.suggest_int("n_train", n_train, n_train)
-
+        kernel_gamma = trial.suggest_float("kernel_gamma", 1e-3, 30.0, log=True)
+        if kernel_alpha_selection == "loo":
+            return cls.default_kernel_ridge(
+                n_train=n_train, kernel_gamma=kernel_gamma, kernel_alpha_selection="loo"
+            )
         return cls.default_kernel_ridge(
             n_train=n_train,
-            kernel_gamma=trial.suggest_float("kernel_gamma", 1e-3, 30.0, log=True),
+            kernel_gamma=kernel_gamma,
             kernel_alpha=trial.suggest_float("kernel_alpha", 1e-14, 1e-2, log=True),
+            kernel_alpha_selection="fixed",
         )
 
     @classmethod
@@ -373,6 +568,7 @@ class Hyperparameters:
         mode: "Optional[Mode]" = None,
         kernel_gamma: Optional[float] = None,
         kernel_alpha: Optional[float] = None,
+        kernel_alpha_selection: str = "loo",
     ) -> "Hyperparameters":
         """Build a :class:`Hyperparameters` for :class:`KernelRidgeNetwork`.
 
@@ -393,6 +589,10 @@ class Hyperparameters:
                 the (2,2) mode.
         kernel_gamma : float, optional
         kernel_alpha : float, optional
+                Only used with ``kernel_alpha_selection="fixed"``.
+        kernel_alpha_selection : str
+                ``"loo"`` (default): one penalty per output, chosen at fit
+                time; ``"fixed"``: :attr:`kernel_alpha` for all of them.
 
         Returns
         -------
@@ -417,6 +617,7 @@ class Hyperparameters:
             n_iter_no_change=1,
             kernel_gamma=kernel_gamma if kernel_gamma is not None else cls.kernel_gamma,
             kernel_alpha=kernel_alpha if kernel_alpha is not None else cls.kernel_alpha,
+            kernel_alpha_selection=kernel_alpha_selection,
         )
 
     @classmethod
@@ -742,6 +943,15 @@ class KernelRidgeNetwork(NeuralNetwork):
         self.param_scaler = StandardScaler().fit(x_data)
         self.target_scaler = StandardScaler().fit(y_data)
 
+        if getattr(self.hyper, "kernel_alpha_selection", "fixed") == "loo":
+            self._fit_leave_one_out(x_data, y_data, sample_weight)
+            return
+        if getattr(self.hyper, "kernel_alpha_selection", "fixed") != "fixed":
+            raise ValueError(
+                f"Unknown kernel_alpha_selection {self.hyper.kernel_alpha_selection!r}: "
+                "expected 'loo' or 'fixed'."
+            )
+
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
@@ -761,6 +971,56 @@ class KernelRidgeNetwork(NeuralNetwork):
                 self.target_scaler.transform(y_data),
                 **weight_kwargs,
             )
+
+    #: Training points at which :meth:`_fit_leave_one_out` estimates the
+    #: rounding error of the predictions.
+    rounding_noise_rows: int = 256
+
+    def _fit_leave_one_out(
+        self,
+        x_data: np.ndarray,
+        y_data: np.ndarray,
+        sample_weight: Optional[np.ndarray],
+    ) -> None:
+        """Fit with one penalty per output, by :func:`kernel_ridge_leave_one_out`.
+
+        The result is stored as a fitted :class:`~sklearn.kernel_ridge.KernelRidge`
+        (with a vector ``alpha``), so that prediction and serialization
+        are unchanged; the selection itself is kept in
+        :attr:`alpha_selection`.
+        """
+        from sklearn.metrics.pairwise import rbf_kernel  # type: ignore
+
+        gamma = float(self.hyper.kernel_gamma)
+        scaled_x = self.param_scaler.transform(x_data)
+        scaled_y = self.target_scaler.transform(y_data)
+        n_samples = len(scaled_x)
+
+        rows = np.random.default_rng(0).choice(
+            n_samples, min(n_samples, self.rounding_noise_rows), replace=False
+        )
+        dual, selection = kernel_ridge_leave_one_out(
+            rbf_kernel(scaled_x, scaled_x, gamma=gamma),
+            scaled_y,
+            sample_weight=sample_weight,
+            noise_rows=rbf_kernel(scaled_x[rows], scaled_x, gamma=gamma),
+            rounding_factor=float(getattr(self.hyper, "kernel_rounding_factor", 0.1)),
+        )
+        regressor = KernelRidge(kernel="rbf", gamma=gamma, alpha=selection.alpha)
+        regressor.X_fit_ = scaled_x
+        regressor.dual_coef_ = dual
+        regressor.n_features_in_ = scaled_x.shape[1]
+        self.regressor = regressor
+        #: The :class:`KernelRidgeSelection` of the last leave-one-out fit.
+        self.alpha_selection: Optional[KernelRidgeSelection] = selection
+        self._xfit_sqnorm = None
+        logging.info(
+            "Kernel ridge penalties by leave-one-out: %s; expected error per "
+            "output (standardized) median %.3g, max %.3g",
+            np.array2string(selection.alpha, precision=1),
+            np.median(selection.expected_error),
+            np.max(selection.expected_error),
+        )
 
     def predict(self, x_data: np.ndarray) -> np.ndarray:
         """Parameters to component coefficients.
