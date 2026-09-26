@@ -145,6 +145,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `KernelRidge` with a vector `alpha`, so prediction, the batched/JAX
     path and saved files are unchanged. `"fixed"` keeps the single
     `kernel_alpha` of the packaged models.
+
+    Measured on 8192 freshly generated waveforms (public TEOBResumS,
+    tidal deformabilities up to 5000; 7168 to train, 1024 held out;
+    `visualization/kernel_regularization_study.py`), against the packaged
+    per-mode penalties, held-out RMS errors in residual space:
+
+    | mode  | phase, fixed | phase, per-component | amplitude, fixed | amplitude, per-component |
+    |-------|--------------|----------------------|------------------|--------------------------|
+    | (2,2) | 0.152 rad    | 0.093 rad            | 9.9e-3           | 6.2e-3                   |
+    | (4,4) | 0.921 rad    | 0.593 rad            | 3.2e-2           | 6.4e-3                   |
+    | (2,1) | 0.239 rad    | 0.165 rad            | 1.37e-2          | 1.42e-2                  |
+    | (3,3) | 0.379 rad    | 0.264 rad            | 1.48e-2          | 1.54e-2                  |
+
+    (the odd-`m` rows weighted by mode power, as those fits are; unweighted,
+    their amplitude error grows, at the vanishing-amplitude waveforms near
+    `q = 1`). The largest dual coefficients fall from 5e6--7e11 to
+    1e4--2e6, and the spread of the predicted phase between a batch and
+    single-row evaluations from up to 9e-5 rad to below 3e-9 rad. At this
+    training size the leave-one-out optimum is already at penalties of
+    1e-7 or more, so the rounding term does not bind; it is there for the
+    full-size (24576-point) fits, whose errors are smaller. The absolute
+    errors here are well above the packaged model's --- a third of its
+    training data, and the public TEOBResumS --- only the comparison is
+    meaningful.
 - `HyperparameterOptimization` (and `optimize_n_hours.py`) then only search
     `kernel_gamma`, in a separate `<filename>_loo_study.pkl`;
     `kernel_alpha_selection="fixed"` (`--fixed-alpha`) restores the search
