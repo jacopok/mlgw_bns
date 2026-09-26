@@ -30,7 +30,7 @@ from __future__ import annotations
 import copy
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import IO, Optional, Union
+from typing import IO, TYPE_CHECKING, Callable, Optional, Sequence, Union
 
 import numpy as np
 from importlib.resources import files
@@ -38,6 +38,7 @@ from joblib import Parallel, delayed
 from numba import njit, prange  # type: ignore
 
 from .data_management import Residuals
+from .data_management import ParameterRanges
 from .dataset_generation import Dataset
 from .progress import joblib_progress
 from .higher_order_modes import (
@@ -57,6 +58,9 @@ from .neural_network import (
     load_timeshifts_predictor_from_file,
 )
 from .special_func import spinsphericalharm
+
+if TYPE_CHECKING:
+    from .batched import BatchedSurrogate
 
 #: Subfolder, relative to the package, holding the pretrained models.
 PRETRAINED_MODEL_FOLDER = "data/"
@@ -308,7 +312,7 @@ class _LazyModeModelsDict(dict):
         # None here, if this model has not been trained or loaded yet.
         mode_model.timeshifts_predictor = self._model.time_shifts_predictor
         mode_model.mode_phases_predictor = self._model.mode_phases_predictor
-        mode_model.mode_phases_index = self._model.modes.index(mode)
+        mode_model.mode_phases_index = self._model._mode_phases_column(mode)
         self[mode] = mode_model
         return mode_model
 
@@ -407,6 +411,10 @@ class Model:
 
         self.mode_models: dict[Mode, ModeModel] = _LazyModeModelsDict(self)
 
+        # `(modes, backend) -> BatchedSurrogate`, see `batched_surrogate`;
+        # emptied whenever the underlying model changes.
+        self._batched_cache: dict = {}
+
     def _load_default_time_shifts_predictor(
         self,
     ) -> Optional[Union[TimeshiftsNN, TimeshiftsGPR]]:
@@ -495,6 +503,37 @@ class Model:
         if not self.modes:
             raise ValueError("No models available")
         return self.mode_models[self.modes[0]].dataset
+
+    @property
+    def parameter_ranges(self) -> ParameterRanges:
+        """Parameter ranges within which predictions are accepted.
+
+        Those of the first mode model; :meth:`predict` and
+        :meth:`predict_modes_dict` raise outside them, and the batched
+        :meth:`predict_modes_amp_phase` returns NaN rows.
+
+        Assigning a new :class:`~mlgw_bns.data_management.ParameterRanges`
+        applies it to every mode, e.g. to accept tidal deformabilities
+        below the lower bound that was only a guard for the EOB code at
+        training time::
+
+            model.parameter_ranges = dataclasses.replace(
+                model.parameter_ranges, lambda1_range=(0.0, 5000.0),
+                lambda2_range=(0.0, 5000.0))
+
+        Only the checks change: each mode's :class:`Dataset` keeps the
+        ranges it was trained with, from which it derives its frequency
+        band and its reference amplitude. Mutating the returned object in
+        place is *not* the same (it is shared with the first mode's
+        dataset, and not seen by the other modes).
+        """
+        return self.mode_models[self.modes[0]].parameter_ranges
+
+    @parameter_ranges.setter
+    def parameter_ranges(self, value: ParameterRanges) -> None:
+        for mode in self.modes:
+            self.mode_models[mode].parameter_ranges = value
+        self._batched_cache.clear()
 
     @property
     def auxiliary_data_available(self) -> bool:
@@ -694,6 +733,7 @@ class Model:
                 "Model.generate() requires Mode(2, 2) to be among "
                 "`self.modes`, since the shared predictors are trained from it."
             )
+        self._batched_cache.clear()
 
         if training_nn_dataset_size is not None:
             self._train_reference_predictors(
@@ -1114,12 +1154,27 @@ class Model:
         predictor = self.mode_phases_predictor
         if predictor is None or predictor.modes is None:
             return
-        predictor_index = {tuple(lm): idx for idx, lm in enumerate(predictor.modes)}
         for mode in self.modes:
-            if mode in self.mode_models and (mode.l, mode.m) in predictor_index:
+            if mode in self.mode_models and (mode.l, mode.m) in map(tuple, predictor.modes):
                 mm = self.mode_models[mode]
                 mm.mode_phases_predictor = predictor
-                mm.mode_phases_index = predictor_index[(mode.l, mode.m)]
+                mm.mode_phases_index = self._mode_phases_column(mode)
+
+    def _mode_phases_column(self, mode: Mode) -> int:
+        """Output column of :attr:`mode_phases_predictor` belonging to ``mode``.
+
+        Looked up in the predictor's own ``modes`` (its training order)
+        whenever it records them; ``self.modes`` is only the fallback. A
+        model loaded with a subset of the trained modes --- e.g.
+        ``default_for_testing(modes=[(2,2), (2,1), (3,3), (4,4)])`` of the
+        7-mode ``default_hom`` --- otherwise hands (3,3) and (4,4) the
+        (3,1) and (3,2) columns: an O(1) rad error in their phase relative
+        to the (2,2), up to ~1e-3 in the full-waveform mismatch.
+        """
+        predictor = self.mode_phases_predictor
+        if predictor is not None and predictor.modes is not None:
+            return [tuple(lm) for lm in predictor.modes].index((mode.l, mode.m))
+        return self.modes.index(mode)
 
     def _propagate_time_shifts_predictor(self) -> None:
         """Point every already-built per-mode model at the shared predictor.
@@ -1149,6 +1204,7 @@ class Model:
         """
         for mode in self.modes:
             self.mode_models[mode].set_hyper_and_train_nn(hyper=hyper, idxs=idxs)
+        self._batched_cache.clear()
 
     def save(self, include_training_data: bool = True) -> None:
         """Save every per-mode model to disk.
@@ -1217,6 +1273,7 @@ class Model:
         if self.mode_phases_predictor is None:
             self.mode_phases_predictor = self._load_default_mode_phases_predictor()
         self._propagate_mode_phases_predictor()
+        self._batched_cache.clear()
 
     def predict_amplitude_phase_mode(
         self,
@@ -1431,6 +1488,108 @@ class Model:
             hc = (hc_real + 1j * hc_imag) / eta / 2
             result[(l, m)] = hp - 1j * hc
         return result
+
+    def batched_surrogate(
+        self, modes: Optional[Sequence] = None, backend: str = "numpy"
+    ) -> "BatchedSurrogate":
+        """The model frozen for batched evaluation of ``modes``.
+
+        Built on first use and cached per ``(modes, backend)``; see
+        :class:`~mlgw_bns.batched.BatchedSurrogate`. The cache is emptied
+        when the model is loaded, (re)trained or given new
+        :attr:`parameter_ranges`.
+
+        Parameters
+        ----------
+        modes : sequence of (l, m), optional
+            Defaults to :attr:`modes`, in that order.
+        backend : str
+            ``"numpy"`` or ``"jax"``.
+        """
+        from .batched import BatchedSurrogate
+
+        key = (
+            None if modes is None else tuple((int(l), int(m)) for l, m in modes),
+            backend,
+        )
+        if key not in self._batched_cache:
+            self._batched_cache[key] = BatchedSurrogate(self, modes=modes, backend=backend)
+        return self._batched_cache[key]
+
+    def predict_modes_amp_phase(
+        self,
+        intrinsic: np.ndarray,
+        total_mass: Union[float, np.ndarray],
+        frequencies: np.ndarray,
+        modes: Optional[Sequence] = None,
+        distance_mpc: Union[float, np.ndarray] = 1.0,
+        return_tf: bool = False,
+    ) -> tuple[np.ndarray, ...]:
+        r"""Amplitude and phase of individual modes, for a batch of binaries.
+
+        The batched counterpart of :meth:`predict_modes_dict`: one call
+        evaluates ``N`` parameter sets, only for the requested modes, and
+        returns each mode's amplitude and phase rather than its projection
+        on the sky. The full conventions (sign of the phase, time shift,
+        spherical harmonics, low- and high-frequency behaviour, accuracy)
+        are in :mod:`mlgw_bns.batched`; in short, the multipole is
+        :math:`\tilde{h}_{\ell m}(f) = A\, e^{+i\phi}` and
+        :func:`mlgw_bns.batched.mode_polarizations` projects it on
+        :math:`h_+, h_\times` as :meth:`predict_modes_dict` does.
+
+        Parameters
+        ----------
+        intrinsic : np.ndarray
+            Shape ``(N, 5)``: rows of
+            :math:`[q \geq 1, \Lambda_1, \Lambda_2, \chi_1, \chi_2]`.
+        total_mass : float or np.ndarray
+            Shape ``(N,)``: total mass in solar masses, per row.
+        frequencies : np.ndarray
+            Shape ``(k,)`` (shared) or ``(N, k)``: increasing frequencies
+            in Hz. Below the trained band the modes are continued with
+            their post-Newtonian expressions.
+        modes : sequence of (l, m), optional
+            Modes to return, in this order. Defaults to :attr:`modes`.
+        distance_mpc : float or np.ndarray
+            Luminosity distance in Mpc, per row. Defaults to 1.
+        return_tf : bool
+            Also return the time :math:`t_{\ell m}(f) = -\frac{1}{2\pi}
+            \partial_f \phi_{\ell m}` at which each mode emits each
+            frequency, in seconds relative to the merger.
+
+        Returns
+        -------
+        tuple[np.ndarray, ...]
+            ``(amp, phase)``, or ``(amp, phase, tf)``, each of shape
+            ``(N, n_modes, k)``. Rows outside :attr:`parameter_ranges`
+            are NaN.
+        """
+        return self.batched_surrogate(modes)(
+            intrinsic, total_mass, frequencies, distance_mpc, return_tf=return_tf
+        )
+
+    def jax_modes_amp_phase(
+        self, modes: Optional[Sequence] = None, return_tf: bool = False
+    ) -> Callable:
+        """A pure JAX function computing :meth:`predict_modes_amp_phase`.
+
+        Returns ``f(intrinsic, total_mass, frequencies, distance_mpc=1.0)``
+        with the same shapes and conventions as
+        :meth:`predict_modes_amp_phase`, for fixed ``modes`` and
+        ``return_tf``. A single waveform is the batch ``N = 1``, i.e.
+        ``intrinsic`` of shape ``(1, 5)``. Wrap it in :func:`jax.jit`;
+        every new input shape compiles again. Requires the ``jax`` extra,
+        and enables ``jax_enable_x64``, without which the regressors do
+        not work.
+        """
+        surrogate = self.batched_surrogate(modes, backend="jax")
+
+        def predict(intrinsic, total_mass, frequencies, distance_mpc=1.0):
+            return surrogate(
+                intrinsic, total_mass, frequencies, distance_mpc, return_tf=return_tf
+            )
+
+        return predict
 
     def _hpc_waveform_per_mode(
         self,

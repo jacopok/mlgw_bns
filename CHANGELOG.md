@@ -4,6 +4,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Batched, per-mode evaluation, on numpy or JAX from a single implementation
+    (`mlgw_bns.batched`). `Model.predict_modes_amp_phase(intrinsic,
+    total_mass, frequencies, modes=..., distance_mpc=..., return_tf=...)`
+    evaluates `N` binaries in one call --- `intrinsic` of shape `(N, 5)`,
+    `total_mass` of shape `(N,)`, frequencies shared or one grid per row ---
+    and returns the amplitude and phase of each requested mode, shape
+    `(N, n_modes, k)`, with no angular factor applied. Only the requested
+    modes' regressors are evaluated. `Model.jax_modes_amp_phase(modes,
+    return_tf)` returns the same computation as a pure JAX function (a single
+    waveform is the batch `N = 1`). Both include the post-Newtonian
+    continuation below the trained band and the zero padding above it.
+    About 0.7 ms per waveform for the four modes (2,2), (2,1), (3,3), (4,4)
+    on numpy (batches of 1000 on 4 cores), against ~14 ms for
+    `predict_modes_dict`; the JAX version compiles in under 10 s.
+- `return_tf=True` also returns each mode's time--frequency map
+    `t_lm(f) = -(1/2 pi) d phi_lm / d f`, from the derivative of the phase
+    spline in the band and of the post-Newtonian phase below it.
+- `mlgw_bns.batched.mode_polarizations`, the per-mode projection on
+    `h_+, h_x` with the spin-weighted spherical harmonics, batched and
+    numpy/JAX-generic; summed over the modes it reproduces `Model.predict`.
+- Out-of-range rows come back as NaN instead of raising, so that one bad row
+    does not abort a batch; `BatchedSurrogate.valid` gives the mask.
+- `Model.parameter_ranges`, whose setter applies new ranges to every mode.
+
+### Changed
+
+- `mlgw_bns.jax_predict.model_to_jax_waveform` is now a thin wrapper around
+    the batched pipeline instead of a separate port; its internal helpers
+    (`mode_model_to_jax_residuals`, `make_not_a_knot_spline_jax`, ...) are
+    gone. It compiles in seconds rather than ~40 s.
+- `pn_modes.reference_phase_backbone` is vectorised over the parameter rows
+    (shared with the batched path); its output changes at the ~1e-7 rad level.
+
+### Fixed
+
+- A `Model` loaded with a subset of the trained modes, e.g.
+    `default_for_testing(modes=[(2,2), (2,1), (3,3), (4,4)])`, read the
+    mode-phases predictor's columns by position in its own mode list rather
+    than the predictor's, mis-phasing (3,3) and (4,4) by O(1) rad.
+
+### Known issues
+
+- The kernel-ridge regressors of the shipped model have dual coefficients up
+    to ~1e13, and their prediction is a sum that cancels by some fourteen
+    orders of magnitude. Its floating-point rounding error is therefore
+    visible: evaluating the same parameters in a batch or one at a time, on
+    numpy or on JAX, or at parameters differing by one part in 1e12, changes
+    the (2,2) and (4,4) phases by up to ~1e-2 rad near the merger. In a
+    likelihood this is a noise floor (O(0.1--1) in ln L at SNR ~100, growing
+    as SNR^2). Evaluating the sum in 80-bit precision removes it (6e-6 rad)
+    but costs ~20x; the lasting fix is a better-conditioned regressor, which
+    needs retraining.
+
 ## [1.0.1] - 2026-09-21
 
 ### Fixed
