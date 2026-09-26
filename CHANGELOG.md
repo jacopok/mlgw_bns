@@ -34,6 +34,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `KernelRidgeNetwork` chooses its regularization per principal component
+    (`Hyperparameters.kernel_alpha_selection = "loo"`, the new default): each
+    output gets the ridge penalty minimizing its exact leave-one-out error
+    plus the rounding error its dual coefficients cause when a prediction
+    is evaluated, estimated as `0.1 * eps * sum_j |K(x, x_j) a_j|`
+    (`kernel_rounding_factor`, calibrated on the packaged regressors). One
+    eigendecomposition of the kernel gives both for a whole grid of
+    penalties (`neural_network.kernel_ridge_leave_one_out`); at 24576
+    training points it takes ~10x the time and ~2x the memory of the
+    Cholesky solve it replaces. The fit is stored as an ordinary
+    `KernelRidge` with a vector `alpha`, so prediction, the batched/JAX
+    path and saved files are unchanged. `"fixed"` keeps the single
+    `kernel_alpha` of the packaged models.
+- `HyperparameterOptimization` (and `optimize_n_hours.py`) then only search
+    `kernel_gamma`, in a separate `<filename>_loo_study.pkl`;
+    `kernel_alpha_selection="fixed"` (`--fixed-alpha`) restores the search
+    over one shared `kernel_alpha`, which is how the packaged (2,2) penalty
+    ended up at 3.9e-14 --- numerically no regularization at all, and the
+    source of the rounding noise described under Known issues.
 - `mlgw_bns.jax_predict.model_to_jax_waveform` is now a thin wrapper around
     the batched pipeline instead of a separate port; its internal helpers
     (`mode_model_to_jax_residuals`, `make_not_a_knot_spline_jax`, ...) are
