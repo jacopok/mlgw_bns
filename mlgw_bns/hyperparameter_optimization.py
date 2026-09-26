@@ -16,8 +16,19 @@ from .neural_network import KernelRidgeNetwork, mode_key, save_kernel_ridge_defa
 
 class HyperparameterOptimization:
     """Manager for the optimization of :class:`KernelRidgeNetwork`'s
-    hyperparameters (``kernel_gamma``, ``kernel_alpha``) for a certain
-    :class:`ModeModel`, over one variable: **reconstruction accuracy**.
+    hyperparameters for a certain :class:`ModeModel`, over one variable:
+    **reconstruction accuracy**.
+
+    With ``kernel_alpha_selection="loo"`` (the default) only the kernel
+    width ``kernel_gamma`` is searched: the fit then chooses one ridge
+    penalty per principal component itself, by exact leave-one-out
+    cross-validation together with the rounding error of the resulting
+    predictions (see
+    :func:`~mlgw_bns.neural_network.kernel_ridge_leave_one_out`). With
+    ``"fixed"``, one ``kernel_alpha`` shared by all the components is
+    searched as well, as the packaged models were tuned; that search
+    drove the (2,2) penalty down to 4e-14, where the fit is numerically
+    unregularized and its predictions carry ~1e-2 rad of rounding noise.
 
     Reconstruction accuracy is quantified directly in residual space,
     not through the PSD-weighted mismatch: the network's PCA-space
@@ -61,6 +72,8 @@ class HyperparameterOptimization:
             Fixed number of training waveforms, for fair comparison
             across trials. Defaults to None; if not provided, uses the
             class default (:attr:`n_train_fixed` = 8192).
+    kernel_alpha_selection: str, optional
+            ``"loo"`` (default) or ``"fixed"``; see above.
 
     Class Attributes
     save_every_n_minutes: float
@@ -81,6 +94,7 @@ class HyperparameterOptimization:
         hyper_validation_fraction: float = 0.01,
         study: Optional[optuna.Study] = None,
         n_train_fixed: Optional[int] = None,
+        kernel_alpha_selection: str = "loo",
     ):
 
         assert model.auxiliary_data_available
@@ -88,6 +102,7 @@ class HyperparameterOptimization:
 
         self.model = model
         self.model.nn_kind = KernelRidgeNetwork
+        self.kernel_alpha_selection = kernel_alpha_selection
         if n_train_fixed is not None:
             self.n_train_fixed = n_train_fixed
         self.rng = np.random.default_rng(seed=optimization_seed)
@@ -113,7 +128,14 @@ class HyperparameterOptimization:
 
     @property
     def study_filename(self) -> str:
-        """Name of the file to save the study to."""
+        """Name of the file to save the study to.
+
+        Studies with per-output leave-one-out penalties are kept apart from
+        the ones which searched a single ``kernel_alpha``: their trials
+        sample different parameters.
+        """
+        if self.kernel_alpha_selection == "loo":
+            return f"{self.model.filename}_loo_study.pkl"
         return f"{self.model.filename}_study.pkl"
 
     def objective(
@@ -149,7 +171,9 @@ class HyperparameterOptimization:
         # Use fixed n_train for fair comparison across trials
         n_train = min(self.n_train_fixed, max_n_train)
 
-        hyper = Hyperparameters.from_trial_kernel_ridge(trial, n_train=n_train)
+        hyper = Hyperparameters.from_trial_kernel_ridge(
+            trial, n_train=n_train, kernel_alpha_selection=self.kernel_alpha_selection
+        )
 
         assert hyper.n_train + validation_data_number <= self.training_data_number
 
@@ -288,12 +312,13 @@ class HyperparameterOptimization:
         explicit hyperparameters.
         """
         best = self.best_hyperparameters()
-        save_kernel_ridge_default(self.model.mode, best.kernel_gamma, best.kernel_alpha)
+        kernel_alpha = best.kernel_alpha if best.kernel_alpha_selection == "fixed" else None
+        save_kernel_ridge_default(self.model.mode, best.kernel_gamma, kernel_alpha)
         logging.info(
-            "Saved best trial for mode %s as default: kernel_gamma=%.3g kernel_alpha=%.3g",
+            "Saved best trial for mode %s as default: kernel_gamma=%.3g kernel_alpha=%s",
             mode_key(self.model.mode),
             best.kernel_gamma,
-            best.kernel_alpha,
+            "per-component (leave-one-out)" if kernel_alpha is None else f"{kernel_alpha:.3g}",
         )
 
     def save_best_trials_to_file(self, filename: str = "best_trials_modes") -> None:

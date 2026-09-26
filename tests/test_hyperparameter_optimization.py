@@ -7,7 +7,10 @@ def test_study_creation(generated_mode_model):
     ho = HyperparameterOptimization(generated_mode_model)
 
     assert ho.training_data_number == 100
-    assert ho.study_filename == "test_mode_model_study.pkl"
+    assert ho.study_filename == "test_mode_model_loo_study.pkl"
+
+    fixed = HyperparameterOptimization(generated_mode_model, kernel_alpha_selection="fixed")
+    assert fixed.study_filename == "test_mode_model_study.pkl"
 
 
 def test_optimization_smoketest(generated_mode_model):

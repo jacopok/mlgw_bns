@@ -56,8 +56,8 @@ def test_kernel_reconstructs_a_smooth_map(smooth_training_data):
 
     assert prediction.shape == y_test.shape
 
-    relative = np.abs(prediction - y_test).max(axis=0) / np.abs(y_test).max(axis=0)
-    assert np.all(relative < 0.05)
+    rms = np.sqrt(np.mean((prediction - y_test) ** 2, axis=0))
+    assert np.all(rms / np.abs(y_test).max(axis=0) < 0.02)
 
 
 def test_kernel_is_equivariant_under_output_rescaling(smooth_training_data):
@@ -280,3 +280,87 @@ def test_recomposition_inverts_generation(reference_amplitude):
     np.testing.assert_allclose(
         recomposed.amplitudes, true.amplitudes, rtol=1e-5, atol=0.0
     )
+
+
+def test_leave_one_out_matches_refitting():
+    """The closed-form leave-one-out error is that of actual refits."""
+    from sklearn.kernel_ridge import KernelRidge
+    from sklearn.metrics.pairwise import rbf_kernel
+
+    from mlgw_bns.neural_network import kernel_ridge_leave_one_out
+
+    rng = np.random.default_rng(seed=3)
+    x = rng.normal(size=(60, 3))
+    y = np.column_stack([np.sin(x[:, 0]), x[:, 1] ** 2 + 0.01 * rng.normal(size=60)])
+    weights = rng.uniform(0.2, 1.0, 60)
+    alphas = np.array([1e-6, 1e-3, 1e-1])
+
+    dual, selection = kernel_ridge_leave_one_out(
+        rbf_kernel(x, x, gamma=0.5), y, alphas, sample_weight=weights
+    )
+    for k, alpha in enumerate(alphas):
+        for c in range(2):
+            errors = []
+            for i in range(60):
+                keep = np.arange(60) != i
+                refit = KernelRidge(kernel="rbf", gamma=0.5, alpha=alpha).fit(
+                    x[keep], y[keep, c], sample_weight=weights[keep]
+                )
+                errors.append(weights[i] * (y[i, c] - refit.predict(x[i : i + 1])[0]) ** 2)
+            assert selection.loo_mse[k, c] == pytest.approx(np.mean(errors), rel=1e-6)
+
+    # the dual coefficients are those of a plain fit at the chosen penalties
+    for c in range(2):
+        plain = KernelRidge(kernel="rbf", gamma=0.5, alpha=selection.alpha[c]).fit(
+            x, y[:, c], sample_weight=weights
+        )
+        np.testing.assert_allclose(dual[:, c], plain.dual_coef_, rtol=1e-6, atol=1e-8)
+
+
+def test_rounding_noise_raises_the_penalty():
+    """Weighting the rounding error of the prediction trades leave-one-out
+    accuracy for smaller, less cancelling dual coefficients.
+
+    This toy problem is too well conditioned for the calibrated weight to
+    bind (the packaged 24576-point fits are not), so the weight is
+    inflated to show the mechanism.
+    """
+    from sklearn.metrics.pairwise import rbf_kernel
+
+    from mlgw_bns.neural_network import kernel_ridge_leave_one_out
+
+    rng = np.random.default_rng(seed=4)
+    x = rng.uniform(-1, 1, size=(300, 1))
+    y = np.sin(2 * x[:, 0])
+
+    def select(rounding_factor):
+        return kernel_ridge_leave_one_out(
+            rbf_kernel(x, x, gamma=1.0),
+            y,
+            noise_rows=rbf_kernel(x[:64], x, gamma=1.0),
+            rounding_factor=rounding_factor,
+        )
+
+    dual_plain, plain = select(0.0)
+    dual_aware, aware = select(1e4)
+    assert np.all(plain.rounding_noise == 0.0)
+    assert aware.alpha[0] > plain.alpha[0]
+    assert np.abs(dual_aware).max() < 0.1 * np.abs(dual_plain).max()
+    # the rounding estimate falls as the penalty grows
+    assert np.all(np.diff(aware.rounding_noise[:, 0]) <= 1e-30)
+
+
+def test_kernel_alpha_selection_fixed_keeps_one_penalty(smooth_training_data):
+    x_train, y_train, _, _ = smooth_training_data
+    hyper = Hyperparameters.default(len(x_train))
+    hyper.kernel_alpha_selection = "fixed"
+    hyper.kernel_alpha = 1e-5
+    network = KernelRidgeNetwork(hyper)
+    network.fit(x_train, y_train)
+    assert network.regressor.alpha == 1e-5
+
+    hyper.kernel_alpha_selection = "loo"
+    network = KernelRidgeNetwork(hyper)
+    network.fit(x_train, y_train)
+    assert np.shape(network.regressor.alpha) == (y_train.shape[1],)
+    assert np.array_equal(network.regressor.alpha, network.alpha_selection.alpha)

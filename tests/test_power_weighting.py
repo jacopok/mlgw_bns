@@ -196,6 +196,8 @@ def test_unweighted_fit_does_not_pass_sample_weight(
 
     hyper = Hyperparameters.default(len(x_train))
     hyper.max_iter = 5
+    # the single-penalty fit is the one that goes through KernelRidge.fit
+    hyper.kernel_alpha_selection = "fixed"
     nn_kind(hyper).fit(x_train, y_train)
 
     assert seen["kwargs"] == {}
@@ -221,9 +223,16 @@ def test_unweighted_kernel_ridge_fit_is_reproducible(weighting_training_data):
 
 
 def test_weights_move_the_kernel_ridge_fit(weighting_training_data):
-    """Down-weighted samples lose their pull on the solution."""
+    """Down-weighted samples lose their pull on the solution.
+
+    At a fixed penalty: with per-output leave-one-out penalties the two
+    fits would also differ in their regularization, which is not what is
+    tested here.
+    """
     x_train, y_train = weighting_training_data
-    hyper = Hyperparameters.default_kernel_ridge(len(x_train))
+    hyper = Hyperparameters.default_kernel_ridge(
+        len(x_train), kernel_alpha_selection="fixed"
+    )
 
     unweighted = KernelRidgeNetwork(hyper)
     unweighted.fit(x_train, y_train)
