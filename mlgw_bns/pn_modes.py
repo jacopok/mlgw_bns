@@ -820,22 +820,6 @@ _post_newtonian_phases_by_mode: dict[Mode, Callable_Waveform] = {
 }
 
 
-#: Lazily-built dataset used only to satisfy :class:`WaveformParameters`
-#: when evaluating the Taylor-F2 mode phase in :func:`reference_phase_backbone`.
-#: The total mass is irrelevant there (see the function's docstring), so a
-#: single shared instance is fine.
-_BACKBONE_DATASET = None
-
-
-def _backbone_dataset():
-    global _BACKBONE_DATASET
-    if _BACKBONE_DATASET is None:
-        from .dataset_generation import Dataset
-
-        _BACKBONE_DATASET = Dataset(initial_frequency_hz=20.0, srate_hz=4096.0)
-    return _BACKBONE_DATASET
-
-
 def reference_phase_backbone(
     param_array: np.ndarray,
     f0_natural: float,
@@ -875,16 +859,11 @@ def reference_phase_backbone(
     if not f0_natural > 0:
         raise ValueError("f0_natural must be positive")
 
-    h = f0_natural * rel_step
-    factor = mode.m / 2
-    dataset = _backbone_dataset()
-    mode_freq = 2 * np.array([f0_natural - h, f0_natural + h]) / mode.m
+    # One vectorised evaluation for all the rows, shared with the batched
+    # (numpy / JAX) prediction path so that the two agree to rounding.
+    from .batched import _namespace, reference_phase_backbone_xp
 
-    out = np.empty(len(param_array))
-    for i, (q, lambda_1, lambda_2, chi_1, chi_2) in enumerate(param_array):
-        params = WaveformParameters(
-            q, lambda_1, lambda_2, chi_1, chi_2, dataset=dataset
-        )
-        psi = phase_5h_post_newtonian_tidal(params, mode_freq) * factor
-        out[i] = f0_natural * (psi[1] - psi[0]) / (2 * h)
-    return out
+    xp, psi = _namespace("numpy")
+    return reference_phase_backbone_xp(
+        xp, psi, param_array, f0_natural, mode.m, rel_step=rel_step
+    )
