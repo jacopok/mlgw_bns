@@ -1645,7 +1645,7 @@ def plot_mismatches(
 
     axes[0].set_title("residual time + reference phase optimised", fontsize="small")
     axes[1].set_title(
-        "surrogate's predicted \u0394t + reference phase applied, nothing optimised",
+        r"surrogate's predicted $\Delta t$ + reference phase applied, nothing optimised",
         fontsize="small",
     )
     axes[1].set_xscale("log")
