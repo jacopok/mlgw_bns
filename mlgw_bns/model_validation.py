@@ -1043,5 +1043,5 @@ class ValidateModel:
         cartesian_1, cartesian_2 = self.waveforms(waveform_array_1, waveform_array_2)
 
         pairs = list(zip(cartesian_1, cartesian_2))
-        iterator = tqdm(pairs, unit="mismatches", disable=disable_tqdm)
+        iterator = tqdm(pairs, unit="mismatches", disable=disable_tqdm, leave=None)
         return [self.mismatch(w1, w2) for w1, w2 in iterator]

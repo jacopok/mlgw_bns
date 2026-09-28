@@ -859,7 +859,7 @@ def mismatch_vs_power_by_mode(model: Model, n_waveforms: int = N_FULL_WAVEFORM_M
         for mode in MODES
     }
 
-    for _ in range(n_waveforms):
+    for _ in tqdm(range(n_waveforms), unit="waveform"):
         intrinsic = next(parameter_generator)
         params = ParametersWithExtrinsic(
             mass_ratio=intrinsic.mass_ratio,
@@ -965,7 +965,7 @@ def plot_mismatch_vs_power(data: dict) -> None:
     ax.set_ylabel("Mismatch")
     ax.set_title(
         "full: residual time+phase optimised    "
-        "faint: predicted \u0394t + reference phase, nothing optimised (regressed)",
+        r"faint: predicted $\Delta t$ + reference phase, nothing optimised (regressed)",
         fontsize="small",
     )
     ax.grid(True)
