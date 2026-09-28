@@ -9,11 +9,16 @@ sequence, so the log fills with thousands of half-drawn bar fragments and the
 :func:`joblib_progress` wraps a :class:`joblib.Parallel` call and picks the
 right reporter for where the output is going:
 
-* interactive terminal (``stderr`` is a TTY) --- the usual live ``tqdm`` bar,
-  via ``tqdm_joblib``;
+* interactive terminal (``stderr`` is a TTY) --- the usual live ``tqdm`` bar;
 * anything else --- a single throttled ``logging.info`` line every
   ``log_interval`` seconds, plus one final line at completion. No carriage
   returns, no ANSI.
+
+Both hook into :meth:`joblib.Parallel.print_progress`, which joblib calls
+after every completed task on the sequential (``n_jobs=1``) path and after
+every completed batch on the parallel ones. ``BatchCompletionCallBack`` ---
+what ``tqdm_joblib`` patches --- is never invoked on the sequential path, so
+a bar hooked there stays at 0% whenever ``n_jobs=1``.
 """
 from __future__ import annotations
 
@@ -22,11 +27,10 @@ import logging
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import joblib  # type: ignore
 from tqdm import tqdm  # type: ignore
-from tqdm_joblib import tqdm_joblib
 
 
 def _stderr_is_interactive() -> bool:
@@ -37,19 +41,50 @@ def _stderr_is_interactive() -> bool:
 
 
 @contextlib.contextmanager
+def _on_joblib_progress(callback: Callable[[int], None]) -> Iterator[None]:
+    """Call ``callback(n_completed_tasks)`` whenever a ``joblib.Parallel``
+    call in this ``with`` block reports progress."""
+
+    old_print_progress = joblib.Parallel.print_progress
+
+    def print_progress(self):
+        callback(self.n_completed_tasks)
+        return old_print_progress(self)
+
+    joblib.Parallel.print_progress = print_progress
+    try:
+        yield
+    finally:
+        joblib.Parallel.print_progress = old_print_progress
+
+
+@contextlib.contextmanager
+def _joblib_tqdm_progress(desc: str, total: int) -> Iterator[None]:
+    """Drive a ``tqdm`` bar from joblib's completed-task count."""
+
+    # `leave=None`: keep the finished bar only when it is top-level, so bars
+    # nested under a caller's own outer loop clear themselves.
+    with tqdm(desc=desc, total=total, leave=None) as bar:
+
+        def update(count: int) -> None:
+            bar.update(count - bar.n)
+
+        with _on_joblib_progress(update):
+            yield
+
+
+@contextlib.contextmanager
 def _joblib_logging_progress(
     desc: str, total: int, log_interval: float
 ) -> Iterator[None]:
-    """Patch joblib's batch callback to emit throttled ``logging.info`` lines.
+    """Emit throttled ``logging.info`` lines from joblib's completed-task count.
 
-    Mirrors what ``tqdm_joblib`` does to hook into ``joblib.Parallel``, but
-    instead of updating a bar it counts completed items and logs a one-line
-    progress summary at most once per ``log_interval`` seconds (and once more
-    when the last batch lands).
+    Logs a one-line progress summary at most once per ``log_interval``
+    seconds, and once more when the last task lands.
     """
 
     state_lock = threading.Lock()
-    done = 0
+    last_count = 0
     start = time.monotonic()
     last_log = start
 
@@ -72,26 +107,23 @@ def _joblib_logging_progress(
             rate,
         )
 
+    def update(count: int) -> None:
+        nonlocal last_count, last_log
+        with state_lock:
+            # joblib also reports once more when the call finishes, with an
+            # unchanged count; don't log that twice.
+            if count == last_count:
+                return
+            last_count = count
+            now = time.monotonic()
+            if now - last_log >= log_interval or count >= total:
+                emit(count, now)
+                last_log = now
+
     logging.info("%s: starting on %i items", desc, total)
 
-    old_callback = joblib.parallel.BatchCompletionCallBack
-
-    class LoggingBatchCompletionCallBack(old_callback):  # type: ignore[valid-type,misc]
-        def __call__(self, *args, **kwargs):
-            nonlocal done, last_log
-            with state_lock:
-                done += self.batch_size
-                now = time.monotonic()
-                if now - last_log >= log_interval or done >= total:
-                    emit(done, now)
-                    last_log = now
-            return super().__call__(*args, **kwargs)
-
-    joblib.parallel.BatchCompletionCallBack = LoggingBatchCompletionCallBack
-    try:
+    with _on_joblib_progress(update):
         yield
-    finally:
-        joblib.parallel.BatchCompletionCallBack = old_callback
 
 
 @contextlib.contextmanager
@@ -112,7 +144,7 @@ def joblib_progress(
     """
 
     if _stderr_is_interactive():
-        with tqdm_joblib(tqdm(desc=desc, total=total)):
+        with _joblib_tqdm_progress(desc, total):
             yield
     else:
         with _joblib_logging_progress(desc, total, log_interval):
