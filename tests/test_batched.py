@@ -328,7 +328,7 @@ def test_matches_teobresums(default_model):
             )
         )
     # same bound as `test_default_model_full_waveform_mismatch`
-    assert np.max(mismatches) < 4e-3
+    assert np.max(mismatches) < 1e-5
 
 
 # ---------------------------------------------------------------------- #

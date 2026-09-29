@@ -144,28 +144,27 @@ def test_default_for_testing_rejects_unknown_name():
         Model.default_for_testing("not_a_model")
 
 
-# Measured on the packaged model over the sixteen binaries this test draws
-# (seed 7, inclination 1.0): median 3.0e-4, worst 1.8e-3. Over 64 binaries
-# the median is 8.4e-5 and the worst 3.0e-3, so the sixteen drawn here are a
-# slightly unlucky sample rather than a lucky one.
-#
-# Both bounds carry a factor of two, which is headroom for library changes
-# rather than for the model: nothing here is random, since the model is
-# loaded from disk and the parameters come from a fixed seed. They cannot
-# be tightened much further without retraining the packaged model --- the
-# limit is what that model achieves, not the test.
-DEFAULT_MODEL_MAX_MISMATCH = 4e-3
-DEFAULT_MODEL_MEDIAN_MISMATCH = 6e-4
+# Measured on the packaged (interim: public TEOBResumS, 8192 waveforms)
+# model over the sixteen binaries this test draws (seed 7, inclination 1.0):
+# median 6.8e-8, worst 4.0e-6. Nothing here is random (the model is loaded
+# from disk and the parameters come from a fixed seed), so the factor of
+# two or three is headroom for library changes rather than for the model.
+DEFAULT_MODEL_MAX_MISMATCH = 1e-5
+DEFAULT_MODEL_MEDIAN_MISMATCH = 2e-7
 
-# Measured on the packaged 7-mode model (hom7_big) over the eight binaries
-# `test_full_waveform_mismatch_is_flat_in_total_mass` draws (seed 7): medians
-# of 4.1e-5, 7.9e-5 and 1.5e-4 at total_mass 2.2, 2.8 and 3.6 respectively --
-# rising smoothly with mass rather than jumping at the 2.8 dataset reference,
-# so the PN-splice bug the test guards against is not back. The floor moved
-# up an order of magnitude from the old 4-mode default (odd-m HOM modes are
-# harder to fit, see mode21-q1-boundary-singularity); this carries about the
-# same 2x headroom as `DEFAULT_MODEL_MEDIAN_MISMATCH` above.
-FLAT_MASS_MEDIAN_MISMATCH = 3e-4
+# Measured on the same model over the eight binaries
+# `test_full_waveform_mismatch_is_flat_in_total_mass` draws (seed 7):
+# medians of 1.5e-7, 2.3e-7 and 3.7e-7 at total_mass 2.2, 2.8 and 3.6,
+# rising smoothly with mass rather than jumping at the 2.8 dataset reference.
+FLAT_MASS_MEDIAN_MISMATCH = 8e-7
+
+# The same sixteen binaries with nothing maximised --- the surrogate's own
+# merger time and coalescence phase against TEOBResumS's, both from the
+# tangent to the (2,2) phase at the top of the band: median 1.1e-3, worst
+# 3.7e-2 (merger times within ~2e-5 s, coalescence phases within ~0.1 rad).
+# Were the two references inconsistent the mismatch would be of order one.
+UNOPTIMISED_MEDIAN_MISMATCH = 3e-3
+UNOPTIMISED_MAX_MISMATCH = 8e-2
 
 
 def test_default_model_full_waveform_mismatch(default_model):
@@ -209,6 +208,43 @@ def test_default_model_full_waveform_mismatch(default_model):
     mismatches = np.array(mismatches)
     assert np.max(mismatches) < DEFAULT_MODEL_MAX_MISMATCH
     assert np.median(mismatches) < DEFAULT_MODEL_MEDIAN_MISMATCH
+
+
+def test_default_model_merger_reference_matches_teobresums(default_model):
+    """The summed waveform against the EOB ground truth with nothing
+    maximised: the merger time and coalescence phase are the model's."""
+
+    validator = ValidateModel(default_model.mode_models[Mode(2, 2)])
+    frequencies = validator.frequencies
+    parameter_generator = reduced_range_parameter_generator(default_model, seed=7)
+
+    mismatches = []
+    for _ in range(16):
+        intrinsic = next(parameter_generator)
+        params = ParametersWithExtrinsic(
+            mass_ratio=intrinsic.mass_ratio,
+            lambda_1=intrinsic.lambda_1,
+            lambda_2=intrinsic.lambda_2,
+            chi_1=intrinsic.chi_1,
+            chi_2=intrinsic.chi_2,
+            distance_mpc=100.0,
+            inclination=1.0,
+            total_mass=2.8,
+        )
+        predicted = sum(default_model.predict_modes_dict(frequencies, params).values())
+        true = sum(default_model.get_teob_modes_dict(frequencies, params).values())
+        support = np.abs(true) > 0
+        weight = np.gradient(frequencies) / validator.psd_values
+
+        def inner(a, b):
+            return np.sum((np.conj(a) * b * weight)[support]).real
+
+        mismatches.append(
+            1 - inner(true, predicted) / np.sqrt(inner(true, true) * inner(predicted, predicted))
+        )
+
+    assert np.median(mismatches) < UNOPTIMISED_MEDIAN_MISMATCH
+    assert np.max(mismatches) < UNOPTIMISED_MAX_MISMATCH
 
 
 @pytest.mark.parametrize("total_mass", [2.2, 2.8, 3.6])
