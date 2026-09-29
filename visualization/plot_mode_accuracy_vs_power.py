@@ -42,7 +42,6 @@ from mlgw_bns.mode_model import ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 from mlgw_bns.model import Model
 
-from validate_model import SharedTimeshiftValidateModel
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -108,30 +107,12 @@ def collect(model: Model):
 
     The *accuracy* is the per-mode mismatch from :class:`ValidateModel`,
     the same quantity ``validate_model.py`` reports: the mode is
-    compared in its own amplitude/phase representation, with the learned
-    time-shift correction applied and the phase anchored at the start of
-    the band.
+    compared in its own amplitude/phase representation, both referenced
+    to the merger (:meth:`ValidateModel.merger_referenced`).
 
     The *power fraction* has to come from the summed waveform, so it uses
-    :meth:`Model.predict_modes_dict` / ``get_teob_modes_dict``.
-
-    Scoring *any* mode through the mode dictionaries with
-    :meth:`ValidateModel.mismatch` would be wrong, for a reason which has
-    nothing to do with which mode it is. The waveforms
-    :meth:`Model.predict_modes_dict` returns sit about 15 ms away in
-    time from the ones ``get_teob_modes_dict`` returns --- a common
-    origin offset, the same for every mode to within a few percent --- and
-    :meth:`ValidateModel.mismatch` searches time shifts only within
-    ``max_delta_t = 0.007`` s by default, so it cannot find the
-    alignment and reports 0.67 to 0.88 for all of them, the (2,2)
-    included. :meth:`ValidateModel.full_waveform_mismatch` uses
-    ``max_delta_t = 0.07`` s, absorbs the offset, and reports ~1e-5;
-    that is why the summed waveform scores well.
-
-    Note this is *not* a per-mode time-shift disagreement: each mode's own
-    time-shift target agrees with the (2,2)'s to about 1% (2e-4 s), and
-    the shared predictor reproduces the (2,1) target to 3e-4 s, forty
-    times inside the default window.
+    :meth:`Model.predict_modes_dict` / ``get_teob_modes_dict``, which are
+    referenced to the merger in the same way.
 
     Both routes are driven from the same parameter array, so the two axes
     line up waveform by waveform.
@@ -139,16 +120,15 @@ def collect(model: Model):
     target_key = (TARGET_MODE.l, TARGET_MODE.m)
 
     # --- accuracy, through the per-mode validator -------------------------
-    mode_validator = SharedTimeshiftValidateModel(
-        model.mode_models[TARGET_MODE], model.time_shifts_predictor
-    )
+    mode_validator = ValidateModel(model.mode_models[TARGET_MODE])
     parameter_set = mode_validator.param_set(N_WAVEFORMS, SEED)
 
     print("Generating true waveforms for the target mode...")
     true_waveforms, parameter_set = mode_validator.true_waveforms(parameter_set)
-    true_waveforms.phases -= true_waveforms.phases[:, 0].reshape(-1, 1)
-    predicted_waveforms = mode_validator.predicted_waveforms(parameter_set)
-    mode_validator._apply_predicted_time_shifts(predicted_waveforms, parameter_set)
+    true_waveforms = mode_validator.merger_referenced(true_waveforms)
+    predicted_waveforms = mode_validator.merger_referenced(
+        mode_validator.predicted_waveforms(parameter_set)
+    )
 
     cartesian_true, cartesian_predicted = mode_validator.waveforms(
         true_waveforms, predicted_waveforms

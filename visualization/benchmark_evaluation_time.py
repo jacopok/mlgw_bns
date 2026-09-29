@@ -218,7 +218,7 @@ class MlgwBnsJax(Approximant):
             jnp.asarray(params.total_mass),
             jnp.asarray(params.distance_mpc),
             jnp.asarray(params.inclination),
-            jnp.asarray(params.reference_phase),
+            jnp.asarray(params.coalescence_phase),
         )
         return args
 
@@ -294,7 +294,7 @@ class MlgwBnsJaxBatch(Approximant):
             jnp.asarray(centre.total_mass),
             jnp.asarray(centre.distance_mpc),
             jnp.asarray(centre.inclination),
-            jnp.asarray(centre.reference_phase),
+            jnp.asarray(centre.coalescence_phase),
         )
         if n_points not in self._warm:  # compile once per grid size
             self._jax.block_until_ready(self._predict(*self.args))
@@ -354,7 +354,7 @@ def lalwf_maker(lal_approx: str) -> type:
             M = params.total_mass
             DL = params.distance_mpc * 1e6 * lal.PC_SI
             iota = params.inclination
-            phir = params.reference_phase
+            phir = params.coalescence_phase
             df = teob_dict["df"] / params.mass_sum_seconds
             flow = teob_dict["initial_frequency"] / params.mass_sum_seconds
             srate = teob_dict["srate_interp"] / params.mass_sum_seconds

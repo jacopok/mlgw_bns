@@ -50,19 +50,19 @@ params = ParametersWithExtrinsic(
 hp, hc = model.predict(frequencies, params)
 ```
 
-The mode mergers do not all happen at the same time, so they have to be
-aligned before they are summed.
-The per-mode time offsets which do this are predicted by a small regressor
-trained alongside the model, `model.time_shifts_predictor`, and by default
-`predict` queries it for us.
-They can also be provided explicitly, as
-`model.predict(frequencies, params, time_shifts=time_shifts)`, where
-`time_shifts` is either one value per mode or a scalar, which is broadcast
-to every mode.
+The waveform is referenced to the merger: it happens at time
+`params.merger_time` (0 by default, in seconds), with orbital phase
+`params.coalescence_phase` (0 by default), which rotates the $(\ell, m)$
+mode by $e^{i m \phi_c}$.
+The merger is where the frequency-domain phase of the $(2,2)$ mode becomes
+linear in the frequency, at the top of the trained band; the model reads it
+off its own $(2,2)$ mode, so there is nothing else to predict.
 
 To get the individual mode contributions instead of the summed
-polarizations, use `model.predict_modes_dict(frequencies, params)`,
-which takes the same optional `time_shifts` argument.
+polarizations, use `model.predict_modes_dict(frequencies, params)`.
+For many binaries at once, and for JAX, see
+{mod}`mlgw_bns.batched` (`model.predict_modes_amp_phase` and
+`model.jax_modes_amp_phase`).
 
 (new_model)=
 ## Making a new model
@@ -93,8 +93,8 @@ m.load()
 where it is crucial that the model name is the same --- the `load` method
 only checks for files with the given name (in the current folder).
 Each mode is stored in its own set of files, named
-`{filename}_l{l}_m{m}`, with the shared time-shift predictor in
-`{filename}_timeshifts.pkl`.
+`{filename}_l{l}_m{m}`. The modes must include the $(2,2)$, which sets the
+merger time and coalescence phase of all of them.
 
 The hyperparameters used here are those provided with the package;
 to perform an optimization see [](hyperparameter_optimization).
@@ -109,8 +109,9 @@ from mlgw_bns.higher_order_modes import Mode
 mode_model = model.mode_models[Mode(2, 2)]
 hp, hc = mode_model.predict(frequencies, params)
 ```
-The signature is the same as `Model.predict`, minus the time shifts:
-there is nothing to align a single mode against.
+The signature is the same as `Model.predict`. On its own, a mode is
+referenced to its own merger (the tangent to its own phase at the top of
+the band), which is the right one only for the $(2,2)$.
 
 ### The parameter ranges for a new model
 

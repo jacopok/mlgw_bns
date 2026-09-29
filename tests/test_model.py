@@ -51,17 +51,17 @@ def test_model_requires_nonempty_modes():
         Model(modes=[])
 
 
+def test_model_requires_the_22_mode():
+    """The (2,2) sets the merger reference of every mode."""
+    with pytest.raises(ValueError):
+        Model(modes=[Mode(2, 1), Mode(3, 3)])
+
+
 def test_model_mode_filename():
     mm = Model(modes=[Mode(2, 2), Mode(2, 1)], filename="some_base")
 
     assert mm.mode_filename(Mode(2, 2)) == "some_base_l2_m2"
     assert mm.mode_filename(Mode(2, 1)) == "some_base_l2_m1"
-
-
-def test_model_filename_timeshifts():
-    mm = Model(modes=[Mode(2, 2)], filename="some_base")
-
-    assert mm.filename_timeshifts == "some_base_timeshifts.pkl"
 
 
 def test_model_lazy_mode_models_dict():
@@ -137,7 +137,6 @@ def test_default_for_testing_loads_every_mode(default_model):
     assert default_model.modes == DEFAULT_MODES
     assert default_model.auxiliary_data_available
     assert default_model.nn_available
-    assert default_model.time_shifts_predictor is not None
 
 
 def test_default_for_testing_rejects_unknown_name():
@@ -189,8 +188,6 @@ def test_default_model_full_waveform_mismatch(default_model):
             inclination=1.0,
             total_mass=2.8,
         )
-        # `time_shifts` is left out on purpose: the packaged model ships
-        # its own predictor, and this is the way it is meant to be used.
         predicted = default_model.predict_modes_dict(frequencies, params)
         true = default_model.get_teob_modes_dict(frequencies, params)
 
@@ -253,24 +250,27 @@ def test_full_waveform_mismatch_is_flat_in_total_mass(default_model, total_mass)
     assert np.median(mismatches) < FLAT_MASS_MEDIAN_MISMATCH
 
 
-def test_reference_phase_is_a_coalescence_phase(default_model):
-    """Shifting ``reference_phase`` by ``phi_c`` must rotate the ``(l, m)``
-    mode by ``exp(i m phi_c)`` --- not the same phase for every mode."""
+def test_coalescence_phase_and_merger_time(default_model):
+    """``coalescence_phase`` rotates the ``(l, m)`` mode by
+    ``exp(i m phi_c)`` --- not the same phase for every mode --- and
+    ``merger_time`` shifts every mode by ``exp(-2 pi i f t_c)``."""
 
     frequencies = np.linspace(30.0, 1500.0, 400)
-    phi_c = 0.37
+    phi_c, t_c = 0.37, 0.012
     base = ParametersWithExtrinsic(
         mass_ratio=1.6, lambda_1=500.0, lambda_2=500.0, chi_1=0.1, chi_2=0.05,
-        distance_mpc=100.0, inclination=1.1, total_mass=2.8, reference_phase=0.0,
+        distance_mpc=100.0, inclination=1.1, total_mass=2.8,
     )
-    shifted = dataclasses.replace(base, reference_phase=phi_c)
+    shifted = dataclasses.replace(base, coalescence_phase=phi_c, merger_time=t_c)
 
     modes_base = default_model.predict_modes_dict(frequencies, base)
     modes_shifted = default_model.predict_modes_dict(frequencies, shifted)
 
     for (l, m), array in modes_base.items():
         ratio = modes_shifted[(l, m)] / array
-        np.testing.assert_allclose(ratio, np.exp(1j * m * phi_c), rtol=1e-6)
+        np.testing.assert_allclose(
+            ratio, np.exp(1j * (m * phi_c - 2 * np.pi * frequencies * t_c)), rtol=1e-6
+        )
 
 
 def test_model_generate_sets_availability_flags(generated_model):
@@ -294,7 +294,7 @@ def test_model_predict_returns_finite_waveform(
     frequencies = np.linspace(30.0, 500.0, 50)
 
     hp, hc = trained_model.predict(
-        frequencies, parameters_with_extrinsic, time_shifts=0.0
+        frequencies, parameters_with_extrinsic
     )
 
     assert hp.shape == frequencies.shape
@@ -309,10 +309,10 @@ def test_model_predict_modes_dict_sums_to_predict(
     frequencies = np.linspace(30.0, 500.0, 50)
 
     hp, hc = trained_model.predict(
-        frequencies, parameters_with_extrinsic, time_shifts=0.0
+        frequencies, parameters_with_extrinsic
     )
     modes_dict = trained_model.predict_modes_dict(
-        frequencies, parameters_with_extrinsic, time_shifts=0.0
+        frequencies, parameters_with_extrinsic
     )
 
     assert set(modes_dict.keys()) == set(trained_model.modes)
@@ -322,77 +322,21 @@ def test_model_predict_modes_dict_sums_to_predict(
 def test_model_predict_modes_dict_sums_to_predict_at_other_total_mass(
     trained_model, parameters_with_extrinsic
 ):
-    """The time shifts must be rescaled to the requested total mass.
-
-    Both code paths agree trivially when the total mass is the reference
-    one of the dataset, so check a mass which is not.
-    """
+    """At a total mass other than the reference one of the dataset, where
+    the merger reference must be rescaled with the frequencies."""
 
     frequencies = np.linspace(30.0, 500.0, 50)
     total_mass = 4.0
     assert total_mass != trained_model.dataset.total_mass
     params = dataclasses.replace(
-        parameters_with_extrinsic, total_mass=total_mass, inclination=1.0
+        parameters_with_extrinsic, total_mass=total_mass, inclination=1.0,
+        merger_time=1e-3,
     )
 
-    hp, hc = trained_model.predict(frequencies, params, time_shifts=1e-3)
-    modes_dict = trained_model.predict_modes_dict(
-        frequencies, params, time_shifts=1e-3
-    )
+    hp, hc = trained_model.predict(frequencies, params)
+    modes_dict = trained_model.predict_modes_dict(frequencies, params)
 
     assert_waveforms_close(hp - 1j * hc, sum(modes_dict.values()))
-
-
-def test_model_predict_defaults_to_predicted_time_shifts(
-    trained_model, parameters_with_extrinsic
-):
-    """Omitting `time_shifts` must be the same as querying the predictor."""
-
-    frequencies = np.linspace(30.0, 500.0, 50)
-    # at zero inclination every mode but the (2,2) vanishes
-    params = dataclasses.replace(parameters_with_extrinsic, inclination=1.0)
-
-    time_shifts = trained_model.time_shifts_predictor.predict(
-        [params.intrinsic(trained_model.dataset).array]
-    )[0]
-
-    hp_explicit, hc_explicit = trained_model.predict(
-        frequencies, params, time_shifts=time_shifts
-    )
-    hp_implicit, hc_implicit = trained_model.predict(frequencies, params)
-
-    assert_waveforms_close(hp_explicit, hp_implicit)
-    assert_waveforms_close(hc_explicit, hc_implicit)
-
-    modes_explicit = trained_model.predict_modes_dict(
-        frequencies, params, time_shifts=time_shifts
-    )
-    modes_implicit = trained_model.predict_modes_dict(frequencies, params)
-    for mode in modes_explicit:
-        assert_waveforms_close(modes_explicit[mode], modes_implicit[mode])
-
-
-def test_model_predict_without_predictor_requires_time_shifts(
-    trained_model, parameters_with_extrinsic
-):
-    """A model with no predictor must ask for `time_shifts`, not guess."""
-
-    frequencies = np.linspace(30.0, 500.0, 50)
-    predictor = trained_model.time_shifts_predictor
-    trained_model.time_shifts_predictor = None
-
-    try:
-        with pytest.raises(ValueError):
-            trained_model.predict(frequencies, parameters_with_extrinsic)
-
-        # ... but providing them explicitly still works.
-        hp, hc = trained_model.predict(
-            frequencies, parameters_with_extrinsic, time_shifts=0.0
-        )
-        assert np.all(np.isfinite(hp))
-        assert np.all(np.isfinite(hc))
-    finally:
-        trained_model.time_shifts_predictor = predictor
 
 
 def test_model_predict_amplitude_phase_mode(
@@ -429,10 +373,10 @@ def test_model_save_and_load_roundtrip(
 
     frequencies = np.linspace(30.0, 500.0, 50)
     hp_before, hc_before = trained_model.predict(
-        frequencies, parameters_with_extrinsic, time_shifts=0.0
+        frequencies, parameters_with_extrinsic
     )
     hp_after, hc_after = reloaded.predict(
-        frequencies, parameters_with_extrinsic, time_shifts=0.0
+        frequencies, parameters_with_extrinsic
     )
 
     assert_waveforms_close(hp_before, hp_after)

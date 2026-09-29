@@ -25,7 +25,8 @@ def model_to_jax_waveform(model: "Model", modes: Optional[Sequence] = None) -> C
     r"""A JAX function reproducing :meth:`Model.predict <mlgw_bns.model.Model.predict>`.
 
     Returns ``predict(params, frequencies_hz, total_mass, distance_mpc,
-    inclination, reference_phase=0.0) -> (h_plus, h_cross)``, where
+    inclination, coalescence_phase=0.0, merger_time=0.0) -> (h_plus,
+    h_cross)``, where
     ``params`` is ``[q, lambda_1, lambda_2, chi_1, chi_2]`` with shape
     ``(5,)`` or ``(n, 5)``; the other arguments are scalars or shape
     ``(n,)``. The output has shape ``(k,)`` for a single row, ``(n, k)``
@@ -50,7 +51,8 @@ def model_to_jax_waveform(model: "Model", modes: Optional[Sequence] = None) -> C
         total_mass,
         distance_mpc,
         inclination,
-        reference_phase=0.0,
+        coalescence_phase=0.0,
+        merger_time=0.0,
     ):
         params = jnp.atleast_2d(jnp.asarray(params, jnp.float64))
         n_rows = params.shape[0]
@@ -60,12 +62,19 @@ def model_to_jax_waveform(model: "Model", modes: Optional[Sequence] = None) -> C
             frequencies_hz,
             jnp.broadcast_to(jnp.asarray(distance_mpc, jnp.float64), (n_rows,)),
         )
-        # `reference_phase` is a coalescence phase: it rotates mode (l, m)
-        # by exp(i m phi_c).
-        reference_phase = jnp.reshape(
-            jnp.asarray(reference_phase, jnp.float64), (-1, 1, 1)
+        # the coalescence phase rotates mode (l, m) by exp(i m phi_c); the
+        # merger time is a time shift, the same for every mode
+        coalescence_phase = jnp.reshape(
+            jnp.asarray(coalescence_phase, jnp.float64), (-1, 1, 1)
         )
-        phase = phase + emms[None, :, None] * reference_phase
+        merger_time = jnp.reshape(jnp.asarray(merger_time, jnp.float64), (-1, 1, 1))
+        f = jnp.asarray(frequencies_hz, jnp.float64)
+        f = jnp.reshape(f, (-1, 1, f.shape[-1]))
+        phase = (
+            phase
+            + emms[None, :, None] * coalescence_phase
+            - 2 * jnp.pi * f * merger_time
+        )
         h_plus, h_cross = mode_polarizations(
             amp, phase, modes, inclination, 0.0, xp=jnp
         )

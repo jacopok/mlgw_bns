@@ -15,9 +15,10 @@ as
 
 see for instance Appendix E of `arXiv:2004.06503
 <https://arxiv.org/pdf/2004.06503.pdf>`_. Each individual mode amplitude
-and phase is reconstructed by a :class:`ModeModel`, while the mode-relative
-time shifts that align the mergers across modes are supplied by an
-external predictor (``time_shifts_predictor``).
+and phase is reconstructed by a :class:`ModeModel`, from residuals which are
+referenced, waveform by waveform, to the (2,2) mode at the lowest frequency
+of the training band; at prediction time the (2,2) mode itself gives the
+merger time and coalescence phase to which all of them are referenced.
 
 The module also exposes two summation kernels --- a Numba parallel kernel
 and a NumPy ``einsum`` kernel --- that perform the per-frequency sum over
@@ -37,8 +38,12 @@ from importlib.resources import files
 from joblib import Parallel, delayed
 from numba import njit, prange  # type: ignore
 
-from .data_management import Residuals
-from .data_management import ParameterRanges
+from .data_management import (
+    ParameterRanges,
+    Residuals,
+    re_reference,
+    reference_gauge,
+)
 from .dataset_generation import Dataset
 from .progress import joblib_progress
 from .higher_order_modes import (
@@ -49,14 +54,7 @@ from .higher_order_modes import (
     _post_newtonian_phases_by_mode,
 )
 from .mode_model import ModeModel, ParametersWithExtrinsic
-from .neural_network import (
-    Hyperparameters,
-    ModePhasesNN,
-    TimeshiftsGPR,
-    TimeshiftsNN,
-    load_mode_phases_predictor_from_file,
-    load_timeshifts_predictor_from_file,
-)
+from .neural_network import Hyperparameters
 from .special_func import spinsphericalharm
 
 if TYPE_CHECKING:
@@ -189,27 +187,6 @@ def _sum_modes_einsum(
     return h_plus_real, h_plus_imag, h_cross_real, h_cross_imag
 
 
-def _broadcast_time_shifts(
-    time_shifts: Union[float, np.ndarray], n_modes: int
-) -> np.ndarray:
-    """Normalize ``time_shifts`` to one float per mode.
-
-    Parameters
-    ----------
-    time_shifts : np.ndarray or float
-        Either one time shift per mode, or a single one to be used for
-        all of them.
-    n_modes : int
-        Number of modes in the model.
-
-    Returns
-    -------
-    np.ndarray
-        Array of shape ``(n_modes,)``.
-    """
-    return np.broadcast_to(np.asarray(time_shifts, dtype=float), (n_modes,))
-
-
 def _build_mode_coeffs(
     modes: list[Mode],
     mode_indices: list[int],
@@ -307,12 +284,6 @@ class _LazyModeModelsDict(dict):
             waveform_generator=self._model._generator_factory(mode),
             **self._model._mode_model_kwargs,
         )
-        # Every mode uses the one shared predictor; see
-        # `Model._propagate_time_shifts_predictor`. It may still be
-        # None here, if this model has not been trained or loaded yet.
-        mode_model.timeshifts_predictor = self._model.time_shifts_predictor
-        mode_model.mode_phases_predictor = self._model.mode_phases_predictor
-        mode_model.mode_phases_index = self._model._mode_phases_column(mode)
         self[mode] = mode_model
         return mode_model
 
@@ -340,13 +311,6 @@ class Model:
         Callable that, given a mode, returns the appropriate
         :class:`~mlgw_bns.higher_order_modes.ModeGenerator` to use during
         training. Defaults to :func:`teob_mode_generator_factory`.
-    time_shifts_predictor : TimeshiftsGPR or TimeshiftsNN, optional
-        Predictor for the mode-relative time shifts used to align the
-        mergers of different modes. If ``None``, the constructor tries to
-        load a default :class:`TimeshiftsNN` checkpoint, falling back to a
-        :class:`TimeshiftsGPR` checkpoint, and finally storing ``None`` if
-        neither is available (in which case the user must supply
-        ``time_shifts`` explicitly to :meth:`predict`).
     **model_kwargs
         Extra keyword arguments forwarded to each :class:`ModeModel`. The
         special key ``filename`` is consumed here and used as the *base*
@@ -360,14 +324,12 @@ class Model:
     mode_models : dict[Mode, ModeModel]
         Lazy mapping ``mode -> ModeModel``. The :class:`ModeModel` instance is
         created on first access.
-    time_shifts_predictor : TimeshiftsGPR or TimeshiftsNN or None
-        Predictor used to compute the per-mode time shifts, when not
-        supplied externally.
 
     Raises
     ------
     ValueError
-        If ``modes`` is empty.
+        If ``modes`` does not include the (2,2) mode, which sets the merger
+        time and coalescence phase of all the others.
 
     References
     ----------
@@ -379,31 +341,17 @@ class Model:
         self,
         modes: list[Mode],
         generator_factory: ModeGeneratorFactory = teob_mode_generator_factory,
-        time_shifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None,
-        mode_phases_predictor: Optional[ModePhasesNN] = None,
         **model_kwargs,
     ):
-        if not modes:
-            raise ValueError("At least one mode must be provided")
+        modes = [Mode(int(lm[0]), int(lm[1])) for lm in modes]
+        if Mode(2, 2) not in modes:
+            raise ValueError(
+                "The modes of a Model must include (2, 2): it sets the merger "
+                "time and coalescence phase of all the others."
+            )
 
         self.modes = modes
         self._base_filename = model_kwargs.pop("filename", "")
-
-        if time_shifts_predictor is None:
-            self.time_shifts_predictor = self._load_default_time_shifts_predictor()
-        else:
-            self.time_shifts_predictor = time_shifts_predictor
-
-        # Shared, cross-mode predictor of the per-mode reference phases
-        # ``[phi_lm[f0] for lm in modes]``. Trained by
-        # :meth:`_train_reference_predictors` alongside the time-shift
-        # predictor, on a small dedicated pre-pass dataset.
-        if mode_phases_predictor is None:
-            self.mode_phases_predictor: Optional[ModePhasesNN] = (
-                self._load_default_mode_phases_predictor()
-            )
-        else:
-            self.mode_phases_predictor = mode_phases_predictor
 
         # Stored for lazy construction of the per-mode `ModeModel` objects.
         self._generator_factory = generator_factory
@@ -414,48 +362,6 @@ class Model:
         # `(modes, backend) -> BatchedSurrogate`, see `batched_surrogate`;
         # emptied whenever the underlying model changes.
         self._batched_cache: dict = {}
-
-    def _load_default_time_shifts_predictor(
-        self,
-    ) -> Optional[Union[TimeshiftsNN, TimeshiftsGPR]]:
-        """Try to load the time-shift predictor saved alongside this model.
-
-        Looks for the checkpoint at :attr:`filename_timeshifts`, i.e.
-        ``"{base_filename}_timeshifts.pkl"``. Returns ``None`` if it is
-        not available (e.g. no ``base_filename`` was set yet, or the
-        model has not been trained/saved).
-        """
-        if not self.base_filename:
-            return None
-        try:
-            return load_timeshifts_predictor_from_file(self.filename_timeshifts)
-        except (FileNotFoundError, ValueError) as e:
-            logging.warning(
-                "Could not load default time-shift predictor (%s). "
-                "`time_shifts` must be provided explicitly to `predict`.",
-                e,
-            )
-            return None
-
-    @property
-    def filename_timeshifts(self) -> str:
-        """File name in which to save the shared mode time-shifts predictor."""
-        return f"{self.base_filename}_timeshifts.pkl"
-
-    def _load_default_mode_phases_predictor(self) -> Optional[ModePhasesNN]:
-        """Try to load the mode-phases predictor saved alongside this model."""
-        if not self.base_filename:
-            return None
-        try:
-            return load_mode_phases_predictor_from_file(self.filename_mode_phases)
-        except (FileNotFoundError, ValueError) as e:
-            logging.warning("Could not load default mode-phases predictor (%s).", e)
-            return None
-
-    @property
-    def filename_mode_phases(self) -> str:
-        """File name in which to save the shared per-mode reference-phase predictor."""
-        return f"{self.base_filename}_mode_phases.pkl"
 
     def mode_filename(self, mode: Mode) -> str:
         """Return the on-disk filename for a single mode.
@@ -572,8 +478,8 @@ class Model:
     ) -> "Model":
         """Load a pretrained :class:`Model` shipped with the package.
 
-        The metadata/arrays/nn streams of every mode, plus the single
-        shared time-shift predictor, are read from the package resources
+        The metadata/arrays/nn streams of every mode are read from the
+        package resources
         (:data:`PRETRAINED_MODEL_FOLDER`). This is the quickest way to get
         a usable model without training one.
 
@@ -616,39 +522,15 @@ class Model:
 
         base_filename = PRETRAINED_MODEL_FOLDER + model_name
 
-        # Load the shared predictors up front and hand them to the
-        # constructor: letting the constructor look for them on disk would
-        # only find them if the cwd happened to mirror the package layout.
-        kwargs.setdefault(
-            "time_shifts_predictor",
-            load_timeshifts_predictor_from_file(
-                files(__name__).joinpath(f"{base_filename}_timeshifts.pkl").open("rb")
-            ),
-        )
-        try:
-            kwargs.setdefault(
-                "mode_phases_predictor",
-                load_mode_phases_predictor_from_file(
-                    files(__name__).joinpath(f"{base_filename}_mode_phases.pkl").open("rb")
-                ),
-            )
-        except (FileNotFoundError, ValueError):
-            logging.warning(
-                "Pretrained model %s has no mode-phases predictor.", model_name
-            )
-
         model = cls(modes=modes, filename=base_filename, **kwargs)
 
         for mode in model.modes:
             mode_model = model.mode_models[mode]
-            # The per-mode timeshift stream is None: every mode shares the
-            # single predictor loaded above.
             mode_model.load(
                 streams=(
                     files(__name__).joinpath(mode_model.filename_metadata).open("rb"),
                     files(__name__).joinpath(mode_model.filename_arrays).open("rb"),
                     files(__name__).joinpath(mode_model.filename_nn).open("rb"),
-                    None,
                 )
             )
 
@@ -662,11 +544,6 @@ class Model:
         training_downsampling_dataset_size: Optional[int] = 64,
         training_pca_dataset_size: Optional[int] = 256,
         training_nn_dataset_size: Optional[int] = 256,
-        reference_dataset_size: int = 2000,
-        reference_grid_points: int = 64,
-        reference_fmax_hz: float = 512.0,
-        reference_batch_size: Optional[int] = None,
-        seed: int = 0,
         n_jobs: int = 1,
     ) -> None:
         """Run :meth:`ModeModel.generate` for every mode.
@@ -676,15 +553,11 @@ class Model:
         dataset sizes have the same meaning as in :meth:`ModeModel.generate`;
         setting one of them to ``None`` reuses pre-existing data for that step.
 
-        When ``training_nn_dataset_size`` is not ``None``, a reference
-        pre-pass (:meth:`_train_reference_predictors`) runs *first*: it fits
-        the shared cross-mode time-shift predictor :math:`\\Delta t(\\theta)`
-        and the shared per-mode reference-phase predictor
-        :math:`\\phi_{\\ell m}(f_0)` on ``reference_dataset_size`` waveforms
-        sampled on a coarse ``reference_grid_points``-node geometric grid
-        (``f_0 -> reference_fmax_hz``). Both predictions are then subtracted
-        from every mode's training residuals before the downsampling, PCA
-        and NN steps see them, and added back at predict time.
+        One EOB call per parameter point produces every mode; the phase
+        residuals of each waveform are referenced to its (2,2) mode at the
+        lowest frequency of the band (see
+        :func:`~mlgw_bns.data_management.re_reference`), so that no
+        regressor for time shifts or mode phases is needed.
 
         Parameters
         ----------
@@ -697,28 +570,10 @@ class Model:
         training_nn_dataset_size : int, optional
             Size of the dataset used to train the neural network on the
             PCA residuals. Defaults to 256.
-        reference_dataset_size : int, optional
-            Number of waveforms for the shared time-shift / reference-phase
-            pre-pass. Defaults to 2000.
-        reference_grid_points : int, optional
-            Number of geometric frequency nodes for the pre-pass. Defaults
-            to 64.
-        reference_fmax_hz : float, optional
-            Upper frequency of the pre-pass grid, in Hz. Defaults to 512.
-        reference_batch_size : int, optional
-            Number of pre-pass waveforms generated per EOB sweep. The full
-            ``(batch, reference_grid_points)`` residual arrays are reduced to
-            their per-point regression targets and discarded before the next
-            batch, so peak memory scales with
-            ``reference_batch_size * reference_grid_points`` rather than
-            ``reference_dataset_size * reference_grid_points``. ``None`` (the
-            default) runs the whole pre-pass as a single batch.
-        seed : int, optional
-            Seed for the pre-pass parameter generator. Defaults to 0.
         n_jobs : int, optional
             Number of parallel worker processes used for every EOB sweep in
-            this call (the reference pre-pass, the per-mode downsampling
-            training, and the shared PCA/NN sweep). Sequential (``1``) by
+            this call (the per-mode downsampling training, and the shared
+            PCA/NN sweep). Sequential (``1``) by
             default -- parallelism is opt-in; pass a higher value
             explicitly to use multiple workers.
 
@@ -734,16 +589,6 @@ class Model:
                 "`self.modes`, since the shared predictors are trained from it."
             )
         self._batched_cache.clear()
-
-        if training_nn_dataset_size is not None:
-            self._train_reference_predictors(
-                reference_dataset_size,
-                reference_grid_points,
-                reference_fmax_hz,
-                seed,
-                reference_batch_size=reference_batch_size,
-                n_jobs=n_jobs,
-            )
 
         # Per-mode downsampling indices first: each still trains on its own
         # (small) EOB waveform sweep -- see the plan's Step C.
@@ -769,7 +614,6 @@ class Model:
                 training_downsampling_dataset_size=None,
                 training_pca_dataset_size=training_pca_dataset_size,
                 training_nn_dataset_size=training_nn_dataset_size,
-                timeshifts_predictor=self.time_shifts_predictor,
                 precomputed_residuals=(
                     None if precomputed_by_mode is None
                     else precomputed_by_mode[mode]
@@ -840,192 +684,6 @@ class Model:
             )
         return precomputed
 
-    def _reference_grid(
-        self, reference_grid_points: int, reference_fmax_hz: float
-    ) -> "tuple[np.ndarray, np.ndarray, float]":
-        """Coarse geometric ``f_0 -> reference_fmax_hz`` grid for the pre-pass.
-
-        Returns ``(grid_hz, f_ref_natural, f0_natural)``; the first node is
-        pinned to the dataset's own ``f_0`` so the per-mode reference phase
-        is read at exactly the training grid's lowest node.
-        """
-        dataset = self.mode_models[Mode(2, 2)].dataset
-        f0_natural = float(dataset.frequencies[0])
-        grid_hz = np.geomspace(
-            dataset.natural_units_to_hz(f0_natural),
-            min(reference_fmax_hz, dataset.effective_srate_hz / 2),
-            reference_grid_points,
-        )
-        f_ref_natural = dataset.hz_to_natural_units(grid_hz)
-        f_ref_natural[0] = f0_natural
-        grid_hz = dataset.natural_units_to_hz(f_ref_natural)
-        return grid_hz, f_ref_natural, f0_natural
-
-    def _reference_sweep_targets(
-        self,
-        parameter_generator,
-        n_points: int,
-        grid_hz: np.ndarray,
-        f_ref_natural: np.ndarray,
-        batch_size: Optional[int] = None,
-        progress_label: str = "Reference pre-pass sweep",
-        n_jobs: int = 1,
-    ) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
-        r"""Draw ``n_points`` parameters and reduce them to regression targets.
-
-        Pulls ``n_points`` parameters from ``parameter_generator``, runs the
-        multi-mode EOB sweep in batches of ``batch_size`` (default: one
-        batch), and reduces each batch's full ``(batch, n_grid)`` phase
-        residual arrays --- discarded straight after --- to the per-point
-        targets the two shared predictors consume:
-
-        * ``timeshifts`` --- the scalar low-frequency slope of the (2,2)
-          phase residual (``Residuals.phase_timeshifts``);
-        * ``reference_phases`` --- each mode's phase residual at ``f_0``,
-          column-ordered like :attr:`modes`.
-
-        Peak memory scales with ``batch_size * len(f_ref_natural)`` rather
-        than ``n_points * len(f_ref_natural)``.
-
-        ``n_jobs`` is sequential (``1``) by default -- parallelism is
-        opt-in; pass a higher value explicitly to use multiple workers.
-
-        Returns
-        -------
-        tuple
-            ``(parameter_array, timeshifts, reference_phases)`` with shapes
-            ``(n_valid, 5)``, ``(n_valid,)`` and ``(n_valid, n_modes)``.
-        """
-        reference_mode = Mode(2, 2)
-        batch_size = batch_size or n_points
-        batch_size = max(1, min(int(batch_size), n_points))
-
-        params_batches: list[np.ndarray] = []
-        timeshift_batches: list[np.ndarray] = []
-        mode_phase_batches: list[np.ndarray] = []
-
-        n_done = 0
-        while n_done < n_points:
-            this_batch = min(batch_size, n_points - n_done)
-            params_list = [next(parameter_generator) for _ in range(this_batch)]
-            n_done += this_batch
-
-            parameter_array, _, phase_residuals = self._multimode_mode_residuals(
-                params_list,
-                f_ref_natural,
-                progress_desc=f"{progress_label} ({n_done}/{n_points})",
-                n_jobs=n_jobs,
-            )
-            if len(parameter_array) == 0:
-                continue
-
-            reference_phase_residuals = phase_residuals[reference_mode]
-            timeshifts = Residuals(
-                np.zeros_like(reference_phase_residuals), reference_phase_residuals
-            ).phase_timeshifts(frequencies=grid_hz)
-            reference_phases = np.stack(
-                [phase_residuals[mode][:, 0] for mode in self.modes], axis=1
-            )
-
-            params_batches.append(parameter_array)
-            timeshift_batches.append(np.asarray(timeshifts, dtype=float))
-            mode_phase_batches.append(np.asarray(reference_phases, dtype=float))
-
-        if sum(len(p) for p in params_batches) < 2:
-            raise RuntimeError(
-                "The reference pre-pass produced fewer than 2 valid waveforms."
-            )
-
-        return (
-            np.concatenate(params_batches, axis=0),
-            np.concatenate(timeshift_batches, axis=0),
-            np.concatenate(mode_phase_batches, axis=0),
-        )
-
-    def _train_reference_predictors(
-        self,
-        reference_dataset_size: int,
-        reference_grid_points: int,
-        reference_fmax_hz: float,
-        seed: int,
-        reference_batch_size: Optional[int] = None,
-        n_jobs: int = 1,
-    ) -> None:
-        r"""Fit the shared time-shift and per-mode reference-phase predictors.
-
-        Runs *before* any per-mode :meth:`ModeModel.generate`, on its own
-        small parameter sample and a coarse geometric frequency grid
-        (``f_0 -> reference_fmax_hz``). One EOB residual draw per mode
-        feeds both:
-
-        * :class:`~mlgw_bns.neural_network.TimeshiftsNN` --- the
-          least-squares low-frequency slope of the (2,2) phase residual
-          (``Residuals.phase_timeshifts``), the shared cross-mode
-          :math:`\Delta t(\theta)`;
-        * :class:`~mlgw_bns.neural_network.ModePhasesNN` --- the raw
-          per-mode reference phase :math:`\phi_{\ell m}(f_0)`, which it
-          models as an analytic stationary-phase backbone plus a smooth
-          ridge-fit leftover (see
-          :func:`~mlgw_bns.pn_modes.reference_phase_backbone`).
-
-        Both predictions are subtracted from the per-mode training
-        residuals by ``remove_linear_trend`` and added back at predict
-        time, so the downstream PCA/NN only ever see small residuals.
-
-        The EOB sweep is run in batches of ``reference_batch_size``: each
-        batch's full ``(batch, reference_grid_points)`` residual arrays are
-        immediately reduced to the per-point regression targets (the scalar
-        (2,2) time shift and each mode's phase residual at :math:`f_0`) and
-        then discarded, so peak memory scales with the batch size rather
-        than ``reference_dataset_size``.
-
-        ``n_jobs`` is sequential (``1``) by default -- parallelism is
-        opt-in; pass a higher value explicitly to use multiple workers.
-        """
-        reference_mode = Mode(2, 2)
-        if reference_mode not in self.modes:
-            raise ValueError(
-                "Model.generate() requires Mode(2, 2) to be among "
-                "`self.modes`, since the shared predictors are trained from it."
-            )
-
-        grid_hz, f_ref_natural, f0_natural = self._reference_grid(
-            reference_grid_points, reference_fmax_hz
-        )
-        parameter_generator = self.mode_models[
-            reference_mode
-        ].dataset.make_parameter_generator(seed=seed)
-
-        parameter_array, timeshifts, reference_phases = self._reference_sweep_targets(
-            parameter_generator,
-            reference_dataset_size,
-            grid_hz,
-            f_ref_natural,
-            batch_size=reference_batch_size,
-            n_jobs=n_jobs,
-        )
-
-        logging.info(
-            "Reference pre-pass: %d/%d valid waveforms on a %d-point grid "
-            "[%.1f, %.1f] Hz",
-            len(parameter_array), reference_dataset_size, len(grid_hz),
-            grid_hz[0], grid_hz[-1],
-        )
-
-        self.time_shifts_predictor = TimeshiftsNN(
-            training_params=parameter_array,
-            training_timeshifts=timeshifts,
-        ).fit()
-        self._propagate_time_shifts_predictor()
-
-        self.mode_phases_predictor = ModePhasesNN(
-            modes=[(m.l, m.m) for m in self.modes],
-            f0_natural=f0_natural,
-            training_params=parameter_array,
-            training_mode_phases=reference_phases,
-        ).fit()
-        self._propagate_mode_phases_predictor()
-
     def _multimode_mode_residuals(
         self,
         params_list: list,
@@ -1091,7 +749,7 @@ class Model:
                 )
             except Exception:  # pragma: no cover - EOB blowups
                 return None
-            out = {}
+            raw = {}
             for mode in modes:
                 f_eob, amp_eob, phi_eob = waveforms[mode]
                 if (
@@ -1106,8 +764,15 @@ class Model:
                     params if reference is None else reference, f_eob
                 )
                 phi_pn = pn_gen.post_newtonian_phase(params, f_eob)
-                amp_res = amp_eob / amp_pn
-                phi_res = phi_eob - phi_pn
+                raw[mode] = (f_eob, amp_eob / amp_pn, phi_eob - phi_pn)
+            # Every mode referenced to the (2,2) of the same waveform at f0,
+            # on the full grid; see `reference_gauge` and `re_reference`.
+            f_22, _, phi_22 = raw[Mode(2, 2)]
+            value, slope = reference_gauge(f_22, phi_22)
+            out = {}
+            for mode in modes:
+                f_eob, amp_res, phi_res = raw[mode]
+                phi_res = re_reference(f_eob, phi_res, mode.m, value, slope)
                 if mode in ds_idx:
                     amp_indices, phi_indices = ds_idx[mode]
                     amp_res = amp_res[amp_indices]
@@ -1138,53 +803,6 @@ class Model:
             for mode in modes
         }
         return parameter_array, amp_residuals, phase_residuals
-
-    def _propagate_mode_phases_predictor(self) -> None:
-        """Point every already-built per-mode model at the shared
-        mode-phases predictor, tagging each with its output column.
-
-        The column index is looked up in the *predictor's own*
-        ``modes`` list (its training order), not ``self.modes`` ---
-        which may list the same modes in a different order (e.g. a
-        caller requesting ``modes=[...]`` in a different sequence than
-        the pretrained checkpoint was fit with). Indexing off
-        ``self.modes`` instead silently feeds every mismatched mode
-        another mode's reference-phase column.
-        """
-        predictor = self.mode_phases_predictor
-        if predictor is None or predictor.modes is None:
-            return
-        for mode in self.modes:
-            if mode in self.mode_models and (mode.l, mode.m) in map(tuple, predictor.modes):
-                mm = self.mode_models[mode]
-                mm.mode_phases_predictor = predictor
-                mm.mode_phases_index = self._mode_phases_column(mode)
-
-    def _mode_phases_column(self, mode: Mode) -> int:
-        """Output column of :attr:`mode_phases_predictor` belonging to ``mode``.
-
-        Looked up in the predictor's own ``modes`` (its training order)
-        whenever it records them; ``self.modes`` is only the fallback. A
-        model loaded with a subset of the trained modes --- e.g.
-        ``default_for_testing(modes=[(2,2), (2,1), (3,3), (4,4)])`` of the
-        7-mode ``default_hom`` --- otherwise hands (3,3) and (4,4) the
-        (3,1) and (3,2) columns: an O(1) rad error in their phase relative
-        to the (2,2), up to ~1e-3 in the full-waveform mismatch.
-        """
-        predictor = self.mode_phases_predictor
-        if predictor is not None and predictor.modes is not None:
-            return [tuple(lm) for lm in predictor.modes].index((mode.l, mode.m))
-        return self.modes.index(mode)
-
-    def _propagate_time_shifts_predictor(self) -> None:
-        """Point every already-built per-mode model at the shared predictor.
-
-        The models built later pick it up in
-        :meth:`_LazyModeModelsDict.__missing__`; this covers the ones which
-        already exist by the time the predictor becomes available.
-        """
-        for model in self.mode_models.values():
-            model.timeshifts_predictor = self.time_shifts_predictor
 
     def set_hyper_and_train_nn(
         self,
@@ -1219,14 +837,8 @@ class Model:
             Whether to also persist the per-mode training residuals and
             parameters. Defaults to ``True``.
         """
-        # `include_timeshifts_predictor=False`: there is one predictor for
-        # all the modes, written once below under this model's own base
-        # filename, rather than a redundant copy next to every mode.
         def save_mode(mode: Mode) -> None:
-            self.mode_models[mode].save(
-                include_training_data=include_training_data,
-                include_timeshifts_predictor=False,
-            )
+            self.mode_models[mode].save(include_training_data=include_training_data)
 
         if len(self.modes) > 1:
             with ThreadPoolExecutor(max_workers=len(self.modes)) as executor:
@@ -1235,16 +847,6 @@ class Model:
         else:
             for mode in self.modes:
                 save_mode(mode)
-
-        if self.time_shifts_predictor is not None:
-            self.time_shifts_predictor.save_model(
-                self.filename_timeshifts, include_training_data=include_training_data
-            )
-
-        if self.mode_phases_predictor is not None:
-            self.mode_phases_predictor.save_model(
-                self.filename_mode_phases, include_training_data=include_training_data
-            )
 
     def load(
         self,
@@ -1263,17 +865,13 @@ class Model:
         for mode in self.modes:
             self.mode_models[mode].load(streams=streams)
 
-        # Per-mode checkpoints carry no predictor of their own (older ones
-        # may, in which case this overwrites the redundant copy with the
-        # shared one they were all identical to anyway).
-        if self.time_shifts_predictor is None:
-            self.time_shifts_predictor = self._load_default_time_shifts_predictor()
-        self._propagate_time_shifts_predictor()
-
-        if self.mode_phases_predictor is None:
-            self.mode_phases_predictor = self._load_default_mode_phases_predictor()
-        self._propagate_mode_phases_predictor()
         self._batched_cache.clear()
+
+    def merger_reference(self, params: ParametersWithExtrinsic) -> tuple[float, float]:
+        """The (2,2) reference line of ``params``, see
+        :meth:`ModeModel.merger_reference`."""
+        mode_model = self.mode_models[Mode(2, 2)]
+        return mode_model.merger_reference(params.intrinsic(mode_model.dataset))
 
     def predict_amplitude_phase_mode(
         self,
@@ -1295,7 +893,8 @@ class Model:
         Returns
         -------
         tuple[np.ndarray, np.ndarray]
-            ``(amplitude, phase)`` arrays for the requested mode.
+            ``(amplitude, phase)`` arrays for the requested mode, referenced
+            to the merger as in :meth:`ModeModel.predict_amplitude_phase`.
 
         Raises
         ------
@@ -1305,64 +904,21 @@ class Model:
         if mode not in self.modes:
             raise ValueError(f"Mode {mode} is not included in this model")
 
-        return self.mode_models[mode].predict_amplitude_phase_optimized(frequencies, params)
-
-    def _resolve_time_shifts(
-        self,
-        params: ParametersWithExtrinsic,
-        time_shifts: Optional[Union[float, np.ndarray]],
-    ) -> Union[float, np.ndarray]:
-        """Return the time shifts to use, predicting them if needed.
-
-        Parameters
-        ----------
-        params : ParametersWithExtrinsic
-            Source parameters, used to query :attr:`time_shifts_predictor`.
-        time_shifts : np.ndarray or float or None
-            Explicitly provided time shifts, returned unchanged if not
-            ``None``.
-
-        Returns
-        -------
-        np.ndarray or float
-            The given ``time_shifts``, or the prediction of
-            :attr:`time_shifts_predictor` for ``params``.
-
-        Raises
-        ------
-        ValueError
-            If ``time_shifts`` is ``None`` and this model has no
-            time-shift predictor available.
-        """
-        if time_shifts is not None:
-            return time_shifts
-
-        if self.time_shifts_predictor is None:
-            raise ValueError(
-                "This model has no time-shift predictor available, so the "
-                "`time_shifts` aligning the mode mergers cannot be computed "
-                "automatically: please provide them explicitly."
-            )
-
-        # One row in, one row out: a scalar if the predictor was trained on
-        # a single shared time shift, one value per mode otherwise.
-        prediction = self.time_shifts_predictor.predict(
-            np.array([params.intrinsic(self.dataset).array])
+        return self.mode_models[mode].predict_amplitude_phase(
+            frequencies, params, merger_reference=self.merger_reference(params)
         )
-        return np.asarray(prediction)[0]
 
     def predict(
         self,
         frequencies: np.ndarray,
         params: ParametersWithExtrinsic,
-        time_shifts: Optional[Union[float, np.ndarray]] = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         r"""Predict the full frequency-domain waveform from all modes.
 
         Combines the predictions of every per-mode :class:`ModeModel` into the
         two observer-frame polarizations :math:`h_+, h_\times`, using the
-        provided mode-relative time shifts and the inclination contained
-        in ``params``.
+        inclination contained in ``params``. The merger is at
+        ``params.merger_time``, with orbital phase ``params.coalescence_phase``.
 
         Parameters
         ----------
@@ -1370,11 +926,6 @@ class Model:
             Frequencies at which to evaluate the waveform, in Hz.
         params : ParametersWithExtrinsic
             Source parameters (intrinsic + extrinsic).
-        time_shifts : np.ndarray or float, optional
-            Time shifts, one per mode, that align the per-mode mergers
-            in the time domain; a scalar is broadcast to every mode.
-            If ``None`` (the default) they are predicted from ``params``
-            with :attr:`time_shifts_predictor`.
 
         Returns
         -------
@@ -1383,58 +934,15 @@ class Model:
             convention as :meth:`ModeModel.predict`. The combination
             appearing in the mode decomposition is ``h_plus - 1j * h_cross``.
 
-        Raises
-        ------
-        ValueError
-            If ``time_shifts`` is ``None`` and no predictor is available.
-
         References
         ----------
         See Appendix E of `arXiv:2004.06503
         <https://arxiv.org/pdf/2004.06503.pdf>`_.
         """
-        return self._compute_polarizations_from_modes(
-            frequencies=frequencies,
-            params=params,
-            time_shifts=self._resolve_time_shifts(params, time_shifts),
-            inclination=params.inclination,
-        )
-
-    def _compute_polarizations_from_modes(
-        self,
-        frequencies: np.ndarray,
-        params: ParametersWithExtrinsic,
-        time_shifts: Union[float, np.ndarray],
-        inclination: float,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        r"""Internal driver for :meth:`predict`.
-
-        Computes the four Cartesian components ``(h_+,r), (h_+,i),
-        (h_x,r), (h_x,i)`` via :meth:`_hpc_waveform`, then assembles the
-        complex polarizations and applies the conventional
-        :math:`1/(2\eta)` normalization.
-
-        Parameters
-        ----------
-        frequencies : np.ndarray
-            Frequencies at which to evaluate the waveform, in Hz.
-        params : ParametersWithExtrinsic
-            Source parameters.
-        time_shifts : np.ndarray or float
-            Per-mode time shifts; a scalar is broadcast to every mode.
-        inclination : float
-            Inclination angle, in radians.
-
-        Returns
-        -------
-        tuple[np.ndarray, np.ndarray]
-            ``(h_plus, h_cross)``.
-        """
         h_plus_real, h_plus_imag, h_cross_real, h_cross_imag = self._hpc_waveform(
             frequencies=frequencies,
             params=params,
-            time_shifts=time_shifts,
-            inclination=inclination,
+            inclination=params.inclination,
             use_pn=False,
         )
 
@@ -1449,7 +957,6 @@ class Model:
         self,
         frequencies: np.ndarray,
         params: ParametersWithExtrinsic,
-        time_shifts: Optional[Union[float, np.ndarray]] = None,
     ) -> dict[tuple[int, int], np.ndarray]:
         r"""Return the per-mode complex Cartesian contributions.
 
@@ -1464,9 +971,6 @@ class Model:
             Frequencies at which to evaluate the waveform, in Hz.
         params : ParametersWithExtrinsic
             Source parameters.
-        time_shifts : np.ndarray or float, optional
-            Per-mode time shifts (see :meth:`predict`). Predicted from
-            ``params`` if ``None``.
 
         Returns
         -------
@@ -1477,7 +981,6 @@ class Model:
         modes_dict = self._hpc_waveform_per_mode(
             frequencies=frequencies,
             params=params,
-            time_shifts=self._resolve_time_shifts(params, time_shifts),
             inclination=params.inclination,
             use_pn=False,
         )
@@ -1595,14 +1098,10 @@ class Model:
         self,
         frequencies: np.ndarray,
         params: ParametersWithExtrinsic,
-        time_shifts: Union[float, np.ndarray],
         inclination: float,
         use_pn: bool,
     ) -> dict[tuple[int, int], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
         r"""Per-mode Cartesian components of :math:`h_+` and :math:`h_\times`.
-
-        Same machinery as :meth:`_hpc_waveform`, but instead of summing
-        over the modes it returns one tuple of components per mode.
 
         Parameters
         ----------
@@ -1610,8 +1109,6 @@ class Model:
             Frequencies at which to evaluate, in Hz.
         params : ParametersWithExtrinsic
             Source parameters.
-        time_shifts : np.ndarray or float
-            Per-mode time shifts; a scalar is broadcast to every mode.
         inclination : float
             Inclination angle, in radians.
         use_pn : bool
@@ -1626,37 +1123,22 @@ class Model:
             Mapping ``(l, m) -> (h_plus_real, h_plus_imag,
             h_cross_real, h_cross_imag)`` for every mode in :attr:`modes`.
         """
-        assert use_pn is not None
         Ylm_real, Ylm_imag, Ylm_real_mneg, Ylm_imag_mneg = self._compute_Ylm_modes(
             modes=self.modes,
             phi=0.0,
             iota=inclination,
         )
 
-        time_shifts_per_mode = _broadcast_time_shifts(time_shifts, len(self.modes))
-
-        active_indices: list[int] = []
         amps_list: list[np.ndarray] = []
         phases_list: list[np.ndarray] = []
         dataset = self.dataset
-        # Fixed anchor for the time-shift phase trend below, in the same
-        # (observer-frame Hz) units as `frequencies`: the dataset's own
-        # first downsampling node (`effective_initial_frequency_hz`, at
-        # `dataset.total_mass`), rescaled to `params.total_mass`. Must be
-        # independent of `frequencies` itself --- using `frequencies[0]`
-        # made the reconstructed phase depend on wherever the caller's own
-        # query grid happened to start, invisible as long as every caller
-        # queried from the trained band's edge; the post-Newtonian
-        # low-frequency extension is the one case where `frequencies[0]`
-        # legitimately varies per call, and it exposed this as a
-        # call-dependent phase offset shared by every mode.
-        reference_frequency_hz = dataset.effective_initial_frequency_hz * (
-            dataset.total_mass / params.total_mass
-        )
+        if use_pn:
+            parameters_intrinsic = params.intrinsic(dataset)
+        else:
+            merger_reference = self.merger_reference(params)
 
-        for idx, mode in enumerate(self.modes):
+        for mode in self.modes:
             if use_pn:
-                parameters_intrinsic = params.intrinsic(dataset)
                 amp = _post_newtonian_amplitudes_by_mode[mode](
                     parameters_intrinsic,
                     frequencies * params.mass_sum_seconds,
@@ -1666,31 +1148,18 @@ class Model:
                     frequencies * params.mass_sum_seconds,
                 )
             else:
-                # `apply_time_shift=False`: the linear-in-frequency phase
-                # trend is applied here, once, from `time_shifts_per_mode`
-                # (which may be user-supplied) --- not a second time inside
-                # `predict_amplitude_phase_optimized`.
-                amp, phase = self.mode_models[mode].predict_amplitude_phase_optimized(
-                    frequencies, params, apply_time_shift=False
+                amp, phase = self.mode_models[mode].predict_amplitude_phase(
+                    frequencies, params, merger_reference=merger_reference
                 )
-                ts = time_shifts_per_mode[idx]
-                # Time shifts are stored in units of the reference total mass
-                # of the dataset, so we rescale to the requested total mass.
-                ts_scaled = ts * (params.total_mass / self.dataset.total_mass)
-                phase += 2 * np.pi * (frequencies - reference_frequency_hz) * ts_scaled
-            active_indices.append(idx)
             amps_list.append(amp)
             phases_list.append(phase)
-
-        if not active_indices:
-            return {}
 
         amp_arr = np.stack(amps_list)
         cosphi_arr = np.cos(np.stack(phases_list))
         sinphi_arr = np.sin(np.stack(phases_list))
         coeffs = _build_mode_coeffs(
             self.modes,
-            active_indices,
+            list(range(len(self.modes))),
             Ylm_real,
             Ylm_imag,
             Ylm_real_mneg,
@@ -1717,9 +1186,8 @@ class Model:
         Same output format as :meth:`predict_modes_dict`, but the
         amplitude and phase of every mode are taken from the
         Post-Newtonian (TaylorF2-style) expressions in
-        :mod:`~mlgw_bns.pn_modes`. No time shifts are applied
-        (``time_shifts=0``), since the PN expressions are already aligned
-        across modes.
+        :mod:`~mlgw_bns.pn_modes`, in their own (TaylorF2) reference for
+        time and phase.
 
         Parameters
         ----------
@@ -1742,7 +1210,6 @@ class Model:
         modes_dict = self._hpc_waveform_per_mode(
             frequencies=frequencies,
             params=params,
-            time_shifts=0.0,
             inclination=inclination,
             use_pn=True,
         )
@@ -1754,6 +1221,75 @@ class Model:
             result[(l, m)] = hp - 1j * hc
         return result
 
+    def teob_modes_amp_phase(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+    ) -> dict[Mode, tuple[np.ndarray, np.ndarray]]:
+        r"""Amplitude and phase of every mode from the underlying EOB code.
+
+        The counterpart of :meth:`ModeModel.predict_amplitude_phase` for
+        the ground truth: one TEOBResumS call for all of :attr:`modes`,
+        in the same units, with the phases referenced to the merger as the
+        surrogate's are (the tangent to the (2,2) phase at the top of the
+        trained band, see :meth:`ModeModel.merger_reference`) and the
+        extrinsic ``coalescence_phase`` and ``merger_time`` applied.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate the modes, in Hz.
+        params : ParametersWithExtrinsic
+            Source parameters.
+
+        Returns
+        -------
+        dict[Mode, tuple[np.ndarray, np.ndarray]]
+            ``mode -> (amplitude, phase)``.
+        """
+        dataset = self.dataset
+        # Use a shallow copy of the dataset whose total_mass is set to the
+        # requested total mass, so that the EOB generator interprets the
+        # natural-unit frequencies consistently.
+        dataset_for_teob = copy.copy(dataset)
+        dataset_for_teob.total_mass = params.total_mass
+        params_teob = params.intrinsic(dataset_for_teob)
+        f_natural = frequencies * params.mass_sum_seconds
+
+        # Two more points at the top of the trained band, for the merger
+        # reference of the (2,2): the tangent there, as in `merger_reference`.
+        reference_model = self.mode_models[Mode(2, 2)]
+        f_top = float(
+            reference_model.dataset.frequencies[
+                reference_model.downsampling_indices.phase_indices[-1]
+            ]
+        )
+        top = np.array([f_top * (1 - 1e-3), f_top])
+        grid = np.union1d(f_natural, top)
+        modes = list(self.modes)
+        generator = self.mode_models[modes[0]].waveform_generator
+        waveforms = generator.all_modes_amplitude_phase(params_teob, modes, grid)
+        at_top = np.searchsorted(grid, top)
+        at_request = np.searchsorted(grid, f_natural)
+        phase_22 = waveforms[Mode(2, 2)][2]
+        slope = (phase_22[at_top[1]] - phase_22[at_top[0]]) / (top[1] - top[0])
+        intercept = phase_22[at_top[1]] - slope * f_top
+
+        eta = params.intrinsic(dataset).eta
+        prefactor = dataset.mlgw_bns_prefactor(eta, params.total_mass) / params.distance_mpc
+        result = {}
+        for mode in modes:
+            _, amp, phase = waveforms[mode]
+            result[mode] = (
+                amp[at_request] * prefactor,
+                phase[at_request]
+                - slope * f_natural
+                - mode.m / 2 * intercept
+                + mode.m * params.coalescence_phase
+                - 2 * np.pi * params.merger_time * frequencies,
+            )
+        return result
+
     def get_teob_modes_dict(
         self,
         frequencies: np.ndarray,
@@ -1762,11 +1298,9 @@ class Model:
     ) -> dict[tuple[int, int], np.ndarray]:
         r"""Per-mode complex contributions from the underlying EOB code.
 
-        Calls each mode's underlying TEOBResumS-based waveform generator
-        directly (via :meth:`get_amplitude_phase_at_inclination`) rather
-        than going through the surrogate's neural network, then assembles
-        the observer-frame combination :math:`h_+ - i\, h_\times`. Useful
-        as a ground-truth reference when validating the surrogate.
+        The format of :meth:`predict_modes_dict`, from
+        :meth:`teob_modes_amp_phase`: directly comparable to the
+        surrogate's. Useful as a ground-truth reference when validating it.
 
         Parameters
         ----------
@@ -1785,35 +1319,16 @@ class Model:
         if inclination is None:
             inclination = params.inclination
 
-        dataset = self.dataset
-        # Use a shallow copy of the dataset whose total_mass is set to the
-        # requested total mass, so that the EOB generator interprets the
-        # natural-unit frequencies consistently.
-        dataset_for_teob = copy.copy(dataset)
-        dataset_for_teob.total_mass = params.total_mass
-        params_teob = params.intrinsic(dataset_for_teob)
-
-        f_natural = frequencies * params.mass_sum_seconds
         Ylm_real, Ylm_imag, Ylm_real_mneg, Ylm_imag_mneg = self._compute_Ylm_modes(
             modes=self.modes,
             phi=0.0,
             iota=inclination,
         )
-
-        modes = list(self.modes)
-        generator = self.mode_models[modes[0]].waveform_generator
-        waveforms = generator.all_modes_amplitude_phase(params_teob, modes, f_natural)
-
-        amps_list: list[np.ndarray] = []
-        phases_list: list[np.ndarray] = []
-        for mode in modes:
-            _f_eob, amp, phase = waveforms[mode]
-            amps_list.append(amp)
-            phases_list.append(phase)
-
-        amp_arr = np.stack(amps_list)
-        cosphi_arr = np.cos(np.stack(phases_list))
-        sinphi_arr = np.sin(np.stack(phases_list))
+        modes_amp_phase = self.teob_modes_amp_phase(frequencies, params)
+        amp_arr = np.stack([modes_amp_phase[mode][0] for mode in self.modes])
+        phase_arr = np.stack([modes_amp_phase[mode][1] for mode in self.modes])
+        cosphi_arr = np.cos(phase_arr)
+        sinphi_arr = np.sin(phase_arr)
         coeffs = _build_mode_coeffs(
             self.modes,
             list(range(len(self.modes))),
@@ -1823,7 +1338,7 @@ class Model:
             Ylm_imag_mneg,
         )
 
-        eta = params.intrinsic(dataset).eta
+        eta = params.intrinsic(self.dataset).eta
         result: dict[tuple[int, int], np.ndarray] = {}
         for i, mode in enumerate(self.modes):
             c = coeffs[i]
@@ -1840,33 +1355,12 @@ class Model:
         self,
         frequencies: np.ndarray,
         params: ParametersWithExtrinsic,
-        time_shifts: Union[float, np.ndarray],
         inclination: float,
         use_pn: Optional[bool] = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         r"""Cartesian components of :math:`h_+` and :math:`h_\times` summed over modes.
 
-        Collects the amplitude and phase of every mode (either from the
-        trained surrogate or from the PN expressions, depending on
-        ``use_pn``), packs them into ``(n_modes, n_freq)`` arrays,
-        and delegates the actual mode sum to :func:`_sum_modes_einsum`.
-
-        Parameters
-        ----------
-        frequencies : np.ndarray
-            Frequencies at which to evaluate the waveform, in Hz.
-        params : ParametersWithExtrinsic
-            Source parameters.
-        time_shifts : np.ndarray or float
-            Per-mode time shifts, in seconds, in the reference total-mass
-            units. A scalar value is broadcast to every mode. Ignored
-            when ``use_pn`` is ``True``.
-        inclination : float
-            Inclination angle, in radians.
-        use_pn : bool
-            ``True`` for the PN per-mode expressions, ``False`` for the
-            surrogate. Must be explicitly provided; passing ``None``
-            triggers an assertion error.
+        See :meth:`_hpc_waveform_per_mode`; ``use_pn`` must be given.
 
         Returns
         -------
@@ -1875,71 +1369,8 @@ class Model:
             each of shape ``(n_freq,)``.
         """
         assert use_pn is not None, "use_pn must be provided"
-
-        Ylm_real, Ylm_imag, Ylm_real_mneg, Ylm_imag_mneg = self._compute_Ylm_modes(
-            modes=self.modes,
-            phi=0.0,
-            iota=inclination,
-        )
-
-        time_shifts_per_mode = _broadcast_time_shifts(time_shifts, len(self.modes))
-
-        active_indices: list[int] = []
-        amps_list: list[np.ndarray] = []
-        phases_list: list[np.ndarray] = []
-
-        dataset = self.dataset
-        # See the matching comment in `_hpc_waveform_per_mode`: a fixed
-        # anchor, independent of `frequencies` itself, so the reconstructed
-        # phase doesn't depend on wherever the caller's query grid starts.
-        reference_frequency_hz = dataset.effective_initial_frequency_hz * (
-            dataset.total_mass / params.total_mass
-        )
-        for idx, mode in enumerate(self.modes):
-            if use_pn:
-                parameters_intrinsic = params.intrinsic(dataset)
-                amp = _post_newtonian_amplitudes_by_mode[mode](
-                    parameters_intrinsic,
-                    frequencies * params.mass_sum_seconds,
-                )
-                phase = _post_newtonian_phases_by_mode[mode](
-                    parameters_intrinsic,
-                    frequencies * params.mass_sum_seconds,
-                )
-            else:
-                # `apply_time_shift=False`: the linear-in-frequency phase
-                # trend is applied here, once, from `time_shifts_per_mode`
-                # --- not a second time inside
-                # `predict_amplitude_phase_optimized`.
-                amp, phase = self.mode_models[mode].predict_amplitude_phase_optimized(
-                    frequencies, params, apply_time_shift=False
-                )
-                ts = time_shifts_per_mode[idx]
-                # Time shifts are stored in units of the reference total mass
-                # of the dataset, so we rescale to the requested total mass.
-                ts_scaled = ts * (params.total_mass / self.dataset.total_mass)
-                phase += 2 * np.pi * (frequencies - reference_frequency_hz) * ts_scaled
-
-            active_indices.append(idx)
-            amps_list.append(amp)
-            phases_list.append(phase)
-
-        if not active_indices:
-            zeros = np.zeros_like(frequencies)
-            return zeros, zeros.copy(), zeros.copy(), zeros.copy()
-
-        amp_arr = np.stack(amps_list)
-        cosphi_arr = np.cos(np.stack(phases_list))
-        sinphi_arr = np.sin(np.stack(phases_list))
-        coeffs = _build_mode_coeffs(
-            self.modes,
-            active_indices,
-            Ylm_real,
-            Ylm_imag,
-            Ylm_real_mneg,
-            Ylm_imag_mneg,
-        )
-        return _sum_modes_einsum(amp_arr, cosphi_arr, sinphi_arr, coeffs)
+        per_mode = self._hpc_waveform_per_mode(frequencies, params, inclination, use_pn)
+        return tuple(np.sum(parts, axis=0) for parts in zip(*per_mode.values()))  # type: ignore[return-value]
 
     def _compute_Ylm_modes(
         self,

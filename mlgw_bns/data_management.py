@@ -431,113 +431,97 @@ class Residuals(SavableData):
             waveforms_1.phases - waveforms_2.phases,
         )
 
-    def flatten_phase(
-        self, frequencies: np.ndarray, first_section_flat: float = 0.2
-    ) -> np.ndarray:
-        """Subtract a linear term from the phase,
-        such that it is often close to 0.
 
-        Parameters
-        ----------
-        frequencies: np.ndarray
-                Frequencies to which the phase points correspond.
-                Required for the linear term subtraction.
-        first_section_flat: float
-                Fraction of the sample points, starting from the lowest
-                frequency, over which the linear term is fitted.
-                Defaults to 0.2.
+#: Width of the window above :math:`f_0`, as a fraction of it, over which
+#: :func:`reference_gauge` fits the (2,2) phase residual.
+REFERENCE_WINDOW = 0.25
 
-                Note that this is a fraction of the *number of sample
-                points*, not of the frequency range, so the frequency it
-                corresponds to depends on how the phase is sampled. This
-                is by design: the resulting time shift is used to flatten
-                residuals on the same grid it was computed on, so the two
-                stay consistent as long as they use the same sampling.
 
-        Returns
-        -------
-        timeshifts: np.ndarray
-                Timeshifts, in seconds if the frequencies given are in Hz,
-                
-        """
+def reference_gauge(
+    frequencies: np.ndarray,
+    phase_residuals: np.ndarray,
+    window: float = REFERENCE_WINDOW,
+) -> tuple[np.ndarray, np.ndarray]:
+    r"""Value and slope at :math:`f_0` of (2,2) phase residuals.
 
-        timeshifts = self.phase_timeshifts(frequencies, first_section_flat)
+    The residuals are fitted, row by row, with a quadratic in
+    :math:`f - f_0` over :math:`f_0 \leq f \leq (1 + w) f_0`, where
+    :math:`f_0` is ``frequencies[0]``: a least-squares fit, so that the
+    result does not depend on the grid beyond its density there.
 
-        for i, phase_arr in enumerate(self.phase_residuals):
-            self.phase_residuals[i] = phase_arr - (
-                2 * np.pi * timeshifts[i] * (frequencies - frequencies[0])
-            )
+    Parameters
+    ----------
+    frequencies : np.ndarray
+        Shape ``(n,)``, increasing, from :math:`f_0`.
+    phase_residuals : np.ndarray
+        Shape ``(N, n)`` or ``(n,)``.
+    window : float
+        :math:`w`. Defaults to :data:`REFERENCE_WINDOW`.
 
-        return timeshifts
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        The value :math:`a` and the slope :math:`s = \partial_f \phi` at
+        :math:`f_0`, each of shape ``(N,)`` (or scalars for a single row).
 
-    def phase_timeshifts(
-        self, frequencies: np.ndarray, first_section_flat: float = 0.2
-    ) -> np.ndarray:
-        r"""Time shifts implied by the linear term :meth:`flatten_phase` removes.
-
-        Unlike :meth:`flatten_phase`, this does not modify the residuals, so
-        it can be used on a set of residuals which still needs to be used in
-        its raw form afterwards.
-
-        The time shift is the least-squares slope, divided by
-        :math:`2\pi`, of the phase residual against frequency over the
-        lowest ``first_section_flat`` fraction of the sample points, with
-        a free intercept.
-
-        Restricting the fit to low frequencies is deliberate: the
-        misalignment this term is meant to capture is a genuine time
-        offset of the inspiral, whereas at high frequency the EOB-PN
-        phase difference departs from linearity for physical reasons
-        that no time shift can absorb. Fitting over the whole band would
-        let that high-frequency structure bias the slope.
-
-        A least-squares slope rather than the chord through two points:
-        the two-point estimate inherits whatever local wiggle happens to
-        sit on those two samples, which makes the regression target
-        noisier than the quantity it is trying to represent.
-
-        Parameters
-        ----------
-        frequencies: np.ndarray
-                Frequencies to which the phase points correspond.
-        first_section_flat: float
-                See :meth:`flatten_phase`. Defaults to 0.2.
-
-        Returns
-        -------
-        timeshifts: np.ndarray
-                Timeshifts, in seconds if the frequencies given are in Hz.
-
-        Raises
-        ------
-        ValueError
-                If the low-frequency section holds fewer than two
-                distinct frequencies, so that no slope is defined.
-        """
-
-        index = max(int(first_section_flat * self.phase_residuals.shape[1]), 2)
-
-        low_frequencies = np.asarray(frequencies[:index], dtype=np.float64)
-        low_residuals = np.asarray(
-            self.phase_residuals[:, :index], dtype=np.float64
+    Raises
+    ------
+    ValueError
+        If the window holds fewer than three frequencies.
+    """
+    frequencies = np.asarray(frequencies, dtype=np.float64)
+    phase = np.asarray(phase_residuals, dtype=np.float64)
+    f0 = frequencies[0]
+    n = int(np.searchsorted(frequencies, f0 * (1 + window), side="right"))
+    if n < 3:
+        raise ValueError(
+            f"Only {n} frequencies within {window} of f0 = {f0}: "
+            "cannot fit the phase value and slope there."
         )
+    # scaled, so that the least-squares problem is well conditioned
+    x = (frequencies[:n] - f0) / (f0 * window)
+    design = np.stack([np.ones(n), x, x**2], axis=1)
+    coefficients = np.linalg.lstsq(design, phase[..., :n].T, rcond=None)[0]
+    return coefficients[0], coefficients[1] / (f0 * window)
 
-        centered_frequencies = low_frequencies - np.mean(low_frequencies)
-        frequency_spread = centered_frequencies @ centered_frequencies
 
-        if frequency_spread == 0.0:
-            raise ValueError(
-                "Cannot fit a time shift: the lowest "
-                f"{index} sample points are all at the same frequency."
-            )
+def re_reference(
+    frequencies: np.ndarray,
+    phase_residuals: np.ndarray,
+    m: int,
+    value: Union[float, np.ndarray],
+    slope: Union[float, np.ndarray],
+    f0: Optional[float] = None,
+) -> np.ndarray:
+    r"""Move phase residuals of an :math:`m` mode to the :math:`f_0` reference.
 
-        centered_residuals = low_residuals - np.mean(
-            low_residuals, axis=1, keepdims=True
-        )
+    Given the value :math:`a` and slope :math:`s` at :math:`f_0` of the
+    (2,2) residual of the same waveforms (from :func:`reference_gauge`),
+    returns
 
-        slopes = centered_residuals @ centered_frequencies / frequency_spread
+    .. math::
+        \phi_{\ell m}(f) - s \left(f - \frac{m}{2} f_0\right)
+        - \frac{m}{2}\, a,
 
-        return slopes / (2 * np.pi)
+    that is, the modes shifted in time by :math:`s / 2\pi` and rotated in
+    orbital phase by :math:`a/2 - s f_0 / 2`, both the same for every mode
+    of a waveform. After this the (2,2) residual vanishes, with its slope,
+    at :math:`f_0`, and so --- to the accuracy of the post-Newtonian
+    expressions the residuals are taken against --- do those of the other
+    modes: they are left with an almost parameter-independent constant.
+
+    ``frequencies`` has shape ``(n,)``, matching the last axis of
+    ``phase_residuals`` (``(N, n)`` or ``(n,)``); ``f0`` defaults to its
+    first element. ``value`` and ``slope`` are scalars or of shape ``(N,)``.
+    """
+    frequencies = np.asarray(frequencies, dtype=np.float64)
+    if f0 is None:
+        f0 = float(frequencies[0])
+    phase = np.asarray(phase_residuals, dtype=np.float64)
+    value = np.asarray(value, dtype=np.float64)[..., None]
+    slope = np.asarray(slope, dtype=np.float64)[..., None]
+    return phase - slope * (frequencies - m / 2 * f0) - m / 2 * value
+
 
 @dataclass
 class PrincipalComponentData(SavableData):

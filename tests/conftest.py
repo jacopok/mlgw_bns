@@ -93,7 +93,6 @@ def mode_model():
         mode_model.filename_arrays,
         mode_model.filename_metadata,
         mode_model.filename_nn,
-        mode_model.filename_timeshifts,
     ]:
         try:
             os.remove(filename)
@@ -137,10 +136,7 @@ def model():
 
 @pytest.fixture(scope="session")
 def generated_model(model):
-    model.generate(
-        6, 30, 30,
-        reference_dataset_size=60, reference_grid_points=32, reference_fmax_hz=400.0,
-    )
+    model.generate(6, 30, 30)
     yield model
 
 
@@ -181,7 +177,7 @@ def parameters_with_extrinsic():
         chi_2=-0.1,
         distance_mpc=1.0,
         inclination=0.0,
-        reference_phase=0.0,
-        time_shift=0.0,
+        coalescence_phase=0.0,
+        merger_time=0.0,
         total_mass=2.8,
     )

@@ -48,8 +48,6 @@ def with_regressor_outputs_of(target, source, intrinsic):
     """
     xp = target._xp
     residuals = source._residuals(np, intrinsic)
-    mode_phases = source._mode_phases(np, intrinsic)
-    time_shifts = source._time_shifts(np, intrinsic)
 
     def rows(x):
         # the rows of `intrinsic` that `x` holds, in order
@@ -59,13 +57,11 @@ def with_regressor_outputs_of(target, source, intrinsic):
     target._residuals = lambda _xp, x: [
         (xp.asarray(a[rows(x)]), xp.asarray(p[rows(x)])) for a, p in residuals
     ]
-    target._mode_phases = lambda _xp, x: xp.asarray(mode_phases[rows(x)])
-    target._time_shifts = lambda _xp, x: xp.asarray(time_shifts[rows(x)])
     return target
 
 
 def test_single_rows_match_predict_modes_dict(default_model):
-    intrinsic, total_mass, distance = random_rows(6, seed=1, lambda_max=12000.0)
+    intrinsic, total_mass, distance = random_rows(6, seed=1)
     inclination = np.linspace(0.2, 2.9, len(intrinsic))
     for i in range(len(intrinsic)):
         amp, phase = default_model.predict_modes_amp_phase(
@@ -139,8 +135,7 @@ def test_batch_matches_single_rows_given_the_regressors(default_model):
 
 def test_batch_matches_single_rows_to_the_regressor_rounding(default_model):
     """End to end, batch and single rows differ only by the rounding of the
-    ill-conditioned kernel-ridge sums (see the module docstring), which
-    reaches ~1e-2 rad in phase near the merger."""
+    kernel-ridge sums (see the module docstring)."""
     intrinsic, total_mass, distance = random_rows(20, seed=4)
     amp, phase = default_model.predict_modes_amp_phase(
         intrinsic, total_mass, FREQUENCIES, modes=FOUR_MODES, distance_mpc=distance
@@ -171,6 +166,13 @@ def test_mode_subset_and_order(default_model):
         k = ALL_MODES.index(mode)
         np.testing.assert_allclose(subset[0][:, j], everything[0][:, k], rtol=1e-12)
         np.testing.assert_allclose(subset[1][:, j], everything[1][:, k], rtol=1e-12)
+    # without the (2,2), which is still evaluated for the merger reference
+    alone = default_model.predict_modes_amp_phase(
+        intrinsic, total_mass, FREQUENCIES, modes=[(3, 3)]
+    )
+    k = ALL_MODES.index((3, 3))
+    np.testing.assert_allclose(alone[0][:, 0], everything[0][:, k], rtol=1e-12)
+    np.testing.assert_allclose(alone[1][:, 0], everything[1][:, k], rtol=1e-12)
 
 
 def test_per_row_frequency_grids(default_model):
@@ -272,9 +274,25 @@ def test_time_frequency_map(default_model):
     assert np.all(tf[:, 3, inspiral] < tf[:, 0, inspiral])
 
 
-def test_mode_subset_model_uses_the_right_mode_phase_columns(default_model):
-    """A model loaded with a subset of the trained modes must read each
-    mode's own column of the shared mode-phases predictor."""
+def test_merger_is_at_zero_time_and_phase(default_model):
+    """At the top of the trained band, where the (2,2) phase is the linear
+    post-merger one, the (2,2) has time and phase zero."""
+    intrinsic, _, _ = random_rows(3, seed=13)
+    total_mass = np.array([2.2, 2.8, 3.6])
+    top = default_model.dataset.frequencies_hz[-1] * default_model.dataset.total_mass
+    # just inside the band
+    frequencies = np.stack([[top / mass * (1 - 1e-12)] for mass in total_mass])
+    amp, phase, tf = default_model.predict_modes_amp_phase(
+        intrinsic, total_mass, frequencies, modes=[(2, 2)], return_tf=True
+    )
+    assert np.all(amp > 0)
+    np.testing.assert_allclose(phase, 0.0, atol=1e-8)
+    np.testing.assert_allclose(tf, 0.0, atol=1e-12)
+
+
+def test_mode_subset_model(default_model):
+    """A model loaded with a subset of the trained modes predicts them as
+    the full one does."""
     subset = Model.default_for_testing(modes=[Mode(*mode) for mode in FOUR_MODES])
     params = ParametersWithExtrinsic(1.4, 300.0, 700.0, 0.1, -0.1, 100.0, 0.8, 2.8)
     expected = default_model.predict_modes_dict(FREQUENCIES, params)

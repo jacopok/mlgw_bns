@@ -18,9 +18,7 @@ modes.
 over the polarisation angle :math:`\kappa`.
 
 The class also wraps the random generation of validation parameter
-sets, the application of the learned merger time-shift correction
-between modes (:meth:`ValidateModel.time_shifts_predictor`),
-and the PSD-weighted inner product used by all of the above.
+sets and the PSD-weighted inner product used by all of the above.
 """
 from __future__ import annotations
 
@@ -31,14 +29,14 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from scipy import integrate  # type: ignore
-from scipy.interpolate import interp1d  # type: ignore
+from scipy.interpolate import CubicSpline, interp1d  # type: ignore
 from scipy.optimize import dual_annealing, minimize, minimize_scalar  # type: ignore
 from tqdm import tqdm  # type: ignore
 fill_value='extrapolate'
 from .data_management import FDWaveforms
 from .dataset_generation import ParameterSet
 from .mode_model import FrequencyTooHighError, FrequencyTooLowError, ModeModel
-from .neural_network import NeuralNetwork, TimeshiftsGPR, TimeshiftsNN
+from .neural_network import NeuralNetwork
 from .resample_residuals import cartesian_waveforms_at_frequencies
 
 
@@ -136,32 +134,27 @@ class ValidateModel:
             fill_value='extrapolate'
         )
 
-    def time_shifts_predictor(self) -> Union[TimeshiftsNN, TimeshiftsGPR]:
-        """Return the merger-time-shift predictor trained for :attr:`model`.
+    def merger_referenced(self, waveforms: FDWaveforms) -> FDWaveforms:
+        """``waveforms`` with their phases referenced to the merger.
 
-        This is the same predictor trained (or loaded) by
-        :attr:`model`, i.e. :attr:`ModeModel.timeshifts_predictor`, so
-        that the time-shift correction applied during validation
-        matches the one used to remove the linear trend from the
-        phase residuals during training.
-
-        Returns
-        -------
-        Union[TimeshiftsNN, TimeshiftsGPR]
-                The model's time-shift predictor.
-
-        Raises
-        ------
-        ValueError
-                If :attr:`model` has no time-shift predictor available
-                (e.g. it was not trained or loaded with one).
+        The tangent to each phase at the top node (see
+        :meth:`ModeModel.merger_reference
+        <mlgw_bns.mode_model.ModeModel.merger_reference>`) is removed,
+        ``m/2`` times its intercept, so that the EOB waveforms and the
+        model's, which are referenced to the start of the band, are
+        compared with their mergers at the same time.
         """
-        if self.model.timeshifts_predictor is None:
-            raise ValueError(
-                "The model has no time-shift predictor available; "
-                "train or load one before requesting time-shift-corrected mismatches."
-            )
-        return self.model.timeshifts_predictor
+        assert self.model.downsampling_indices is not None
+        knots = self.model.dataset.frequencies_hz[
+            self.model.downsampling_indices.phase_indices
+        ]
+        phases = np.asarray(waveforms.phases, dtype=float)
+        slope = CubicSpline(knots, phases, axis=1)(knots[-1], 1)[:, None]
+        intercept = phases[:, -1:] - slope * knots[-1]
+        return FDWaveforms(
+            waveforms.amplitudes,
+            phases - slope * knots - self.model.m / 2 * intercept,
+        )
 
     def param_set(
         self,
@@ -194,7 +187,6 @@ class ValidateModel:
         self,
         param_set: ParameterSet,
         nn: NeuralNetwork,
-        include_time_shifts: bool = True,
         disable_tqdm: bool = True,
     ) -> List[float]:
         """Compute mismatches between EOB and model-predicted waveforms.
@@ -208,9 +200,6 @@ class ValidateModel:
                 Parameters at which to compute mismatches.
         nn : NeuralNetwork
                 Trained network to use for predictions.
-        include_time_shifts : bool
-                Whether to apply time-shift correction to predicted
-                waveforms. Defaults to ``True``.
         disable_tqdm : bool
                 Whether to disable the tqdm progress bar. Defaults to
                 ``True`` for use in optimization loops.
@@ -221,14 +210,12 @@ class ValidateModel:
                 Mismatch for each waveform in the parameter set.
         """
         true_waveforms, valid_param_set = self.true_waveforms(param_set)
-        # The EOB phase is left with its native value at f0 (not re-zeroed),
-        # so that the per-mode reference-phase regression can be judged
-        # against a truth that still carries an absolute phase there.
 
-        predicted_waveforms = self.model.predict_waveforms_bulk(valid_param_set, nn)
+        predicted_waveforms = self.merger_referenced(
+            self.model.predict_waveforms_bulk(valid_param_set, nn)
+        )
+        true_waveforms = self.merger_referenced(true_waveforms)
 
-        if include_time_shifts:
-            self._apply_predicted_time_shifts(predicted_waveforms, valid_param_set)
 
         return self._mismatch_array_internal(
             true_waveforms, predicted_waveforms, disable_tqdm=disable_tqdm
@@ -344,7 +331,6 @@ class ValidateModel:
         self,
         number_of_validation_waveforms: int,
         seed: Optional[int] = None,
-        include_time_shifts: bool = False,
         true_waveforms: Optional[FDWaveforms] = None,
         zero_residuals: bool = False,
         save_params: bool = False,
@@ -358,9 +344,6 @@ class ValidateModel:
         seed : int, optional
                 Seed to give to the parameter generation. Defaults to
                 ``None``.
-        include_time_shifts : bool
-                Whether to apply learned merger-time-shift correction to
-                the predicted waveforms. Defaults to ``False``.
         true_waveforms : FDWaveforms, optional
                 True waveforms to compare to. Use this in order not to
                 recompute the true waveforms each time when comparing
@@ -390,16 +373,14 @@ class ValidateModel:
             true_waveforms, valid_param_set = self.true_waveforms(self.parameter_set)
             # Use filtered params for the subsequent prediction step.
             self.parameter_set = valid_param_set
-            # EOB phase left with its native f0 value (not re-zeroed): the
-            # per-mode reference-phase regression is meant to reproduce it.
 
         if zero_residuals:
             predicted_waveforms = self.post_newtonian_waveforms(self.parameter_set)
         else:
             predicted_waveforms = self.predicted_waveforms(self.parameter_set)
+        predicted_waveforms = self.merger_referenced(predicted_waveforms)
+        true_waveforms = self.merger_referenced(true_waveforms)
 
-        if include_time_shifts:
-            self._apply_predicted_time_shifts(predicted_waveforms, self.parameter_set)
 
         return self.mismatch_array(true_waveforms, predicted_waveforms)
 
@@ -407,7 +388,6 @@ class ValidateModel:
         self,
         number_of_validation_waveforms: int,
         seed: Optional[int] = None,
-        include_time_shifts: bool = False,
         true_waveforms: Optional[FDWaveforms] = None,
         zero_residuals: bool = False,
     ) -> List[float]:
@@ -424,9 +404,6 @@ class ValidateModel:
         seed : int, optional
                 Seed to give to the parameter generation. Defaults to
                 ``None``.
-        include_time_shifts : bool
-                Whether to apply learned merger-time-shift correction to
-                the predicted waveforms. Defaults to ``False``.
         true_waveforms : FDWaveforms, optional
                 True waveforms to compare to. Use this in order not to
                 recompute the true waveforms each time when comparing
@@ -449,16 +426,14 @@ class ValidateModel:
         if true_waveforms is None:
             true_waveforms, valid_param_set = self.true_waveforms(self.parameter_set)
             self.parameter_set = valid_param_set
-            # EOB phase left with its native f0 value (not re-zeroed): the
-            # per-mode reference-phase regression is meant to reproduce it.
 
         if zero_residuals:
             predicted_waveforms = self.post_newtonian_waveforms(self.parameter_set)
         else:
             predicted_waveforms = self.predicted_waveforms(self.parameter_set)
+        predicted_waveforms = self.merger_referenced(predicted_waveforms)
+        true_waveforms = self.merger_referenced(true_waveforms)
 
-        if include_time_shifts:
-            self._apply_predicted_time_shifts(predicted_waveforms, self.parameter_set)
 
         return self.full_waveform_mismatch_array(true_waveforms, predicted_waveforms)
 
@@ -978,44 +953,6 @@ class ValidateModel:
                 "be reconstructed there; restrict `self.frequencies` to the "
                 "model's band."
             )
-
-    def _apply_predicted_time_shifts(
-        self,
-        predicted_waveforms: FDWaveforms,
-        param_set: ParameterSet,
-    ) -> None:
-        r"""Apply the learned merger-time-shift correction in place.
-
-        Mutates ``predicted_waveforms.phases`` by adding
-        :math:`2\pi (f - f_0)\, t_{\mathrm{shift}}` and then subtracting
-        the per-waveform initial phase, so that the corrected phases
-        start at zero.
-
-        Parameters
-        ----------
-        predicted_waveforms : FDWaveforms
-                Predicted waveforms whose ``phases`` field is mutated
-                in place.
-        param_set : ParameterSet
-                Parameters at which to evaluate the time-shift
-                predictor.
-        """
-        assert self.model.downsampling_indices is not None
-
-        pred_phase_0 = np.copy(predicted_waveforms.phases)
-        phase_freqs = self.model.dataset.frequencies_hz[
-            self.model.downsampling_indices.phase_indices
-        ]
-        time_shifts = (
-            self.time_shifts_predictor()
-            .predict(param_set.parameter_array)
-            .reshape(-1, 1)
-        )
-
-        predicted_waveforms.phases += (
-            2 * np.pi * (phase_freqs - phase_freqs[0]) * time_shifts
-            - pred_phase_0[:, 0].reshape(-1, 1)
-        )
 
     def _mismatch_array_internal(
         self,

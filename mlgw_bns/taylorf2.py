@@ -940,9 +940,8 @@ def phase_5h_post_newtonian_tidal(
 
     # Return the absolute stationary-phase phase, not anchored to zero at the
     # first sample. This keeps the PN baseline consistent with the (equally
-    # un-anchored) EOB phase; the anchoring is done downstream by
-    # ``remove_linear_trend`` at training time and by re-zeroing the combined
-    # phase before ``reference_phase`` is applied at prediction time.
+    # un-anchored) EOB phase; the residuals between the two are referenced
+    # at f0 at training time (``re_reference``).
     return phase
 
 
@@ -954,10 +953,8 @@ def _make_taylorf2_psi(xp):
     Composes the same PN cores as :func:`phase_5h_post_newtonian_tidal`
     (:func:`Phif5hPN` with ``Lam = dLam = 0``, :func:`PhifT7hPNComplete`,
     :func:`PhifQM3hPN`), so it is the exact aligned-spin, natural-units
-    specialization of that function. Used by
-    :func:`mlgw_bns.pn_modes.reference_phase_backbone` (as the JIT-able
-    JAX core, via ``xp=jax.numpy``) and by :mod:`mlgw_bns.jax_predict`'s
-    per-mode phase.
+    specialization of that function. Used by :mod:`mlgw_bns.batched`, on
+    numpy and (via ``xp=jax.numpy``) JAX.
     """
     compute_quadrupole_yy = _make_compute_quadrupole_yy(xp)
     phif3hpn = _make_phif3hpn(xp)
