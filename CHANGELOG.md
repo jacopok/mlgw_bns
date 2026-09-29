@@ -27,7 +27,8 @@ loaded, and the waveforms are referenced differently in time and phase.
     difference between the EOB and post-Newtonian phases at orbital
     frequencies `f0/m` and `f0/2`. Over 96 binaries (public TEOBResumS,
     tidal deformabilities up to 5000) the standard deviation of the
-    residual at `f0` goes from 0.9--3.6e5 rad to
+    residual at `f0` goes from 0.9--3.6e5 rad with the merger at `t = 0`
+    (0.4--1.3e5 rad in TEOBResumS's own reference) to
 
     | mode | std at `f0` |
     |------|-------------|
@@ -75,7 +76,16 @@ loaded, and the waveforms are referenced differently in time and phase.
 - The packaged `default_hom` model is an **interim** one, trained with the
     public TEOBResumS (tidal deformabilities up to 5000) on 8192 waveforms,
     in the new format; it is to be replaced by a retrain before release.
-    INTERIM_MODEL_NUMBERS
+    Against the same TEOBResumS (16 binaries, total mass 2.8, inclination
+    1), the full-waveform mismatch maximised over time and phase is 6.8e-8
+    median and 4.0e-6 worst (1.5--3.7e-7 median at total masses 2.2--3.6).
+    With nothing maximised --- the model's own merger time and coalescence
+    phase --- it is 1.1e-3 median and 3.7e-2 worst: over 64 held-out
+    binaries the merger time agrees with TEOBResumS's to 2.4e-5 s and the
+    coalescence phase to 0.13 rad (90th percentiles;
+    `visualization/phase_reference_study.py merger`). These are not
+    comparable with the 1.0 model's test values, which were measured
+    against a different TEOBResumS than it was trained with.
 
 - `KernelRidgeNetwork` chooses its regularization per principal component
     (`Hyperparameters.kernel_alpha_selection = "loo"`, the new default): each
