@@ -163,12 +163,9 @@ def test_residuals_are_not_too_large(variable_parameters, teob_generator):
 
     length = len(amp_residuals)
 
-    # The EOB and PN phases are both sourced absolute (no anchor at f0), so the
-    # raw phase residual carries a large, nearly frequency-independent constant
-    # (the PN stationary-phase value at f0, ~1e4 rad). That constant is stripped
-    # downstream by `remove_linear_trend`; what has to be small is the residual
-    # *shape*, i.e. the residual referenced to its first node.
-    phi_residuals = phi_residuals - phi_residuals[0]
+    # The residual is referenced to its own value and slope at f0
+    # (`re_reference`), so it starts at zero.
+    assert abs(phi_residuals[0]) < 1e-3
 
     # The residuals overall should be below a relatively loose bound
     assert np.all(abs(amp_residuals) < 10)

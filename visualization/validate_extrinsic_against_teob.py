@@ -342,7 +342,7 @@ def validate(model: Model, n_waveforms: int) -> dict:
             distance_mpc=rng.uniform(*DISTANCE_RANGE),
             inclination=inclination,
             total_mass=total_mass,
-            reference_phase=0.0,
+            coalescence_phase=0.0,
         )
         try:
             teob_modes_ind, inside = teob_independent_modes(params, fd_frequencies)

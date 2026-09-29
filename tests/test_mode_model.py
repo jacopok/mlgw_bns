@@ -49,7 +49,7 @@ def test_quick_model_with_validation_mismatches(trained_mode_model):
 
     vm = ValidateModel(trained_mode_model)
 
-    mismatches = vm.validation_mismatches(16, include_time_shifts=True)
+    mismatches = vm.validation_mismatches(16)
 
     for m in mismatches:
         assert m < TRAINED_MODEL_MAX_MISMATCH

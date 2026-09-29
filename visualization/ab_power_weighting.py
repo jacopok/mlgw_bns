@@ -60,12 +60,8 @@ def build_arm(source_base: str, target_base: str, weighting: bool,
     if not model.nn_available:
         raise SystemExit(f"no trained network for {source_base!r}")
 
-    # Shared predictors and every mode's arrays/metadata come straight
-    # from the source model; only the odd-m networks are re-fit.
-    for suffix in ("_timeshifts.pkl", "_mode_phases.pkl"):
-        link_or_copy(Path(f"{source_base}{suffix}"), Path(f"{target_base}{suffix}"),
-                     symlink=False)
-
+    # Every mode's arrays/metadata come straight from the source model;
+    # only the odd-m networks are re-fit.
     for mode in modes:
         src = f"{source_base}_l{mode.l}_m{mode.m}"
         dst = f"{target_base}_l{mode.l}_m{mode.m}"

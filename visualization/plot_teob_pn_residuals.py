@@ -8,10 +8,9 @@ Rows
 ----
 1. amplitude residual A_eob / A_pn(theta)               (own PN divisor)
 2. amplitude residual A_eob / A_pn(theta_ref)           (reference_amplitude)
-3. phase residual phi_eob - phi_pn, re-anchored to 0 at f0 (the raw
-   residual carries the ~1e5-1e6 rad arg H_lm(f0) constant)
-4. the exact training target: ``remove_linear_trend`` with the model's
-   shared time-shift predictor and (for the HOM) its ``ModePhasesNN``
+3. phase residual phi_eob - phi_pn, re-anchored to 0 at f0
+4. the exact training target: the phase residual referenced, with every
+   mode, to the (2,2) of the same waveform at f0 (``re_reference``)
 
 Run: python visualization/plot_teob_pn_residuals.py [--n N] [--model BASE]
 """
@@ -25,7 +24,6 @@ from joblib import Parallel, delayed
 
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.model import Model
-from mlgw_bns.principal_component_analysis import remove_linear_trend
 
 MODES = [Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
 
@@ -39,8 +37,6 @@ def main() -> None:
 
     model = Model(modes=MODES, filename=args.model)
     model.load()
-    assert model.time_shifts_predictor is not None
-    assert model.mode_phases_predictor is not None
 
     dataset = model.mode_models[Mode(2, 2)].dataset
     pgen = dataset.make_parameter_generator(seed=args.seed)
@@ -62,7 +58,6 @@ def main() -> None:
     param_array = np.asarray(parameter_array_full, dtype=float)
     amp_res = {m: np.asarray(amp_res_full[m], float) for m in MODES}
     phi_res = {m: np.asarray(phi_res_full[m], float) for m in MODES}
-    param_set = dataset.parameter_set_cls(param_array)
     print(f"{len(param_array)}/{args.n} valid")
 
     cmap = matplotlib.colormaps["viridis"]
@@ -74,21 +69,12 @@ def main() -> None:
     for i, mode in enumerate(MODES):
         phi_idx = ds_idx[mode].phase_indices
         f_nat = dataset.frequencies[phi_idx]
-        f_hz = dataset.frequencies_hz[phi_idx]
         amp_f_nat = dataset.frequencies[ds_idx[mode].amplitude_indices]
 
         a = amp_res[mode]                    # A_eob / A_pn(ref) if amp_ref set
         phi = phi_res[mode]                  # phi_eob - phi_pn (keeps arg H_lm)
 
-        target = remove_linear_trend(
-            parameters=param_set,
-            phi_diff=phi,
-            frq=f_hz,
-            timeshifts_predictor=model.time_shifts_predictor,
-            subtract_mode_phase_anchor=(mode != Mode(2, 2)),
-            mode_phases_predictor=model.mode_phases_predictor,
-            mode_index=model.modes.index(mode) if mode != Mode(2, 2) else None,
-        )
+        target = phi  # already referenced by `_multimode_mode_residuals`
 
         for j in range(len(param_array)):
             c = colors[j]

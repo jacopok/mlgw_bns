@@ -140,7 +140,7 @@ def main() -> None:
         grids.append((f"uniform df={df:g}", np.arange(BAND[0], BAND[1], df)))
 
     for b in BINARIES:
-        params = ParametersWithExtrinsic(distance_mpc=100.0, reference_phase=0.0, **b)
+        params = ParametersWithExtrinsic(distance_mpc=100.0, coalescence_phase=0.0, **b)
         print(f"\nq={b['mass_ratio']}, M={b['total_mass']}, chi=({b['chi_1']},"
               f"{b['chi_2']}), iota={b['inclination']}")
         print(f"  {'grid':>20}  {'n':>7}  {'on-grid':>10}  {'independent':>12}")

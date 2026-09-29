@@ -10,11 +10,10 @@ capped at 5000, since it fails on some higher ones) on the packaged
 model's own downsampling nodes, for all of its modes, and saves the raw
 residuals in batches of 256 under ``DIR``.
 
-``compare`` builds the regression targets as :meth:`Model.generate
-<mlgw_bns.model.Model.generate>` does --- with the packaged PCA bases,
-and with time-shift / mode-phase predictors retrained on this data, since
-the public TEOBResumS aligns the merger differently from the version the
-packaged ones were trained on --- then fits
+``compare`` takes the regression targets as :meth:`Model.generate
+<mlgw_bns.model.Model.generate>` does (the residuals are stored already
+referenced to the (2,2) at the start of the band), with the packaged PCA
+bases, then fits
 :class:`~mlgw_bns.neural_network.KernelRidgeNetwork` with each variant:
 
 * ``fixed``: the packaged per-mode ``kernel_alpha``, shared by all
@@ -48,8 +47,7 @@ from mlgw_bns.dataset_generation import ParameterSet
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.mode_model import mode_power_weights
 from mlgw_bns.model import Model
-from mlgw_bns.neural_network import Hyperparameters, ModePhasesNN, TimeshiftsNN
-from mlgw_bns.principal_component_analysis import remove_linear_trend
+from mlgw_bns.neural_network import Hyperparameters
 
 BATCH = 256
 
@@ -104,41 +102,12 @@ def compare(directory, n_train, n_val, modes, variants):
     train = slice(0, n_train)
     validation = list(range(len(params) - n_val, len(params)))
 
-    # The shared reference predictors, retrained on the training part.
-    all_modes = [(m.l, m.m) for m in model.modes]
-    reference = model.mode_models[Mode(2, 2)]
-    phase_22 = np.concatenate([d["phase_22"] for d in data])[train]
-    f_22 = reference.dataset.frequencies_hz[reference.downsampling_indices.phase_indices]
-    time_shifts = TimeshiftsNN(
-        training_params=params[train],
-        training_timeshifts=Residuals(np.zeros_like(phase_22), phase_22).phase_timeshifts(
-            frequencies=f_22
-        ),
-    ).fit()
-    mode_phases = ModePhasesNN(
-        modes=all_modes,
-        f0_natural=float(model.dataset.frequencies[0]),
-        training_params=params[train],
-        training_mode_phases=np.stack(
-            [np.concatenate([d[f"phase_{l}{m}"] for d in data])[train][:, 0] for l, m in all_modes],
-            axis=1,
-        ),
-    ).fit()
-
     for mode in [Mode(int(k[0]), int(k[1])) for k in modes.split(",")]:
         key = f"{mode.l}{mode.m}"
         mode_model = model.mode_models[mode]
         indices = mode_model.downsampling_indices
         amplitude = np.concatenate([d[f"amp_{key}"] for d in data])
-        phase = remove_linear_trend(
-            ParameterSet(params),
-            np.concatenate([d[f"phase_{key}"] for d in data]),
-            mode_model.dataset.frequencies_hz[indices.phase_indices],
-            time_shifts,
-            True,
-            mode_phases,
-            all_modes.index((mode.l, mode.m)),
-        )
+        phase = np.concatenate([d[f"phase_{key}"] for d in data])
         residuals = Residuals(amplitude.astype(np.float32), phase)
         mode_model.training_dataset = residuals[list(range(n_train))]
         mode_model.training_parameters = ParameterSet(params[train])

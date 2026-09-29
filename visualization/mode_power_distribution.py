@@ -142,7 +142,7 @@ def sample_mode_power_fractions(
                 chi_2=intrinsic.chi_2,
                 distance_mpc=DISTANCE_MPC,
                 inclination=iota,
-                reference_phase=phi_c,
+                coalescence_phase=phi_c,
                 total_mass=TOTAL_MASS,
             )
             try:
