@@ -6,33 +6,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Batched, per-mode evaluation, on numpy or JAX from a single implementation
-    (`mlgw_bns.batched`). `Model.predict_modes_amp_phase(intrinsic,
-    total_mass, frequencies, modes=..., distance_mpc=..., return_tf=...)`
-    evaluates `N` binaries in one call --- `intrinsic` of shape `(N, 5)`,
-    `total_mass` of shape `(N,)`, frequencies shared or one grid per row ---
-    and returns the amplitude and phase of each requested mode, shape
-    `(N, n_modes, k)`, with no angular factor applied. Only the requested
-    modes' regressors are evaluated. `Model.jax_modes_amp_phase(modes,
-    return_tf)` returns the same computation as a pure JAX function (a single
-    waveform is the batch `N = 1`). Both include the post-Newtonian
-    continuation below the trained band and the zero padding above it.
-    About 0.7 ms per waveform for the four modes (2,2), (2,1), (3,3), (4,4)
-    on numpy (batches of 1000 on 4 cores), against ~14 ms for
-    `predict_modes_dict`; the JAX version compiles in under 10 s.
-- `return_tf=True` also returns each mode's time--frequency map
-    `t_lm(f) = -(1/2 pi) d phi_lm / d f`, from the derivative of the phase
-    spline in the band and of the post-Newtonian phase below it.
-- `mlgw_bns.batched.mode_polarizations`, the per-mode projection on
-    `h_+, h_x` with the spin-weighted spherical harmonics, batched and
-    numpy/JAX-generic; summed over the modes it reproduces `Model.predict`.
-- Out-of-range rows come back as NaN instead of raising, so that one bad row
-    does not abort a batch; `BatchedSurrogate.valid` gives the mask.
-- `Model.parameter_ranges`, whose setter applies new ranges to every mode.
+This release breaks compatibility with 1.0: models saved by 1.0 cannot be
+loaded, and the waveforms are referenced differently in time and phase.
 
 ### Changed
+
+- **The time-shift and mode-phase regressors are gone.** The phase residuals
+    of every training waveform are now referenced, all modes together, to its
+    (2,2) mode at the lowest frequency of the band, `f0`: every mode is
+    shifted in time and rotated in orbital phase so that the (2,2) residual
+    and its slope vanish there (`data_management.reference_gauge` and
+    `re_reference`). Previously each waveform kept TEOBResumS's reference ---
+    time zero at the merger, orbital phase zero where the integration starts
+    --- so each mode's phase at `f0` carried 2 pi f0 times the time to the
+    merger, 1e4--1e6 rad and strongly parameter dependent, which the shared
+    `TimeshiftsNN` and `ModePhasesNN` regressors were there to predict. In
+    the new reference the stationary-phase relation between the modes,
+    which the post-Newtonian phases the residuals are taken against already
+    contain, leaves each mode's residual at `f0` a constant up to the
+    difference between the EOB and post-Newtonian phases at orbital
+    frequencies `f0/m` and `f0/2`. Over 96 binaries (public TEOBResumS,
+    tidal deformabilities up to 5000) the standard deviation of the
+    residual at `f0` goes from 0.9--3.6e5 rad with the merger at `t = 0`
+    (0.4--1.3e5 rad in TEOBResumS's own reference) to
+
+    | mode | std at `f0` |
+    |------|-------------|
+    | (2,2) | 7e-7 rad |
+    | (3,2) | 3e-6 rad |
+    | (3,1), (3,3), (4,3) | 1--2e-3 rad |
+    | (4,4) | 3e-3 rad |
+    | (2,1) | 2e-3 rad on 95 of 96; one point, at q = 1.04, off by pi, where the EOB amplitude has the opposite sign to the PN one |
+
+    (`visualization/phase_reference_study.py anchors`). These are learned
+    with the rest of the residual by each mode's PCA and regressor. No
+    change to the TEOBResumS call is needed, and the reference does not
+    depend on how a given TEOBResumS version aligns its merger.
+- **Merger time and coalescence phase.** The surrogate is referenced to the
+    merger, read off its own (2,2) mode: after the merger the
+    frequency-domain (2,2) phase is linear in `f` (the stationary-phase
+    time stops at the merger), from Mf ~ 0.016 for Lambda ~ 5000 to ~ 0.036
+    for Lambda ~ 5, within the band (which ends at Mf = 0.0403). The tangent
+    to the (2,2) phase at the top of the band, `s f + b`
+    (`ModeModel.merger_reference`, `Model.merger_reference`), gives the
+    merger time `-s / 2 pi` and the (2,2) phase `b` there; every mode is
+    shifted by `-s f - (m / 2) b`, so that the merger is at `t = 0` with
+    coalescence phase zero, and `t_lm(f)` (`return_tf`) vanishes at the top
+    of the band. This merger is within ~5 M of TEOBResumS's amplitude peak.
+    The batched path evaluates the (2,2) for this even when it is not
+    requested.
+- `ParametersWithExtrinsic.reference_phase` and `.time_shift` are now
+    `coalescence_phase` (the orbital phase at the merger: mode `(l, m)` is
+    rotated by `exp(i m phi_c)`) and `merger_time` (in seconds; the phase
+    gets `- 2 pi f t_c`, the opposite sign to the old `time_shift`).
+    `jax_predict.model_to_jax_waveform` takes `coalescence_phase` and
+    `merger_time`.
+- A `Model` must include the (2,2) mode.
+- `Model.get_teob_modes_dict` is referenced to the merger in the same way,
+    so it can be compared with `predict_modes_dict` directly, and is in the
+    same (physical) units; the new `Model.teob_modes_amp_phase` gives the
+    underlying amplitudes and phases. `ValidateModel.merger_referenced`
+    does the same for waveforms at the downsampling nodes, and the
+    single-mode mismatches use it.
+- `Model.generate` has no reference pre-pass (and no `reference_*`
+    arguments): one EOB sweep fewer.
+- `Dataset.generate_residuals` has no `flatten_phase` argument: the
+    residuals of a single mode are referenced to their own value and slope
+    at `f0`. `PrincipalComponentTraining` takes no predictors.
+- The packaged `default_hom` model is an **interim** one, trained with the
+    public TEOBResumS (tidal deformabilities up to 5000) on 8192 waveforms,
+    in the new format; it is to be replaced by a retrain before release.
+    Against the same TEOBResumS (16 binaries, total mass 2.8, inclination
+    1), the full-waveform mismatch maximised over time and phase is 6.8e-8
+    median and 4.0e-6 worst (1.5--3.7e-7 median at total masses 2.2--3.6).
+    With nothing maximised --- the model's own merger time and coalescence
+    phase --- it is 1.1e-3 median and 3.7e-2 worst: over 64 held-out
+    binaries the merger time agrees with TEOBResumS's to 2.4e-5 s and the
+    coalescence phase to 0.13 rad (90th percentiles;
+    `visualization/phase_reference_study.py merger`). These are not
+    comparable with the 1.0 model's test values, which were measured
+    against a different TEOBResumS than it was trained with.
 
 - `KernelRidgeNetwork` chooses its regularization per principal component
     (`Hyperparameters.kernel_alpha_selection = "loo"`, the new default): each
@@ -81,19 +134,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the batched pipeline instead of a separate port; its internal helpers
     (`mode_model_to_jax_residuals`, `make_not_a_knot_spline_jax`, ...) are
     gone. It compiles in seconds rather than ~40 s.
-- `pn_modes.reference_phase_backbone` is vectorised over the parameter rows
-    (shared with the batched path); its output changes at the ~1e-7 rad level.
+
+### Removed
+
+- `neural_network.TimeshiftsNN`, `TimeshiftsGPR`, `ModePhasesNN` and their
+    loaders; `pn_modes.reference_phase_backbone`;
+    `principal_component_analysis.remove_linear_trend`;
+    `Residuals.flatten_phase` and `phase_timeshifts`; the `time_shifts`
+    argument of `Model.predict` and `predict_modes_dict`;
+    `BatchedSurrogate.time_shifts` and `mode_reference_phases`;
+    `ModeModel.predict_amplitude_phase_optimized` (now
+    `predict_amplitude_phase`, which takes the (2,2) `merger_reference`);
+    the `include_time_shifts` arguments of `ValidateModel`; the
+    visualization scripts that only studied the removed regressors.
 
 ### Fixed
 
-- A `Model` loaded with a subset of the trained modes, e.g.
-    `default_for_testing(modes=[(2,2), (2,1), (3,3), (4,4)])`, read the
-    mode-phases predictor's columns by position in its own mode list rather
-    than the predictor's, mis-phasing (3,3) and (4,4) by O(1) rad.
+- `Model.get_teob_modes_dict` returned amplitudes without the physical
+    prefactor (off by ~1e-27 relative to `predict_modes_dict`).
+
+### Added
+
+- Batched, per-mode evaluation, on numpy or JAX from a single implementation
+    (`mlgw_bns.batched`). `Model.predict_modes_amp_phase(intrinsic,
+    total_mass, frequencies, modes=..., distance_mpc=..., return_tf=...)`
+    evaluates `N` binaries in one call --- `intrinsic` of shape `(N, 5)`,
+    `total_mass` of shape `(N,)`, frequencies shared or one grid per row ---
+    and returns the amplitude and phase of each requested mode, shape
+    `(N, n_modes, k)`, with no angular factor applied. Only the requested
+    modes' regressors are evaluated. `Model.jax_modes_amp_phase(modes,
+    return_tf)` returns the same computation as a pure JAX function (a single
+    waveform is the batch `N = 1`). Both include the post-Newtonian
+    continuation below the trained band and the zero padding above it.
+    About 0.7 ms per waveform for the four modes (2,2), (2,1), (3,3), (4,4)
+    on numpy (batches of 1000 on 4 cores), against ~14 ms for
+    `predict_modes_dict`; the JAX version compiles in under 10 s.
+- `return_tf=True` also returns each mode's time--frequency map
+    `t_lm(f) = -(1/2 pi) d phi_lm / d f`, from the derivative of the phase
+    spline in the band and of the post-Newtonian phase below it.
+- `mlgw_bns.batched.mode_polarizations`, the per-mode projection on
+    `h_+, h_x` with the spin-weighted spherical harmonics, batched and
+    numpy/JAX-generic; summed over the modes it reproduces `Model.predict`.
+- Out-of-range rows come back as NaN instead of raising, so that one bad row
+    does not abort a batch; `BatchedSurrogate.valid` gives the mask.
+- `Model.parameter_ranges`, whose setter applies new ranges to every mode.
 
 ### Known issues
 
-- The kernel-ridge regressors of the shipped model have dual coefficients up
+- The kernel-ridge regressors of the 1.0 model have dual coefficients up
     to ~1e13, and their prediction is a sum that cancels by some fourteen
     orders of magnitude. Its floating-point rounding error is therefore
     visible: evaluating the same parameters in a batch or one at a time, on

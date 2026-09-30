@@ -50,8 +50,15 @@ def main() -> None:
         initial_frequency_hz=args.initial_frequency_hz,
         reference_amplitude=True,
     )
-    _grid_hz, f_ref_natural, _f0 = model._reference_grid(args.grid_points, args.fmax_hz)
     ds = model.mode_models[Mode(2, 2)].dataset
+    f_ref_natural = ds.hz_to_natural_units(
+        np.geomspace(
+            ds.natural_units_to_hz(ds.frequencies[0]),
+            min(args.fmax_hz, ds.effective_srate_hz / 2),
+            args.grid_points,
+        )
+    )
+    f_ref_natural[0] = ds.frequencies[0]
 
     q = np.linspace(args.q_lo, args.q_hi, args.n)
     params = [

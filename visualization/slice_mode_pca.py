@@ -36,7 +36,6 @@ from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.dataset_generation import WaveformParameters
 from mlgw_bns.principal_component_analysis import (
     PrincipalComponentAnalysisModel,
-    remove_linear_trend,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -62,22 +61,13 @@ def mode_components(model, mode, parameter_array, amp_res, phase_res):
     produces (the regressor target divided back by ``eigenvalues**pc_exponent``).
     """
     mm = model.mode_models[mode]
-    ds = model.dataset
-    phase_indices = mm.downsampling_indices.phase_indices
-    freqs_hz = ds.natural_units_to_hz(np.asarray(ds.frequencies)[phase_indices])
-
-    pset = ds.parameter_set_cls(np.asarray(parameter_array, dtype=np.float64))
-    flattened_phase = remove_linear_trend(
-        parameters=pset,
-        phi_diff=phase_res[mode],
-        frq=freqs_hz,
-        timeshifts_predictor=model.time_shifts_predictor,
-        subtract_mode_phase_anchor=True,
-        mode_phases_predictor=model.mode_phases_predictor,
-        mode_index=model.modes.index(mode),
-    )
+    # the phase residuals are already referenced as in training
     combined = np.concatenate(
-        (np.asarray(amp_res[mode], dtype=np.float64), flattened_phase), axis=1
+        (
+            np.asarray(amp_res[mode], dtype=np.float64),
+            np.asarray(phase_res[mode], dtype=np.float64),
+        ),
+        axis=1,
     )
     comps_true = PrincipalComponentAnalysisModel.reduce_data(combined, mm.pca_data)
 

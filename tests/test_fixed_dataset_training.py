@@ -40,7 +40,7 @@ def test_fixed_generator_residuals(fixed_generator_pair):
     fixed_parameter_generator, fixed_waveform_generator = fixed_generator_pair
 
     dataset = fixed_parameter_generator.dataset
-    freqs, params, residuals = dataset.generate_residuals(5, flatten_phase=False)
+    freqs, params, residuals = dataset.generate_residuals(5)
 
     assert np.allclose(
         params.parameter_array, fixed_parameter_generator.parameter_set.parameter_array
@@ -50,17 +50,23 @@ def test_fixed_generator_residuals(fixed_generator_pair):
     assert np.allclose(
         waveforms.amplitudes, fixed_waveform_generator.waveforms.amplitudes
     )
-    assert np.allclose(waveforms.phases, fixed_waveform_generator.waveforms.phases)
+    # the residuals are referenced at f0: the phases are recovered up to a
+    # time shift and a constant, and nothing else
+    difference = waveforms.phases - fixed_waveform_generator.waveforms.phases
+    frequencies = dataset.frequencies
+    for row in difference:
+        line = np.polyval(np.polyfit(frequencies, row, 1), frequencies)
+        assert np.allclose(row - line, 0.0, atol=1e-6)
 
 
 def test_fixed_waveform_generation_limit(fixed_generator_pair):
     fixed_parameter_generator, fixed_waveform_generator = fixed_generator_pair
 
     dataset = fixed_parameter_generator.dataset
-    freqs, params, residuals = dataset.generate_residuals(6, flatten_phase=False)
+    freqs, params, residuals = dataset.generate_residuals(6)
     fixed_parameter_generator.loop = False
     with pytest.raises(StopIteration):
-        freqs, params, residuals = dataset.generate_residuals(6, flatten_phase=False)
+        freqs, params, residuals = dataset.generate_residuals(6)
 
 
 def test_arbitrary_index_waveform_recovery(fixed_generator_pair):

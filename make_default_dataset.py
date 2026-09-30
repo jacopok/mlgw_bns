@@ -58,13 +58,8 @@ def train(legacy: bool = False, n_jobs: int = 1) -> None:
     # probe_kernel_ridge_memory.py on this 23 GB / ~16 GB-available box:
     # 8192 -> 1.3 GB, 16384 -> 4.5 GB, 24576 -> 9.8 GB, 32768 timed out,
     # almost certainly OOM); 24576 leaves a comfortable margin. PCA's
-    # economy SVD is linear in its dataset size, so it can stay large. The
-    # reference (time-shift + mode-phase) pre-pass now also fits an exact
-    # KernelRidge (ModePhasesNN switched off Nystroem, see
-    # compare_mode_phase_regressor.py) and so faces the same quadratic
-    # limit -- kept at 16384, both safe and past the accuracy plateau
-    # (reference-phase-regressor-floor memory note).
-    model.generate(64, 2**15, 24576, reference_dataset_size=16384, n_jobs=n_jobs)
+    # economy SVD is linear in its dataset size, so it can stay large.
+    model.generate(64, 2**15, 24576, n_jobs=n_jobs)
     model.set_hyper_and_train_nn()
     model.save(include_training_data=True)
 

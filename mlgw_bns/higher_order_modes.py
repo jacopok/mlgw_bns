@@ -312,51 +312,6 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         super().__init__(*args, **kwargs)
         self.eobrun_callable = eobrun_callable
 
-    @staticmethod
-    def _merger_time(dyn: Any, htlm: Any) -> float:
-        """Merger time of a TEOBResumS run, in natural units.
-
-        Recent TEOBResumS versions put ``EOBPars->tc`` straight into the
-        dynamics dictionary. Releases up to and including the 4.4.1 sdist
-        on PyPI do not, so fall back on the last sample of the shared
-        time-domain grid, which is the same quantity in the FD case
-        (``EOBPars->tc`` is set to ``hlm.time[-1]`` there).
-        """
-        if "tc" in dyn:
-            return float(dyn["tc"])
-        return float(np.asarray(htlm["t"])[-1])
-
-    @staticmethod
-    def _align_mode_phase_to_merger(
-        phase: np.ndarray, frequencies: np.ndarray, tc: float
-    ) -> np.ndarray:
-        """Correct the raw ``hflm`` phase for the merger-alignment shift.
-
-        TEOBResumS's ``time_shift_FD`` option (always on, see
-        :meth:`WaveformParameters.teobresums`) shifts the *summed*
-        polarizations ``hp, hc`` so that the merger sits at :math:`t=0`,
-        but it does **not** touch the per-mode ``hflm`` arrays, which stay
-        referenced to the start of the ODE integration. For a waveform
-        starting near 20 Hz this offset is on the order of :math:`10^7 M`,
-        which would otherwise show up as a huge secular term in the phase.
-
-        Parameters
-        ----------
-        phase : np.ndarray
-            Raw ``hflm`` phase.
-        frequencies : np.ndarray
-            Frequencies (natural units) matching ``phase``.
-        tc : float
-            Merger time, as returned by :meth:`_merger_time`.
-
-        Returns
-        -------
-        np.ndarray
-            Phase aligned to the same merger-at-zero convention as ``hp, hc``.
-        """
-        merger_time = np.asarray(tc)
-        return phase - 2 * np.pi * merger_time * frequencies
-
     def get_polarizations(
         self,
         params: WaveformParameters,
@@ -412,10 +367,11 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         left at the :meth:`~mlgw_bns.dataset_generation.WaveformParameters.teobresums`
         default.
 
-        The phase convention matches :meth:`effective_one_body_waveform`:
-        aligned to the merger by :meth:`_align_mode_phase_to_merger` and
-        sign-flipped, keeping the additive ``arg H_lm(f0)`` constant for the
-        shared :class:`~mlgw_bns.neural_network.ModePhasesNN` to learn.
+        The phase is TEOBResumS's, sign-flipped (so that the multipole is
+        :math:`A e^{i\phi}`), in its own reference for time and orbital
+        phase: those at the start of the integration. The residuals built
+        from it are referenced to the (2,2) mode at :math:`f_0` anyway (see
+        :func:`~mlgw_bns.data_management.re_reference`), which absorbs it.
 
         Returns
         -------
@@ -431,19 +387,15 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         par_dict["arg_out"] = "yes"
         par_dict["use_mode_lm"] = [mode_to_k(mode) for mode in modes]
 
-        f_spa, _, _, _, _, hflm, htlm, dyn = self.eobrun_callable(par_dict)
+        f_spa, _, _, _, _, hflm, _, _ = self.eobrun_callable(par_dict)
 
         f_spa = f_spa[to_slice]
-        merger_time = self._merger_time(dyn, htlm)
 
         result: Dict[Mode, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         for mode in modes:
             key = str(mode_to_k(mode))
             amplitude = hflm[key][0][to_slice] * params.eta
-            phase = self._align_mode_phase_to_merger(
-                hflm[key][1][to_slice], f_spa, merger_time
-            )
-            result[mode] = (f_spa, amplitude, -phase)
+            result[mode] = (f_spa, amplitude, -hflm[key][1][to_slice])
         return result
 
     def get_amplitude_phase_at_inclination(
