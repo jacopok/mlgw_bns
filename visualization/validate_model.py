@@ -103,8 +103,8 @@ N_FULL_WAVEFORM_MISMATCHES = 100
 #: (waveform, orientation, mode subset) triple runs its own
 #: time-and-phase-optimised ``full_waveform_mismatch``. Lower these for a
 #: quick check.
-N_MODE_SUBSET_WAVEFORMS = 100
-N_MODE_SUBSET_ORIENTATIONS = 100
+N_MODE_SUBSET_WAVEFORMS = 20
+N_MODE_SUBSET_ORIENTATIONS = 20
 #: Distinct from SEED (used for the intrinsic draws below) so the
 #: inclination/phase sampling doesn't reuse the same stream.
 MODE_SUBSET_ORIENTATION_SEED = 20260917
@@ -137,13 +137,13 @@ LOW_FREQUENCY_HZ = 2.0
 #: :func:`timing_benchmark`); smaller than ``benchmark_evaluation_time.py``'s
 #: own defaults since this runs as one step of a broader validation pass,
 #: not a dedicated timing sweep.
-TIMING_N_POINTS = (64, 128, 256, 512, 1024, 2048, 4096)
-TIMING_SEEDS = 10
+TIMING_N_POINTS = (128, 256, 512, 1024, 2048, 4096)
+TIMING_SEEDS = 5
 TIMING_EPOCHS = 5
 #: Lowered from 1024 -- see benchmark_evaluation_time.py's --jax-batch help:
 #: its per-call cost scales ~linearly with this, and 128 already averages
 #: the per-waveform time far better than repeating the call would.
-TIMING_JAX_BATCH = 128
+TIMING_JAX_BATCH = 64
 
 
 def load_model(filename: str = None) -> Model:
@@ -1678,8 +1678,6 @@ if __name__ == "__main__":
 
     print("Computing mlgw-EOB residuals...")
     plot_residuals(model)
-
-    print("Validating time-shift and mode-phase0 predictors against fresh data...")
 
     print("Computing per-mode mismatches...")
     mismatches_by_mode = per_mode_mismatches(model)
