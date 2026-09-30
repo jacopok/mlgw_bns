@@ -10,7 +10,7 @@ Dataset sizes default to the ones that actually produced the shipped
 peak ~8.3 GB RSS), not the larger values written in ``make_default_dataset.py``
 which OOM this machine (23 GB, shared with the editor/Zoom).
 
-Run with: python train_gw_prior_uniform_spin.py [--downsampling N] [--pca N] [--nn N] [--reference N]
+Run with: python train_gw_prior_uniform_spin.py [--downsampling N] [--pca N] [--nn N]
 """
 
 import argparse
@@ -27,7 +27,7 @@ logging.basicConfig(
 TRAINING_BASENAME = "gw_prior_uniform_spin_hom"
 
 
-def train(downsampling: int, pca: int, nn: int, reference: int) -> None:
+def train(downsampling: int, pca: int, nn: int) -> None:
     model = Model(
         modes=list(DEFAULT_MODES),
         filename=TRAINING_BASENAME,
@@ -36,7 +36,7 @@ def train(downsampling: int, pca: int, nn: int, reference: int) -> None:
         reference_amplitude=True,
         parameter_generator_class=GWPriorUniformSpinParameterGenerator,
     )
-    model.generate(downsampling, pca, nn, reference_dataset_size=reference)
+    model.generate(downsampling, pca, nn)
     model.set_hyper_and_train_nn()
     model.save(include_training_data=True)
     logging.info("Done; wrote %s_*", TRAINING_BASENAME)
@@ -47,6 +47,5 @@ if __name__ == "__main__":
     parser.add_argument("--downsampling", type=int, default=2**9)
     parser.add_argument("--pca", type=int, default=2**13)
     parser.add_argument("--nn", type=int, default=2**13)
-    parser.add_argument("--reference", type=int, default=2**13)
     args = parser.parse_args()
-    train(args.downsampling, args.pca, args.nn, args.reference)
+    train(args.downsampling, args.pca, args.nn)

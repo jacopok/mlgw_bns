@@ -151,7 +151,7 @@ def abc_probe(model, srate, validator, n_binaries):
             mass_ratio=q, lambda_1=rng.uniform(5, 5000), lambda_2=rng.uniform(5, 5000),
             chi_1=rng.uniform(-0.5, 0.5), chi_2=rng.uniform(-0.5, 0.5),
             distance_mpc=100.0, inclination=np.arccos(rng.uniform(-1, 1)),
-            total_mass=rng.uniform(2.0, 4.0), reference_phase=0.0,
+            total_mass=rng.uniform(2.0, 4.0), coalescence_phase=0.0,
         )
         try:
             A = training_modes(model, dense, params)
@@ -193,7 +193,7 @@ def ladder_study(model, srate, validator, n_binaries, band_lo=LADDER_BAND_LO):
             mass_ratio=q, lambda_1=rng.uniform(5, 5000), lambda_2=rng.uniform(5, 5000),
             chi_1=rng.uniform(-0.5, 0.5), chi_2=rng.uniform(-0.5, 0.5),
             distance_mpc=100.0, inclination=np.arccos(rng.uniform(-1, 1)),
-            total_mass=rng.uniform(2.0, 4.0), reference_phase=0.0,
+            total_mass=rng.uniform(2.0, 4.0), coalescence_phase=0.0,
         )
         incl = params.inclination
         try:

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from mlgw_bns.data_management import ParameterRanges
+from mlgw_bns.dataset_generation import ParameterSet
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.model import (
     DEFAULT_MODES,
@@ -51,17 +52,17 @@ def test_model_requires_nonempty_modes():
         Model(modes=[])
 
 
+def test_model_requires_the_22_mode():
+    """The (2,2) sets the merger reference of every mode."""
+    with pytest.raises(ValueError):
+        Model(modes=[Mode(2, 1), Mode(3, 3)])
+
+
 def test_model_mode_filename():
     mm = Model(modes=[Mode(2, 2), Mode(2, 1)], filename="some_base")
 
     assert mm.mode_filename(Mode(2, 2)) == "some_base_l2_m2"
     assert mm.mode_filename(Mode(2, 1)) == "some_base_l2_m1"
-
-
-def test_model_filename_timeshifts():
-    mm = Model(modes=[Mode(2, 2)], filename="some_base")
-
-    assert mm.filename_timeshifts == "some_base_timeshifts.pkl"
 
 
 def test_model_lazy_mode_models_dict():
@@ -137,7 +138,6 @@ def test_default_for_testing_loads_every_mode(default_model):
     assert default_model.modes == DEFAULT_MODES
     assert default_model.auxiliary_data_available
     assert default_model.nn_available
-    assert default_model.time_shifts_predictor is not None
 
 
 def test_default_for_testing_rejects_unknown_name():
@@ -145,40 +145,44 @@ def test_default_for_testing_rejects_unknown_name():
         Model.default_for_testing("not_a_model")
 
 
-# Measured on the packaged model over the sixteen binaries this test draws
-# (seed 7, inclination 1.0): median 3.0e-4, worst 1.8e-3. Over 64 binaries
-# the median is 8.4e-5 and the worst 3.0e-3, so the sixteen drawn here are a
-# slightly unlucky sample rather than a lucky one.
-#
-# Both bounds carry a factor of two, which is headroom for library changes
-# rather than for the model: nothing here is random, since the model is
-# loaded from disk and the parameters come from a fixed seed. They cannot
-# be tightened much further without retraining the packaged model --- the
-# limit is what that model achieves, not the test.
-DEFAULT_MODEL_MAX_MISMATCH = 4e-3
-DEFAULT_MODEL_MEDIAN_MISMATCH = 6e-4
+# Measured on the packaged (interim: public TEOBResumS, 8192 waveforms)
+# model over the sixteen binaries this test draws (seed 7, inclination 1.0):
+# median 6.8e-8, worst 4.0e-6. Nothing here is random (the model is loaded
+# from disk and the parameters come from a fixed seed), so the factor of
+# two or three is headroom for library changes rather than for the model.
+DEFAULT_MODEL_MAX_MISMATCH = 1e-5
+DEFAULT_MODEL_MEDIAN_MISMATCH = 2e-7
 
-# Measured on the packaged 7-mode model (hom7_big) over the eight binaries
-# `test_full_waveform_mismatch_is_flat_in_total_mass` draws (seed 7): medians
-# of 4.1e-5, 7.9e-5 and 1.5e-4 at total_mass 2.2, 2.8 and 3.6 respectively --
-# rising smoothly with mass rather than jumping at the 2.8 dataset reference,
-# so the PN-splice bug the test guards against is not back. The floor moved
-# up an order of magnitude from the old 4-mode default (odd-m HOM modes are
-# harder to fit, see mode21-q1-boundary-singularity); this carries about the
-# same 2x headroom as `DEFAULT_MODEL_MEDIAN_MISMATCH` above.
-FLAT_MASS_MEDIAN_MISMATCH = 3e-4
+# Measured on the same model over the eight binaries
+# `test_full_waveform_mismatch_is_flat_in_total_mass` draws (seed 7):
+# medians of 1.5e-7, 2.3e-7 and 3.7e-7 at total_mass 2.2, 2.8 and 3.6,
+# rising smoothly with mass rather than jumping at the 2.8 dataset reference.
+FLAT_MASS_MEDIAN_MISMATCH = 8e-7
+
+# The same sixteen binaries with nothing maximised --- the surrogate's own
+# merger time and coalescence phase against TEOBResumS's, both from the
+# tangent to the (2,2) phase at the top of the band. The median mismatch
+# is 1.4e-4, but the tail follows the merger time, a derivative at the edge
+# of the band that grows for small tidal deformabilities (see
+# visualization/merger_reference_corner.py): over 2000 uniform draws |dt|
+# has a median of 2 us, a 99th percentile of 50 us and a maximum of 0.35 ms,
+# and 0.11 ms here (q=2.75, Lambda_1=31). Were the two references
+# inconsistent it would be of the order of the waveform's duration.
+UNOPTIMISED_MEDIAN_MISMATCH = 5e-4
+MERGER_TIME_MAX_ERROR = 2e-4
 
 
-def test_default_model_full_waveform_mismatch(default_model):
-    """Compare the summed multi-mode waveform against the EOB ground truth."""
+def test_default_model_merger_reference_matches_teobresums(default_model):
+    """The summed waveform against the EOB ground truth with nothing
+    maximised: the merger time and coalescence phase are the model's."""
 
-    validator = ValidateModel(default_model.mode_models[Mode(2, 2)])
-    frequencies = validator.frequencies
+    mode_model = default_model.mode_models[Mode(2, 2)]
+    validator = ValidateModel(mode_model)
     parameter_generator = reduced_range_parameter_generator(default_model, seed=7)
+    intrinsics = [next(parameter_generator) for _ in range(16)]
 
     mismatches = []
-    for _ in range(16):
-        intrinsic = next(parameter_generator)
+    for intrinsic in intrinsics:
         params = ParametersWithExtrinsic(
             mass_ratio=intrinsic.mass_ratio,
             lambda_1=intrinsic.lambda_1,
@@ -189,29 +193,16 @@ def test_default_model_full_waveform_mismatch(default_model):
             inclination=1.0,
             total_mass=2.8,
         )
-        # `time_shifts` is left out on purpose: the packaged model ships
-        # its own predictor, and this is the way it is meant to be used.
-        predicted = default_model.predict_modes_dict(frequencies, params)
-        true = default_model.get_teob_modes_dict(frequencies, params)
+        predicted = sum(default_model.predict_modes_dict(validator.frequencies, params).values())
+        true = sum(default_model.get_teob_modes_dict(validator.frequencies, params).values())
+        mismatches.append(validator.unmaximised_mismatch(true, predicted))
 
-        # The EOB modes are zero below the frequency at which the waveform
-        # starts; only compare where all of them are defined.
-        support = np.ones(len(frequencies), dtype=bool)
-        for mode_array in true.values():
-            support &= np.abs(mode_array) > 0
-        assert support.sum() > 2
+    time_errors, _, _ = validator.merger_reference_errors(
+        ParameterSet.from_list_of_waveform_parameters(intrinsics)
+    )
 
-        mismatches.append(
-            validator.full_waveform_mismatch(
-                {k: v[support] for k, v in true.items()},
-                {k: v[support] for k, v in predicted.items()},
-                frequencies=frequencies[support],
-            )
-        )
-
-    mismatches = np.array(mismatches)
-    assert np.max(mismatches) < DEFAULT_MODEL_MAX_MISMATCH
-    assert np.median(mismatches) < DEFAULT_MODEL_MEDIAN_MISMATCH
+    assert np.median(mismatches) < UNOPTIMISED_MEDIAN_MISMATCH
+    assert np.max(np.abs(time_errors)) < MERGER_TIME_MAX_ERROR
 
 
 @pytest.mark.parametrize("total_mass", [2.2, 2.8, 3.6])
@@ -253,24 +244,27 @@ def test_full_waveform_mismatch_is_flat_in_total_mass(default_model, total_mass)
     assert np.median(mismatches) < FLAT_MASS_MEDIAN_MISMATCH
 
 
-def test_reference_phase_is_a_coalescence_phase(default_model):
-    """Shifting ``reference_phase`` by ``phi_c`` must rotate the ``(l, m)``
-    mode by ``exp(i m phi_c)`` --- not the same phase for every mode."""
+def test_coalescence_phase_and_merger_time(default_model):
+    """``coalescence_phase`` rotates the ``(l, m)`` mode by
+    ``exp(i m phi_c)`` --- not the same phase for every mode --- and
+    ``merger_time`` shifts every mode by ``exp(-2 pi i f t_c)``."""
 
     frequencies = np.linspace(30.0, 1500.0, 400)
-    phi_c = 0.37
+    phi_c, t_c = 0.37, 0.012
     base = ParametersWithExtrinsic(
         mass_ratio=1.6, lambda_1=500.0, lambda_2=500.0, chi_1=0.1, chi_2=0.05,
-        distance_mpc=100.0, inclination=1.1, total_mass=2.8, reference_phase=0.0,
+        distance_mpc=100.0, inclination=1.1, total_mass=2.8,
     )
-    shifted = dataclasses.replace(base, reference_phase=phi_c)
+    shifted = dataclasses.replace(base, coalescence_phase=phi_c, merger_time=t_c)
 
     modes_base = default_model.predict_modes_dict(frequencies, base)
     modes_shifted = default_model.predict_modes_dict(frequencies, shifted)
 
     for (l, m), array in modes_base.items():
         ratio = modes_shifted[(l, m)] / array
-        np.testing.assert_allclose(ratio, np.exp(1j * m * phi_c), rtol=1e-6)
+        np.testing.assert_allclose(
+            ratio, np.exp(1j * (m * phi_c - 2 * np.pi * frequencies * t_c)), rtol=1e-6
+        )
 
 
 def test_model_generate_sets_availability_flags(generated_model):
@@ -294,7 +288,7 @@ def test_model_predict_returns_finite_waveform(
     frequencies = np.linspace(30.0, 500.0, 50)
 
     hp, hc = trained_model.predict(
-        frequencies, parameters_with_extrinsic, time_shifts=0.0
+        frequencies, parameters_with_extrinsic
     )
 
     assert hp.shape == frequencies.shape
@@ -309,10 +303,10 @@ def test_model_predict_modes_dict_sums_to_predict(
     frequencies = np.linspace(30.0, 500.0, 50)
 
     hp, hc = trained_model.predict(
-        frequencies, parameters_with_extrinsic, time_shifts=0.0
+        frequencies, parameters_with_extrinsic
     )
     modes_dict = trained_model.predict_modes_dict(
-        frequencies, parameters_with_extrinsic, time_shifts=0.0
+        frequencies, parameters_with_extrinsic
     )
 
     assert set(modes_dict.keys()) == set(trained_model.modes)
@@ -322,77 +316,21 @@ def test_model_predict_modes_dict_sums_to_predict(
 def test_model_predict_modes_dict_sums_to_predict_at_other_total_mass(
     trained_model, parameters_with_extrinsic
 ):
-    """The time shifts must be rescaled to the requested total mass.
-
-    Both code paths agree trivially when the total mass is the reference
-    one of the dataset, so check a mass which is not.
-    """
+    """At a total mass other than the reference one of the dataset, where
+    the merger reference must be rescaled with the frequencies."""
 
     frequencies = np.linspace(30.0, 500.0, 50)
     total_mass = 4.0
     assert total_mass != trained_model.dataset.total_mass
     params = dataclasses.replace(
-        parameters_with_extrinsic, total_mass=total_mass, inclination=1.0
+        parameters_with_extrinsic, total_mass=total_mass, inclination=1.0,
+        merger_time=1e-3,
     )
 
-    hp, hc = trained_model.predict(frequencies, params, time_shifts=1e-3)
-    modes_dict = trained_model.predict_modes_dict(
-        frequencies, params, time_shifts=1e-3
-    )
+    hp, hc = trained_model.predict(frequencies, params)
+    modes_dict = trained_model.predict_modes_dict(frequencies, params)
 
     assert_waveforms_close(hp - 1j * hc, sum(modes_dict.values()))
-
-
-def test_model_predict_defaults_to_predicted_time_shifts(
-    trained_model, parameters_with_extrinsic
-):
-    """Omitting `time_shifts` must be the same as querying the predictor."""
-
-    frequencies = np.linspace(30.0, 500.0, 50)
-    # at zero inclination every mode but the (2,2) vanishes
-    params = dataclasses.replace(parameters_with_extrinsic, inclination=1.0)
-
-    time_shifts = trained_model.time_shifts_predictor.predict(
-        [params.intrinsic(trained_model.dataset).array]
-    )[0]
-
-    hp_explicit, hc_explicit = trained_model.predict(
-        frequencies, params, time_shifts=time_shifts
-    )
-    hp_implicit, hc_implicit = trained_model.predict(frequencies, params)
-
-    assert_waveforms_close(hp_explicit, hp_implicit)
-    assert_waveforms_close(hc_explicit, hc_implicit)
-
-    modes_explicit = trained_model.predict_modes_dict(
-        frequencies, params, time_shifts=time_shifts
-    )
-    modes_implicit = trained_model.predict_modes_dict(frequencies, params)
-    for mode in modes_explicit:
-        assert_waveforms_close(modes_explicit[mode], modes_implicit[mode])
-
-
-def test_model_predict_without_predictor_requires_time_shifts(
-    trained_model, parameters_with_extrinsic
-):
-    """A model with no predictor must ask for `time_shifts`, not guess."""
-
-    frequencies = np.linspace(30.0, 500.0, 50)
-    predictor = trained_model.time_shifts_predictor
-    trained_model.time_shifts_predictor = None
-
-    try:
-        with pytest.raises(ValueError):
-            trained_model.predict(frequencies, parameters_with_extrinsic)
-
-        # ... but providing them explicitly still works.
-        hp, hc = trained_model.predict(
-            frequencies, parameters_with_extrinsic, time_shifts=0.0
-        )
-        assert np.all(np.isfinite(hp))
-        assert np.all(np.isfinite(hc))
-    finally:
-        trained_model.time_shifts_predictor = predictor
 
 
 def test_model_predict_amplitude_phase_mode(
@@ -429,10 +367,10 @@ def test_model_save_and_load_roundtrip(
 
     frequencies = np.linspace(30.0, 500.0, 50)
     hp_before, hc_before = trained_model.predict(
-        frequencies, parameters_with_extrinsic, time_shifts=0.0
+        frequencies, parameters_with_extrinsic
     )
     hp_after, hc_after = reloaded.predict(
-        frequencies, parameters_with_extrinsic, time_shifts=0.0
+        frequencies, parameters_with_extrinsic
     )
 
     assert_waveforms_close(hp_before, hp_after)

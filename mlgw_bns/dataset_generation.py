@@ -25,6 +25,8 @@ from .data_management import (
     Residuals,
     SavableData,
     phase_unwrapping,
+    re_reference,
+    reference_gauge,
 )
 from .multibanding import reduced_frequency_array, COMMON_GRID_MODE
 
@@ -307,23 +309,22 @@ class WaveformGenerator(ABC):
             params, frequencies
         )
 
-        amplitude_pn_ = self.post_newtonian_amplitude(
+        amplitude_pn = self.post_newtonian_amplitude(
             params if amplitude_reference is None else amplitude_reference,
             frequencies_eob,
         )
-        phase_pn_ = self.post_newtonian_phase(params, frequencies_eob)
+        phase_residual = phase_eob - self.post_newtonian_phase(params, frequencies_eob)
+        # Referenced to the waveform's own value and slope at f0, on the full
+        # grid; see `reference_gauge`. `Model.generate` instead references
+        # every mode to the (2,2) of the same waveform.
+        value, slope = reference_gauge(frequencies_eob, phase_residual)
+        phase_residual = re_reference(frequencies_eob, phase_residual, 2, value, slope)
+        amplitude_residual = amplitude_eob / amplitude_pn
 
         if downsampling_indices:
             amp_indices, phi_indices = downsampling_indices
-            amplitude_eob = amplitude_eob[amp_indices]
-            phase_eob = phase_eob[phi_indices]
-            amplitude_pn = amplitude_pn_[amp_indices]
-            phase_pn = phase_pn_[phi_indices]
-        else:
-            amplitude_pn = amplitude_pn_
-            phase_pn = phase_pn_
-
-        return (amplitude_eob / amplitude_pn, phase_eob - phase_pn)
+            return amplitude_residual[amp_indices], phase_residual[phi_indices]
+        return amplitude_residual, phase_residual
 
 class BarePostNewtonianGenerator(WaveformGenerator):
     """Generate waveforms with
@@ -425,9 +426,8 @@ class TEOBResumSGenerator(BarePostNewtonianGenerator):
         waveform = (rhpf - 1j * ihpf)[to_slice]
 
         # Do not anchor the phase at the first sample: keep the EOB baseline
-        # sourced the same (absolute) way as the PN one. The anchoring happens
-        # downstream (`remove_linear_trend` at training time, phase re-zeroing
-        # at prediction time).
+        # sourced the same (absolute) way as the PN one. The residuals are
+        # referenced at f0 downstream, see `re_reference`.
         amplitude, phase = phase_unwrapping(waveform, set_zero_at_start=False)
 
         return (f_spa, amplitude, phase)
@@ -1383,7 +1383,6 @@ class Dataset:
         self,
         size: int,
         downsampling_indices: Optional[DownsamplingIndices] = None,
-        flatten_phase: bool = True,
         oversample: float = 1.0,
         n_jobs: int = 1,
     ) -> tuple[np.ndarray, ParameterSet, Residuals]:
@@ -1397,13 +1396,6 @@ class Dataset:
                 If provided, return the waveform only at these indices,
                 which can be different between phase and amplitude.
                 Defaults to None.
-        flatten_phase: bool
-                Whether to subtract a linear term from the phase
-                such that it is roughly constant in its first section
-                (through the method :func:`Residuals.flatten_phase`).
-                Defaults to True,
-                but it is always set to False if the downsampling indices
-                are not provided.
 
         Returns
         -------
@@ -1417,7 +1409,6 @@ class Dataset:
         if downsampling_indices is None:
             amp_length = self.waveform_length
             phi_length = self.waveform_length
-            flatten_phase = False
         else:
             amp_length = downsampling_indices.amp_length
             phi_length = downsampling_indices.phi_length
@@ -1477,15 +1468,10 @@ class Dataset:
 
         # Take first 'size' valid results.
         #
-        # The phase residual and the parameter array are kept in float64.
-        # With the per-mode ``phase = -phase`` convention the phase residual
-        # carries the full ``arg H_lm(f0)`` constant (~1e4-1e6 rad for the
-        # HOM) until ``remove_linear_trend`` subtracts it, and the mode-phase
-        # predictor reproduces that constant from the parameters; a float32
-        # cast of either stamps a ~1e-3 rad floor onto the training data,
-        # and a float32 parameter array additionally makes the training-time
-        # anchor subtraction disagree with the float64 prediction added back
-        # at predict time. The amplitude residual is O(1), so float32.
+        # The phase residual and the parameter array are kept in float64:
+        # the phase residual reaches hundreds of radians near the merger,
+        # where a float32 cast would stamp a ~1e-5 rad floor onto the
+        # training data. The amplitude residual is O(1), so float32.
         amp_residuals = np.array([r[0] for r in valid_results[:size]], dtype=np.float32)
         phi_residuals = np.array([r[1] for r in valid_results[:size]], dtype=np.float64)
         parameter_array = np.array([r[2] for r in valid_results[:size]], dtype=np.float64)
@@ -1508,9 +1494,6 @@ class Dataset:
             indices: Union[slice, list[int]] = slice(None)
         else:
             indices = downsampling_indices.phase_indices
-
-        if flatten_phase:
-            residuals.flatten_phase(self.frequencies[indices])
 
         return (
             self.frequencies[indices],

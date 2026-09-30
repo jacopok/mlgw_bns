@@ -61,8 +61,8 @@ class ModelPredictingInverted(ModeModel):
             pn_amplitude,
             phi_residuals,
             pn_phase,
-            params.reference_phase,
-            params.time_shift,
+            params.coalescence_phase,
+            params.merger_time,
             frequencies,
         )
 
@@ -80,8 +80,8 @@ def compute_cartesian_waveform(
     amp_pn: np.ndarray,
     phi_residuals: np.ndarray,
     phi_pn: np.ndarray,
-    reference_phase: float,
-    time_shift: float,
+    coalescence_phase: float,
+    merger_time: float,
     frequencies: np.ndarray,
 ) -> np.ndarray:
     r"""Compute the Cartesian form of the waveform, starting
@@ -101,11 +101,11 @@ def compute_cartesian_waveform(
         Phase residuals.
     phi_pn : np.ndarray
         Post-Newtonian baseline phase
-    reference_phase : float
-        Overall phase to add.
-    time_shift : float
+    coalescence_phase : float
+        Orbital phase: the (2,2) phase is rotated by twice this.
+    merger_time : float
         Time-domain shift in seconds, corresponds to
-        a linear term added to the phase.
+        a linear term subtracted from the phase.
     frequencies : np.ndarray
         Reference frequencies, in Hz.
 
@@ -117,13 +117,12 @@ def compute_cartesian_waveform(
 
     amp = amplitude_residuals * amp_pn
     # `phi_pn` is the absolute stationary-phase phase; anchor it at the first
-    # node so `reference_phase` sets the phase there (and to avoid carrying a
-    # ~1e5 rad offset through `exp`).
+    # node (to avoid carrying a ~1e5 rad offset through `exp`).
     phi = (
         phi_residuals
         + (phi_pn - phi_pn[0])
-        + reference_phase
-        + (2 * np.pi * time_shift) * frequencies
+        + 2 * coalescence_phase
+        - (2 * np.pi * merger_time) * frequencies
     )
 
     return amp * np.exp(1j * phi)

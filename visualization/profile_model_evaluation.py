@@ -37,7 +37,7 @@ from mlgw_bns.mode_model import ParametersWithExtrinsic
 COMPONENTS = [
     ("model.py", "predict"),
     ("model.py", "_hpc_waveform"),
-    ("mode_model.py", "predict_amplitude_phase_optimized"),
+    ("mode_model.py", "predict_amplitude_phase"),
     ("mode_model.py", "predict_residuals_bulk"),
     ("mode_model.py", "_predicted_mode_phase0"),
     ("kernel_ridge.py", "predict"),

@@ -49,24 +49,29 @@ reproduces.
   over the modes. :func:`mode_polarizations` implements exactly this. No
   angular factor, reference phase or polarisation convention is applied
   to ``amp`` and ``phase`` themselves.
-* **Time.** The phase increases with frequency during the inspiral, and
-  the time at which mode :math:`m` emits frequency :math:`f` is
+* **Time and phase.** The phase increases with frequency during the
+  inspiral, and the time at which mode :math:`m` emits frequency
+  :math:`f` is
 
   .. math::
       t_{\ell m}(f) = -\frac{1}{2\pi} \frac{\mathrm{d} \phi_{\ell m}}{\mathrm{d} f},
 
-  negative before the merger and close to zero at it (the surrogate is
-  trained on merger-aligned EOB waveforms). ``return_tf=True`` returns it.
-* **Time shift.** The shared mode time shift :math:`\Delta t(\theta)`
-  predicted by the model is included, once, as the phase term
-  :math:`2\pi (f - f_{\rm ref} M_{\rm ref}/M)\, \Delta t\, M / M_{\rm ref}`,
-  anchored at ``f_ref = dataset.effective_initial_frequency_hz``. Callers
-  must not add it again.
+  negative before the merger (``return_tf=True`` returns it). The merger
+  is at :math:`t = 0` with coalescence phase zero: after the merger the
+  frequency-domain phase of the (2,2) mode is linear in :math:`f`, and
+  every mode is shifted in time and rotated in orbital phase (by
+  :math:`m/2` times the (2,2) rotation) so that this line, the tangent to
+  the (2,2) phase at the top of the trained band, is
+  :math:`\phi_{22} = 0`. The (2,2) is evaluated for this even when it is
+  not requested. See :meth:`ModeModel.merger_reference
+  <mlgw_bns.mode_model.ModeModel.merger_reference>`; a merger time
+  :math:`t_c` and coalescence phase :math:`\phi_c` are applied by adding
+  :math:`m \phi_c - 2\pi f t_c` to the phases.
 * **Frequencies.** Below the trained band (``f M / M_ref`` under
   ``effective_initial_frequency_hz``) each mode is continued with its
   post-Newtonian amplitude and phase, blended in as in
-  :meth:`ModeModel.predict_amplitude_phase_optimized
-  <mlgw_bns.mode_model.ModeModel.predict_amplitude_phase_optimized>`; above
+  :meth:`ModeModel.predict_amplitude_phase
+  <mlgw_bns.mode_model.ModeModel.predict_amplitude_phase>`; above
   it the amplitude is zero. Non-positive frequencies give zero amplitude
   and phase. The frequencies must increase along the last axis.
 * **Out-of-range rows.** A row whose parameters fall outside the model's
@@ -77,26 +82,20 @@ reproduces.
 
 Numerical accuracy
 ------------------
-The kernel-ridge regressors of the shipped model have dual coefficients
-up to :math:`\sim 10^{13}` in magnitude, and their prediction
-``K @ dual_coef`` is a heavily cancelling sum (the sum of the absolute
-values of its terms is typically :math:`10^{14}` times the result). Its
-rounding error therefore depends on the order in which the sum is
-carried out, and so on the BLAS kernel, the batch size and the backend.
-Evaluating the *same* parameters in a batch or one at a time changes the
-(2,2) and (4,4) phases by up to :math:`\sim 10^{-2}` rad near the merger
-(:math:`\sim 10^{-3}` rad RMS over the nodes), and the amplitudes by a
-few :math:`10^{-4}` relative. This is a property of the fitted
-regressors, not of this module, and is the floor for the agreement
-between numpy and JAX, or between batched and single evaluations. With
-``N = 1`` on numpy, :class:`BatchedSurrogate` performs the regressor
-evaluation with the same operations as
+The kernel-ridge prediction ``K @ dual_coef`` is a cancelling sum: its
+rounding error depends on the order in which it is carried out, and so on
+the BLAS kernel, the batch size and the backend. This is the floor for the
+agreement between numpy and JAX, or between batched and single
+evaluations; it is far smaller for regressors fitted with the
+leave-one-out penalty selection of
+:class:`~mlgw_bns.neural_network.KernelRidgeNetwork` than for those with
+a vanishing penalty. With ``N = 1`` on numpy, :class:`BatchedSurrogate`
+performs the regressor evaluation with the same operations as
 :meth:`KernelRidgeNetwork.predict
 <mlgw_bns.neural_network.KernelRidgeNetwork.predict>`, and reproduces
 :meth:`Model.predict_modes_dict <mlgw_bns.model.Model.predict_modes_dict>`
 to rounding. JAX must run in double precision (this module enables
-``jax_enable_x64`` when it builds a JAX surrogate): in single precision
-the regressors return noise.
+``jax_enable_x64`` when it builds a JAX surrogate).
 """
 
 from __future__ import annotations
@@ -120,7 +119,6 @@ __all__ = [
     "BatchedSurrogate",
     "mode_polarizations",
     "spin_weighted_spherical_harmonic",
-    "reference_phase_backbone_xp",
 ]
 
 _H_BY_MODE: dict[tuple[int, int], Callable] = {
@@ -257,37 +255,6 @@ def _post_newtonian(xp, psi, x, requests: list) -> list:
                 )
             results[i] = (amplitude, phase)
     return results
-
-
-def reference_phase_backbones_xp(xp, psi, params, f0_natural, ms, rel_step=1e-4):
-    r"""Vectorised :func:`mlgw_bns.pn_modes.reference_phase_backbone`.
-
-    ``params`` has shape ``(N, 5)``; returns ``{m: (N,) array}`` for each
-    azimuthal number in ``ms``, from one TaylorF2 evaluation.
-    """
-    ms = list(dict.fromkeys(int(m) for m in ms))
-    q, lam1, lam2, chi1, chi2 = (params[:, i : i + 1] for i in range(5))
-    eta = q / (1.0 + q) ** 2
-    h = f0_natural * rel_step
-    points = np.array(
-        [[2 * (f0_natural - h) / m, 2 * (f0_natural + h) / m] for m in ms]
-    )
-    psi_all = psi(xp.asarray(points.reshape(1, -1)), eta, chi1, chi2, lam1, lam2)
-    out = {}
-    for j, m in enumerate(ms):
-        factor = m / 2
-        psi_lo = psi_all[:, 2 * j] * factor
-        psi_hi = psi_all[:, 2 * j + 1] * factor
-        out[m] = f0_natural * (psi_hi - psi_lo) / (2 * h)
-    return out
-
-
-def reference_phase_backbone_xp(xp, psi, params, f0_natural, m, rel_step=1e-4):
-    r"""Vectorised :func:`mlgw_bns.pn_modes.reference_phase_backbone` for one
-    azimuthal number ``m``; ``params`` has shape ``(N, 5)``, returns ``(N,)``."""
-    return reference_phase_backbones_xp(xp, psi, params, f0_natural, [m], rel_step)[
-        int(m)
-    ]
 
 
 # ====================================================================== #
@@ -435,13 +402,11 @@ class _ModeArrays:
     phase_nodes_natural: Any
     pn_amp_nodes: Any  # frozen reference amplitude, or None
     trained_fmax_hz: float
-    mode_phase_column: Optional[int]
-    time_shift_column: Optional[int]
 
 
 @dataclass
 class _Frozen:
-    modes: list
+    modes: list  # the requested modes, the first entries of `modes_arrays`
     reference_mass: float
     mass_sum_seconds: float
     eff_fmin_hz: float
@@ -452,26 +417,8 @@ class _Frozen:
     ranges: Any
     safe_row: Any
     modes_arrays: list
-    # time shift: RFF + ridge on min-max scaled parameters
-    ts_scale: Any
-    ts_min: Any
-    ts_weights: Any
-    ts_offset: Any
-    ts_norm: float
-    ts_coef: Any
-    ts_intercept: Any
-    # mode reference phases
-    mp_available: bool
-    mp_scale: Any = None
-    mp_min: Any = None
-    mp_kernel: Optional[_KernelRidge] = None
-    mp_analytic: Optional[list] = (
-        None  # per column: (m, ref_m or None, coef, intercept)
-    )
-    mp_legacy: Optional[list] = None  # per column: (m, a, b)
-    mp_f0: Optional[float] = None
-    mp_ref_column: Optional[int] = None
-    mp_n_columns: int = 0
+    # position of the (2,2), which sets the merger reference, in `modes_arrays`
+    reference_index: int
 
 
 def _convert(obj, xp, memo=None):
@@ -540,43 +487,16 @@ def _freeze_spline(knots: np.ndarray) -> _Spline:
 
 
 def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
-    from .neural_network import (
-        KernelRidgeNetwork,
-        ModePhasesNN,
-        SklearnNetwork,
-        TimeshiftsNN,
-    )
+    from .neural_network import KernelRidgeNetwork, SklearnNetwork
 
     dataset = model.dataset
     ranges = model.parameter_ranges
     kernel_cache: list = []
     scaler_cache: list = []
 
-    mode_phases = model.mode_phases_predictor
-    mp_columns: list = []
-    if mode_phases is not None:
-        mp_columns = (
-            [tuple(lm) for lm in mode_phases.modes]
-            if mode_phases.modes is not None
-            else [(mode.l, mode.m) for mode in model.modes]
-        )
-
-    ts = model.time_shifts_predictor
-    if ts is None:
-        raise ValueError(
-            "This model has no time-shift predictor, which the batched "
-            "evaluation needs."
-        )
-    if not isinstance(ts, TimeshiftsNN):
-        raise NotImplementedError(
-            f"Batched evaluation supports a TimeshiftsNN time-shift predictor, "
-            f"not {type(ts).__name__}."
-        )
-    steps = dict(ts.regressor.named_steps)
-    rff = next(v for v in steps.values() if hasattr(v, "random_weights_"))
-    ridge = next(v for v in steps.values() if hasattr(v, "coef_"))
-    ts_coef = np.asarray(ridge.coef_, dtype=float)
-    per_mode_time_shift = ts_coef.ndim == 2 and ts_coef.shape[0] > 1
+    # the (2,2) sets the merger reference: evaluated even if not requested
+    requested = list(modes)
+    modes = requested + ([Mode(2, 2)] if Mode(2, 2) not in requested else [])
 
     modes_arrays = []
     for mode in modes:
@@ -620,10 +540,6 @@ def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
             phase_nodes_natural=f_nat[phase_idx],
             pn_amp_nodes=pn_amp_nodes,
             trained_fmax_hz=float(f_hz[-1]),
-            mode_phase_column=(
-                mp_columns.index((mode.l, mode.m)) if mp_columns else None
-            ),
-            time_shift_column=model.modes.index(mode) if per_mode_time_shift else None,
         )
         if isinstance(nn, KernelRidgeNetwork):
             regressor = nn.regressor
@@ -678,8 +594,8 @@ def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
         dtype=float,
     )
     first = model.mode_models[modes[0]]
-    frozen = _Frozen(
-        modes=[(mode.l, mode.m) for mode in modes],
+    return _Frozen(
+        modes=[(mode.l, mode.m) for mode in requested],
         reference_mass=float(dataset.total_mass),
         mass_sum_seconds=float(dataset.mass_sum_seconds),
         eff_fmin_hz=float(dataset.effective_initial_frequency_hz),
@@ -691,64 +607,8 @@ def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
         ranges=range_array,
         safe_row=range_array[1:].mean(axis=1),
         modes_arrays=modes_arrays,
-        ts_scale=np.asarray(ts.scaler.scale_, dtype=float),
-        ts_min=np.asarray(ts.scaler.min_, dtype=float),
-        ts_weights=np.asarray(rff.random_weights_, dtype=float),
-        ts_offset=np.asarray(rff.random_offset_, dtype=float),
-        ts_norm=float((2.0 / rff.n_components) ** 0.5),
-        ts_coef=ts_coef.T if ts_coef.ndim == 2 else ts_coef,
-        ts_intercept=np.asarray(ridge.intercept_, dtype=float),
-        mp_available=mode_phases is not None,
+        reference_index=modes.index(Mode(2, 2)),
     )
-
-    if isinstance(mode_phases, ModePhasesNN):
-        krr = (
-            mode_phases.regressor.named_steps["kernel_ridge"]
-            if hasattr(mode_phases.regressor, "named_steps")
-            else mode_phases.regressor
-        )
-        if not hasattr(krr, "dual_coef_") or getattr(krr, "kernel", "rbf") != "rbf":
-            raise NotImplementedError(
-                "Batched evaluation supports a mode-phases predictor built on an "
-                "RBF KernelRidge (the default)."
-            )
-        ref = mode_phases._ref_column()
-        frozen.mp_scale = np.asarray(mode_phases.scaler.scale_, dtype=float)
-        frozen.mp_min = np.asarray(mode_phases.scaler.min_, dtype=float)
-        frozen.mp_kernel = _freeze_kernel_ridge(
-            krr.X_fit_, krr.dual_coef_, krr.gamma, []
-        )
-        frozen.mp_ref_column = ref
-        frozen.mp_n_columns = len(mp_columns)
-        if mode_phases.analytic_coeffs:
-            analytic, legacy = [], []
-            for j, lm in enumerate(mp_columns):
-                entry = mode_phases.analytic_coeffs[lm]
-                if len(entry) == 3:
-                    a, b, f0 = entry
-                    legacy.append((lm[1], float(a), float(b)))
-                else:
-                    lr, f0 = entry
-                    analytic.append(
-                        (
-                            lm[1],
-                            None if (ref is None or j == ref) else mp_columns[ref][1],
-                            np.asarray(lr.coef_, dtype=float),
-                            float(lr.intercept_),
-                        )
-                    )
-                frozen.mp_f0 = float(f0)
-            if legacy and analytic:
-                raise NotImplementedError(
-                    "Mixed legacy/current mode-phase calibrations."
-                )
-            frozen.mp_analytic = analytic or None
-            frozen.mp_legacy = legacy or None
-    elif mode_phases is not None:
-        raise NotImplementedError(
-            f"No batched evaluation for mode-phases predictor {type(mode_phases).__name__}."
-        )
-    return frozen
 
 
 # ====================================================================== #
@@ -942,65 +802,6 @@ class BatchedSurrogate:
 
     # ---------------------------------------------------------------- #
 
-    def time_shifts(self, intrinsic):
-        r"""The model's time shift :math:`\Delta t(\theta)`, in seconds at the
-        reference total mass: ``(N,)``, or ``(N, n_model_modes)`` for a
-        per-mode predictor."""
-        xp = self._xp
-        return self._time_shifts(xp, xp.atleast_2d(xp.asarray(intrinsic, dtype=float)))
-
-    def _time_shifts(self, xp, x):
-        fr = self._frozen
-        scaled = x * fr.ts_scale + fr.ts_min
-        features = xp.cos(scaled @ fr.ts_weights + fr.ts_offset) * fr.ts_norm
-        return features @ fr.ts_coef + fr.ts_intercept
-
-    def mode_reference_phases(self, intrinsic):
-        """The mode-phases predictor's output, ``(N, n_columns)``, or ``None``."""
-        xp = self._xp
-        return self._mode_phases(xp, xp.atleast_2d(xp.asarray(intrinsic, dtype=float)))
-
-    def _mode_phases(self, xp, x):
-        fr = self._frozen
-        if not fr.mp_available:
-            return None
-        scaled = x * fr.mp_scale + fr.mp_min
-        prediction = _kernel_ridge(xp, scaled, [fr.mp_kernel])[0]
-        if fr.mp_analytic is not None or fr.mp_legacy is not None:
-            q, chi1, chi2 = x[:, 0], x[:, 3], x[:, 4]
-            chi_eff = (chi1 + q * chi2) / (1.0 + q)
-            ms = [m for m, *_ in (fr.mp_analytic or fr.mp_legacy)]
-            ms += [
-                ref_m for _, ref_m, *_ in (fr.mp_analytic or []) if ref_m is not None
-            ]
-            backbones = reference_phase_backbones_xp(xp, self._psi, x, fr.mp_f0, ms)
-
-            def backbone(m):
-                return backbones[m]
-
-            columns = []
-            if fr.mp_analytic is not None:
-                for m, ref_m, coef, intercept in fr.mp_analytic:
-                    first = (
-                        backbone(m) if ref_m is None else backbone(m) - backbone(ref_m)
-                    )
-                    design = xp.stack(
-                        [first, x[:, 0], x[:, 1], x[:, 2], x[:, 3], x[:, 4], chi_eff],
-                        axis=1,
-                    )
-                    columns.append(design @ coef + intercept)
-            else:
-                for m, a, b in fr.mp_legacy:
-                    columns.append(a * backbone(m) + b)
-            prediction = prediction + xp.stack(columns, axis=1)
-        ref = fr.mp_ref_column
-        if ref is not None:
-            is_ref = xp.arange(fr.mp_n_columns) == ref
-            prediction = prediction + xp.where(
-                is_ref[None, :], 0.0, prediction[:, ref : ref + 1]
-            )
-        return prediction
-
     def _residuals(self, xp, x):
         """Per mode, the amplitude and phase residuals at the nodes."""
         modes_arrays = self._frozen.modes_arrays
@@ -1129,7 +930,7 @@ class BatchedSurrogate:
             n_low = f.shape[1]
         if n_low:
             # natural units, in the operation order of
-            # `ModeModel.predict_amplitude_phase_optimized`; the points not
+            # `ModeModel.predict_amplitude_phase`; the points not
             # below the band are moved to the connection, harmlessly (they
             # are discarded, but must not produce NaNs, nor NaN gradients)
             low_natural = xp.where(
@@ -1149,16 +950,21 @@ class BatchedSurrogate:
             connection = xp.full((1, 1), fr.connection_natural)
             edge = xp.full((n_rows, 1), fr.eff_fmin_hz)
 
-        # --- all the post-Newtonian evaluations at once
+        # --- all the post-Newtonian evaluations at once: at the nodes for
+        # every mode (the phase only for the (2,2) when it is just the
+        # merger reference), then below the band for the requested modes
+        n_out = len(fr.modes)
         requests = []
-        for lm, ma in zip(fr.modes, fr.modes_arrays):
+        for i, ma in enumerate(fr.modes_arrays):
             requests.append(
-                _PNRequest(lm, ma.phase_nodes_natural[None, :], unwrap=True)
+                _PNRequest(ma.mode, ma.phase_nodes_natural[None, :], unwrap=True)
             )
-            if ma.pn_amp_nodes is None:
+            if i < n_out and ma.pn_amp_nodes is None:
                 requests.append(
-                    _PNRequest(lm, ma.amp_nodes_natural[None, :], amplitude=True)
+                    _PNRequest(ma.mode, ma.amp_nodes_natural[None, :], amplitude=True)
                 )
+        for ma in fr.modes_arrays[:n_out]:
+            lm = ma.mode
             if n_low:
                 requests.append(_PNRequest(lm, connection, amplitude=True))
                 requests.append(_PNRequest(lm, low_natural, amplitude=True))
@@ -1172,27 +978,37 @@ class BatchedSurrogate:
         pn = iter(_post_newtonian(xp, self._psi, x, requests))
 
         residuals = self._residuals(xp, x)
-        time_shifts = self._time_shifts(xp, x)
-        mode_phases = self._mode_phases(xp, x)
-        reference_hz = fr.eff_fmin_hz * (fr.reference_mass / mass)
+        nodes = []
+        for i, (ma, (amp_res, phase_res)) in enumerate(zip(fr.modes_arrays, residuals)):
+            _, pn_phase = next(pn)
+            amp_nodes = None
+            if i < n_out:
+                pn_amp = (
+                    ma.pn_amp_nodes[None, :]
+                    if ma.pn_amp_nodes is not None
+                    else next(pn)[0]
+                )
+                amp_nodes = pn_amp * amp_res
+            phase_nodes = pn_phase + phase_res
+            nodes.append(
+                (amp_nodes, phase_nodes, _spline_setup(xp, ma.phase_spline, phase_nodes))
+            )
+
+        # --- the merger reference: the tangent to the (2,2) phase at the
+        # top knot, as a function of the frequency at the reference mass
+        reference = fr.modes_arrays[fr.reference_index]
+        _, reference_phase, reference_slopes = nodes[fr.reference_index]
+        merger_slope = reference_slopes[:, -1:]
+        merger_intercept = (
+            reference_phase[:, -1:] - merger_slope * reference.phase_spline.knots[-1]
+        )
 
         amps, phases, tfs = [], [], []
-        for ma, (amp_res, phase_res) in zip(fr.modes_arrays, residuals):
-            # --- at the nodes
-            _, pn_phase = next(pn)
-            pn_amp = (
-                ma.pn_amp_nodes[None, :] if ma.pn_amp_nodes is not None else next(pn)[0]
-            )
-            amp_nodes = pn_amp * amp_res
-            phase_nodes = pn_phase + phase_res
-            if mode_phases is not None:
-                phase_nodes = (
-                    phase_nodes + mode_phases[:, ma.mode_phase_column][:, None]
-                )
-
+        for ma, (amp_nodes, phase_nodes, phase_slopes) in zip(
+            fr.modes_arrays[:n_out], nodes
+        ):
             # --- in the band
             amp_slopes = _spline_setup(xp, ma.amp_spline, amp_nodes)
-            phase_slopes = _spline_setup(xp, ma.phase_spline, phase_nodes)
             amp, _ = _spline_eval(
                 xp, ma.amp_spline, amp_nodes, amp_slopes, rescaled, False
             )
@@ -1224,29 +1040,20 @@ class BatchedSurrogate:
                     low_dphase = (up - down) / (2 * _TF_RELATIVE_STEP * low_f)
                     dphase = _replace_prefix(xp, dphase, low[:, :n_low], low_dphase)
 
-            if not fr.mp_available:
-                # no per-mode reference phase: anchor at the first frequency
-                phase = phase - phase[:, :1]
+            # --- merger reference
+            phase = phase - merger_slope * rescaled - ma.mode[1] / 2 * merger_intercept
 
             # --- above the band, and non-positive frequencies: zero
             outside = (~positive) | (rescaled > ma.trained_fmax_hz)
             amp = xp.where(outside, 0.0, amp)
             phase = xp.where(outside, 0.0, phase)
 
-            # --- overall amplitude, time shift
             amp = amp * (mass**2 / AMP_SI_BASE)[:, None] / distance[:, None]
-            ts = (
-                time_shifts
-                if ma.time_shift_column is None
-                else time_shifts[:, ma.time_shift_column]
-            )
-            ts_scaled = (ts * (mass / fr.reference_mass))[:, None]
-            phase = phase + 2 * np.pi * (f - reference_hz[:, None]) * ts_scaled
             amps.append(amp)
-            phases.append(xp.where(positive, phase, 0.0))
+            phases.append(phase)
             if return_tf:
-                dphase = xp.where(outside, 0.0, dphase) + 2 * np.pi * ts_scaled
-                tfs.append(xp.where(positive, -dphase / (2 * np.pi), 0.0))
+                dphase = xp.where(outside, 0.0, dphase - merger_slope * mass_ratio)
+                tfs.append(-dphase / (2 * np.pi))
 
         blank = ~valid[:, None, None]
         out = [

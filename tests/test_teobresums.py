@@ -16,8 +16,8 @@ def test_geometric_units_normalization(dataset, teob_generator):
         chi_2=-0.1,
         distance_mpc=1.0,
         inclination=0.0,
-        reference_phase=0.0,
-        time_shift=0.0,
+        coalescence_phase=0.0,
+        merger_time=0.0,
         total_mass=2.8,
     )
 

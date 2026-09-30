@@ -16,7 +16,7 @@ from numpy.ma import indices
 import yaml
 from dacite import from_dict
 from numba import njit  # type: ignore
-from scipy.interpolate import interp1d
+from scipy.interpolate import CubicSpline, interp1d
 
 
 def _with_fast_sklearn_config(func):
@@ -76,14 +76,10 @@ from .neural_network import (
     KernelRidgeNetwork,
     NeuralNetwork,
     SklearnNetwork,
-    TimeshiftsGPR,
-    TimeshiftsNN,
-    load_timeshifts_predictor_from_file,
 )
 from .principal_component_analysis import (
     PrincipalComponentAnalysisModel,
     PrincipalComponentTraining,
-    remove_linear_trend,
 )
 from .taylorf2 import SUN_MASS_SECONDS, smoothing_func
 from .higher_order_modes import mode_to_k
@@ -142,18 +138,15 @@ class ParametersWithExtrinsic:
             angular momentum and the observation direction, in radians.
     total_mass : float
             Total mass of the binary system, in solar masses.
-    reference_phase : float
-            This will be set as the phase of the first point of the waveform.
-            Defaults to 0.
-    time_shift : float
-            The waveform will be shifted in the time domain
-            by this amount (measured in seconds).
-            In the frequency domain, this means adding a linear
-            term to the phase.
-            Defaults to 0, which by convention means a configuration
-            in which the merger happens at the right edge of the
-            timeseries. This also means that, in the frequency domain,
-            the phase at high frequencies is roughly constant.
+    coalescence_phase : float
+            Orbital phase at the merger, in radians: the :math:`(\ell, m)`
+            mode is rotated by :math:`e^{i m \phi_c}`. Defaults to 0.
+    merger_time : float
+            Time of the merger, in seconds. Defaults to 0.
+
+    The merger is where the frequency-domain phase of the (2,2) mode
+    becomes linear, at the top of the trained band; see
+    :meth:`ModeModel.predict_amplitude_phase`.
     """
 
     mass_ratio: float
@@ -164,8 +157,8 @@ class ParametersWithExtrinsic:
     distance_mpc: float
     inclination: float
     total_mass: float
-    reference_phase: float = 0.0
-    time_shift: float = 0.0
+    coalescence_phase: float = 0.0
+    merger_time: float = 0.0
 
     def intrinsic(self, dataset: Dataset) -> WaveformParameters:
         return WaveformParameters(
@@ -439,13 +432,6 @@ class ModeModel:
         self.pca_components_number = pca_components_number
 
         self.nn: Optional[NeuralNetwork] = None
-        self.timeshifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None
-
-        # Shared per-mode reference-phase predictor and this mode's column
-        # in its output. Set by `Model` for HOM models; when None the
-        # phase reconstruction adds no per-mode constant.
-        self.mode_phases_predictor = None
-        self.mode_phases_index: Optional[int] = None
 
         self.training_dataset: Optional[Residuals] = None
         self.training_parameters: Optional[ParameterSet] = None
@@ -621,51 +607,11 @@ class ModeModel:
 
         return f"{self.filename}_hyper.pkl"
 
-    @property
-    def filename_timeshifts(self) -> str:
-        """File name in which to save the mode time-shifts predictor."""
-
-        if self.filename is None:
-            self._handle_missing_filename()
-
-        return f"{self.filename}_timeshifts.pkl"
-
-    def _predicted_mode_phase0(self, intrinsic_params) -> float:
-        """Per-mode reference phase to restore at the anchor node.
-
-        Non-zero only for HOM models, where ``remove_linear_trend``
-        subtracted the shared
-        :class:`~mlgw_bns.neural_network.ModePhasesNN` prediction of
-        :math:`\\phi_{\\ell m}(f_0)` from the training residuals; this
-        returns the very same prediction so it cancels.
-
-        The predictor is shared across every mode of a :class:`Model` and
-        returns all modes' phases at once, so a summed waveform would call
-        it once per mode with identical parameters. A one-entry cache on
-        the (shared) predictor object collapses those to a single
-        evaluation, which is worth roughly a quarter of ``predict``'s
-        fixed cost on the four-mode model.
-        """
-        predictor = self.mode_phases_predictor
-        if predictor is None or self.mode_phases_index is None:
-            return 0.0
-        param_array = np.asarray(intrinsic_params.array)
-        key = param_array.tobytes()
-        cached = getattr(predictor, "_phase0_cache", None)
-        if cached is None or cached[0] != key:
-            phases = np.asarray(
-                predictor.predict([param_array])[0], dtype=float
-            )
-            cached = (key, phases)
-            predictor._phase0_cache = cached
-        return float(cached[1][self.mode_phases_index])
-
     def generate(
         self,
         training_downsampling_dataset_size: Optional[int] = 64,
         training_pca_dataset_size: Optional[int] = 256,
         training_nn_dataset_size: Optional[int] = 256,
-        timeshifts_predictor: Optional[Union[TimeshiftsGPR, TimeshiftsNN]] = None,
         precomputed_residuals: Optional[tuple] = None,
         n_jobs: int = 1,
     ) -> None:
@@ -689,11 +635,6 @@ class ModeModel:
                 By default 256.
         training_nn_dataset_size : int, optional
                 By default 256.
-        timeshifts_predictor : TimeshiftsGPR or TimeshiftsNN, optional
-                If given, used as :attr:`timeshifts_predictor` instead of
-                fitting a new one from this model's own residuals. Used by
-                :class:`~mlgw_bns.model.Model` to share a single
-                predictor, trained on the (2,2) mode, across every mode.
         precomputed_residuals : tuple, optional
                 ``(freq_downsampled_natural, ParameterSet, Residuals)`` for
                 this mode, already downsampled to
@@ -733,78 +674,15 @@ class ModeModel:
             training_pca_dataset_size, training_nn_dataset_size
         )
 
-        if training_nn_dataset_size is not None:
-            # A single dataset serves both the time-shift predictor and the
-            # network: the former only needs one number per waveform, read
-            # off the phase residuals which the latter is trained on anyway.
-            #
-            # The residuals are generated at the downsampled frequencies:
-            # the time shift is a chord of the phase residual, so the
-            # full-resolution grid buys nothing here while costing a factor
-            # `waveform_length / (amp_length + phi_length)` --- of order a
-            # thousand --- in memory.
-            if precomputed_residuals is not None:
-                freq_downsampled, all_parameters, all_residuals = precomputed_residuals
-                parameters = self.dataset.parameter_set_cls(
-                    all_parameters.parameter_array[:training_nn_dataset_size]
-                )
-                residuals = all_residuals[:training_nn_dataset_size]
-            else:
-                logging.info("Generating the training dataset")
-                freq_downsampled, parameters, residuals = (
-                    self.dataset.generate_residuals(
-                        training_nn_dataset_size,
-                        self.downsampling_indices,
-                        flatten_phase=False,
-                        n_jobs=n_jobs,
-                    )
-                )
-            frequencies_hz = self.dataset.natural_units_to_hz(freq_downsampled)
-
-        # LEARN Δt(θ), needed below to remove the linear trend
-        # from the phase residuals before PCA and NN training.
-        # `TimeshiftsNN` (RFF + Ridge) rather than `TimeshiftsGPR`: the
-        # latter's `GaussianProcessRegressor` defaults to
-        # `normalize_y=False`, so with a zero-mean prior and a
-        # unit-amplitude RBF kernel it collapses to predicting 0 for
-        # timeshift targets whose magnitude is far from unity.
-        if timeshifts_predictor is not None:
-            self.timeshifts_predictor = timeshifts_predictor
-        elif training_nn_dataset_size is not None:
-            logging.info("Training the time-shifts predictor")
-
-            # `phase_timeshifts` rather than `flatten_phase`, since the
-            # residuals are needed in their raw form further down.
-            self.training_timeshifts_data = residuals.phase_timeshifts(
-                frequencies=frequencies_hz
-            )
-            self.timeshifts_predictor = TimeshiftsNN(
-                training_params=parameters.parameter_array,
-                training_timeshifts=self.training_timeshifts_data
-            ).fit()
-        else:
-            assert self.timeshifts_predictor is not None
-
         if training_pca_dataset_size is not None:
             logging.info("Training the PCA")
             self.pca_training = PrincipalComponentTraining(
-                self.dataset,
-                self.downsampling_indices,
-                self.pca_components_number,
-                self.timeshifts_predictor,
-                subtract_mode_phase_anchor=self.mode is not None,
-                mode_phases_predictor=self.mode_phases_predictor,
-                mode_index=self.mode_phases_index,
+                self.dataset, self.downsampling_indices, self.pca_components_number
             )
-
             if precomputed_residuals is not None:
-                freq_ds_pca, all_parameters, all_residuals = precomputed_residuals
+                _, all_parameters, all_residuals = precomputed_residuals
                 self.pca_data = self.pca_training.train_on(
-                    self.dataset.parameter_set_cls(
-                        all_parameters.parameter_array[:training_pca_dataset_size]
-                    ),
-                    all_residuals[:training_pca_dataset_size],
-                    self.dataset.natural_units_to_hz(freq_ds_pca),
+                    all_residuals[:training_pca_dataset_size]
                 )
             else:
                 self.pca_data = self.pca_training.train(
@@ -814,17 +692,17 @@ class ModeModel:
             assert self.pca_data is not None
 
         if training_nn_dataset_size is not None:
-            logging.info("Removing the linear trend from the training residuals")
-            residuals.phase_residuals = remove_linear_trend(
-                parameters=parameters,
-                phi_diff=residuals.phase_residuals,
-                frq=frequencies_hz,
-                timeshifts_predictor=self.timeshifts_predictor,
-                subtract_mode_phase_anchor=self.mode is not None,
-                mode_phases_predictor=self.mode_phases_predictor,
-                mode_index=self.mode_phases_index,
-            )
-
+            if precomputed_residuals is not None:
+                _, all_parameters, all_residuals = precomputed_residuals
+                parameters = self.dataset.parameter_set_cls(
+                    all_parameters.parameter_array[:training_nn_dataset_size]
+                )
+                residuals = all_residuals[:training_nn_dataset_size]
+            else:
+                logging.info("Generating the training dataset")
+                _, parameters, residuals = self.dataset.generate_residuals(
+                    training_nn_dataset_size, self.downsampling_indices, n_jobs=n_jobs
+                )
             self.training_dataset = residuals
             self.training_parameters = parameters
         else:
@@ -909,11 +787,7 @@ class ModeModel:
             for arr in arr_list:
                 arr.save_to_file(f)
 
-    def save(
-        self,
-        include_training_data: bool = True,
-        include_timeshifts_predictor: bool = True,
-    ) -> None:
+    def save(self, include_training_data: bool = True) -> None:
         """Save this model to the files derived from :attr:`filename`.
 
         Parameters
@@ -921,34 +795,23 @@ class ModeModel:
         include_training_data : bool, optional
                 Whether to also persist the training residuals and
                 parameters. Defaults to ``True``.
-        include_timeshifts_predictor : bool, optional
-                Whether to write :attr:`timeshifts_predictor` to
-                ``{filename}_timeshifts.pkl``. Defaults to ``True``.
-                :meth:`Model.save` passes ``False``: every mode
-                shares a single predictor, which that class saves once
-                under its own base filename rather than once per mode.
         """
         self.save_metadata()
         self.save_arrays(include_training_data)
         if self.nn is not None:
             self.nn.save(self.filename_nn)
-        if include_timeshifts_predictor and self.timeshifts_predictor is not None:
-            self.timeshifts_predictor.save_model(self.filename_timeshifts)
 
     def load(
         self,
-        streams: Optional[
-            tuple[IO[bytes], IO[bytes], IO[bytes], Optional[IO[bytes]]]
-        ] = None,
+        streams: Optional[tuple[IO[bytes], IO[bytes], IO[bytes]]] = None,
     ) -> None:
         """Load model from the files present in the current folder.
 
         Parameters
         ----------
-        streams: tuple[IO[bytes], IO[bytes], IO[bytes], Optional[IO[bytes]]], optional
-                For internal use (specifically, loading the default model).
-                The fourth element (time-shifts predictor) may be ``None``
-                if the packaged model does not ship one.
+        streams: tuple[IO[bytes], IO[bytes], IO[bytes]], optional
+                For internal use (specifically, loading the default model):
+                the metadata, arrays and network streams.
                 Defaults to None (look in the current folder).
         """
 
@@ -956,15 +819,13 @@ class ModeModel:
             stream_meta: Union[IO[bytes], None]
             h5_source: Union[IO[bytes], str]
             filename_nn: Union[IO[bytes], str]
-            filename_timeshifts: Union[IO[bytes], str, None]
 
-            stream_meta, h5_source, filename_nn, filename_timeshifts = streams
+            stream_meta, h5_source, filename_nn = streams
             ignore_warnings = True
         else:
             stream_meta = None
             h5_source = self.filename_arrays
             filename_nn = self.filename_nn
-            filename_timeshifts = self.filename_timeshifts
             ignore_warnings = False
 
         # Read-only open: supports many parallel workers (ProcessPool) on the same
@@ -989,14 +850,6 @@ class ModeModel:
             self.nn = self.nn_kind.from_file(filename_nn)
         except FileNotFoundError:
             logging.warn("No trained network or hyperparameters found.")
-
-        if filename_timeshifts is not None:
-            try:
-                self.timeshifts_predictor = load_timeshifts_predictor_from_file(
-                    filename_timeshifts
-                )
-            except FileNotFoundError:
-                logging.info("No time-shifts predictor found.")
 
     @property
     def reduced_residuals(self) -> np.ndarray:
@@ -1241,305 +1094,26 @@ class ModeModel:
 
         return waveforms
 
-    @_with_fast_sklearn_config
-    def predict_amplitude_phase(
-        self, frequencies: np.ndarray, params: ParametersWithExtrinsic
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Predict the amplitude and phase of a waveform.
-        This function is basically the same as :meth:`predict`,
-        with the difference that it does not compute the
-        Cartesian waveform.
+    @property
+    def m(self) -> int:
+        """Azimuthal number of this mode; a mode-less model is the (2,2)."""
+        return 2 if self.mode is None else self.mode.m
 
-        Also, it only gives one polarization
-        and does not account for the distance
+    def _nodes(self, intrinsic_params) -> tuple[np.ndarray, np.ndarray]:
+        """Amplitude and phase at the downsampling nodes, at the reference mass.
 
-        Parameters
-        ----------
-        frequencies : np.ndarray
-        params : ParametersWithExtrinsic
-
-        Returns
-        -------
-        tuple[np.ndarray, np.ndarray]
-            Amplitude and phase.
+        The phase is referenced at :math:`f_0` (see
+        :func:`~mlgw_bns.data_management.re_reference`), as in training.
         """
-        
         assert self.downsampling_indices is not None
         assert self.nn is not None
-
-        rescaled_frequencies = frequencies * (
-            params.total_mass / self.dataset.total_mass
-        )
-
-        if rescaled_frequencies[0] < self.dataset.effective_initial_frequency_hz:
-
-            if not self.extend_with_post_newtonian:
-                raise FrequencyTooLowError(
-                    "This model is not configured to be extended with a post-newtonian"
-                    "waveform. Set the 'extend_with_post_newtonian' attribute of the model to True"
-                    "if that is what you want."
-                )
-            
-            extend_with_pn = True
-            limit_index = np.searchsorted(rescaled_frequencies, self.dataset.effective_initial_frequency_hz)
-            
-            # if we're extending downwards, then we need to also compute the PN phase 
-            # at the very end of the low-frequency bit (which might not be in the given array)
-            # in order to connect with the high-frequency bit without any discontinuity in phase.
-            
-            low_freqs_hz = np.append(rescaled_frequencies[:limit_index], self.dataset.effective_initial_frequency_hz) # type: ignore
-            rescaled_frequencies = np.append(self.dataset.effective_initial_frequency_hz, rescaled_frequencies[limit_index:]) # type: ignore
-            
-            low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz)
-            connection_f = self.dataset.hz_to_natural_units(self.dataset.effective_initial_frequency_hz)
-            
-        else:
-            extend_with_pn = False
-
-        if len(rescaled_frequencies) < 1:
-            # this should never happen! 
-            raise ValueError('At least one point should be in the model band')
-
-        # The trained band's own top edge, not the theoretical
-        # `effective_srate_hz / 2`: the dataset's frequency grid can land a
-        # hair past that nominal value by construction, which would
-        # otherwise make this model's own last trained point count as
-        # "out of band" and get zeroed out (see `[[predict-amplitude-phase-hf-edge]]`).
-        trained_fmax_hz = self.dataset.frequencies_hz[-1]
-        if rescaled_frequencies[-1] > trained_fmax_hz:
-            if not self.extend_with_zeros_at_high_frequency:
-                raise FrequencyTooHighError(
-                    "This model is not configured to be extended with zeros at high frequency."
-                    "Set the 'extend_with_zeros_at_high_frequency' attribute of the model to True"
-                    "if that is what you want."
-                )
-            else:
-                extend_hf = True
-                high_frequency_index = int(np.searchsorted(rescaled_frequencies, trained_fmax_hz))
-                hf_segment_length = len(rescaled_frequencies) - high_frequency_index
-                rescaled_frequencies = rescaled_frequencies[:high_frequency_index]
-
-
-        else:
-            extend_hf = False
-
-        self.parameter_ranges.check_parameters_in_ranges(params)
-
-        intrinsic_params = params.intrinsic(self.dataset)
-
         residuals = self.predict_residuals_bulk(
             ParameterSet.from_list_of_waveform_parameters([intrinsic_params]), self.nn
         )
-
+        ds = self.downsampling_indices
         # None unless this model was trained against a fixed reference
         # amplitude, in which case the same divisor has to be put back
         # here; see `WaveformGenerator.generate_residuals`.
-        reference = self.dataset.amplitude_reference_parameters
-        pn_amplitude = self.dataset.waveform_generator.post_newtonian_amplitude(
-            intrinsic_params if reference is None else reference,
-            self.dataset.frequencies[self.downsampling_indices.amplitude_indices],
-        )
-        pn_phase = self.dataset.waveform_generator.post_newtonian_phase(
-            intrinsic_params,
-            self.dataset.frequencies[self.downsampling_indices.phase_indices],
-        )
-
-        # downsampled amplitude array
-        amp_ds = combine_residuals_amp(residuals.amplitude_residuals[0], pn_amplitude)
-        phi_ds = combine_residuals_phi(residuals.phase_residuals[0], pn_phase)
-
-        if self.timeshifts_predictor is not None:
-            # add back the linear-in-frequency phase trend that
-            # `remove_linear_trend` subtracted from the training residuals
-            phase_freqs_hz = self.dataset.frequencies_hz[
-                self.downsampling_indices.phase_indices
-            ]
-            time_shift = self.timeshifts_predictor.predict(
-                [intrinsic_params.array]
-            )[0]
-            phi_ds = phi_ds + 2 * np.pi * (phase_freqs_hz - phase_freqs_hz[0]) * time_shift
-
-        phi_ds = phi_ds + self._predicted_mode_phase0(intrinsic_params)
-
-        pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
-
-        resampled_amp = self.downsampling_training.resample(
-                self.dataset.frequencies_hz[
-                    self.downsampling_indices.amplitude_indices
-                ],
-                rescaled_frequencies,
-                amp_ds,
-            )
-        
-        
-        resampled_phi = self.downsampling_training.resample(
-                self.dataset.frequencies_hz[self.downsampling_indices.phase_indices],
-                rescaled_frequencies,
-                phi_ds,
-        )
-
-        if extend_with_pn:
-            
-            eob_amplitude_at_connection = resampled_amp[0]
-            f_min_connection = connection_f / 2.0
-            connecting_mask = np.where(
-                low_freqs > f_min_connection,
-            )
-            
-            zero_to_one = (
-                (low_freqs[connecting_mask] - f_min_connection) / 
-                (connection_f - f_min_connection)
-            )
-            
-            low_freq_amp = (
-                self.dataset.waveform_generator.post_newtonian_amplitude(
-                intrinsic_params,
-                low_freqs,
-                )
-            )
-            pn_amplitude_at_connection = low_freq_amp[-1]
-            
-            low_freq_amp[connecting_mask] += (
-                smoothing_func(zero_to_one) 
-                * (eob_amplitude_at_connection - pn_amplitude_at_connection)
-            )
-            
-            resampled_amp = np.concatenate((low_freq_amp[:-1], resampled_amp[1:]))
-            
-            low_f_phi = self.dataset.waveform_generator.post_newtonian_phase(
-                intrinsic_params,
-                low_freqs,
-            )
-
-            # Glue the PN segment onto the *bottom* of the model band, shifting
-            # the PN piece to match the band at the connection frequency --- not
-            # the band to match the PN, which would overwrite the band's
-            # per-mode phase constant (`_predicted_mode_phase0`, carrying the
-            # inter-mode alignment) with the PN one and mis-phase the HOM modes
-            # relative to each other for every `total_mass` below the dataset
-            # reference. `- low_f_phi[-1]` zeroes the PN phase at the connection
-            # first, so this is correct for an absolute-backbone PN phase too.
-            resampled_phi = np.concatenate((
-                low_f_phi[:-1] - low_f_phi[-1] + resampled_phi[0],
-                resampled_phi[1:]
-            ))
-
-        # Anchor the phase to zero at the first node so that `reference_phase`
-        # continues to set the phase there. HOM models keep the per-mode
-        # constant restored by `_predicted_mode_phase0`, which carries the
-        # inter-mode alignment.
-        if self.mode_phases_predictor is None:
-            resampled_phi = resampled_phi - resampled_phi[0]
-
-        if extend_hf:
-            resampled_amp = np.concatenate((resampled_amp, np.zeros(hf_segment_length)))
-            resampled_phi = np.concatenate((resampled_phi, np.zeros(hf_segment_length)))
-
-        amp = (
-            resampled_amp
-            * pre
-            / params.distance_mpc
-        )
-
-        # `reference_phase` is the coalescence phase: shifting it by phi_c
-        # rotates the (l, m) mode by exp(i m phi_c). A mode-less model is the
-        # (2,2). `time_shift` is a genuine time-domain shift, the same for
-        # every mode.
-        m_mode = 2 if self.mode is None else self.mode.m
-        phi = (
-            resampled_phi
-            + m_mode * params.reference_phase
-            + (2 * np.pi * params.time_shift) * frequencies # TODO: changed `+` to `-`
-        )
-        
-        return amp, phi
-
-    @_with_fast_sklearn_config
-    def predict_amplitude_phase_optimized(
-        self,
-        frequencies: np.ndarray,
-        params: ParametersWithExtrinsic,
-        apply_time_shift: bool = True,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Amplitude and phase for one mode.
-
-        ``apply_time_shift`` (default ``True``) adds back the
-        linear-in-frequency phase trend that ``remove_linear_trend``
-        stripped from the training residuals, using this model's
-        :attr:`timeshifts_predictor`. :meth:`Model._hpc_waveform` and
-        :meth:`Model._hpc_waveform_per_mode` pass ``False`` because they
-        apply that shift themselves (with the requested time shift, which
-        may be user-supplied, and the total-mass rescaling); passing
-        ``True`` there would apply it twice.
-        """
-        # from time import perf_counter
-        # t0 = perf_counter()
-
-        assert self.downsampling_indices is not None
-        assert self.nn is not None
-
-        # t1 = perf_counter()
-
-        # Rescale frequencies early
-        rescaled_frequencies = frequencies * (params.total_mass / self.dataset.total_mass)
-        eff_fmin_hz = self.dataset.effective_initial_frequency_hz
-        rescaled_f_min = rescaled_frequencies[0]
-        rescaled_f_max = rescaled_frequencies[-1]
-
-        # t2 = perf_counter()
-
-        # ----------------------------
-        # Low-frequency extension
-        # ----------------------------
-        extend_with_pn = rescaled_f_min < eff_fmin_hz
-        if extend_with_pn:
-            if not self.extend_with_post_newtonian:
-                raise FrequencyTooLowError("ModeModel not configured to extend with post-Newtonian waveform.")
-
-            limit_index = np.searchsorted(rescaled_frequencies, eff_fmin_hz)
-            low_freqs_hz = np.append(rescaled_frequencies[:limit_index], eff_fmin_hz)
-            rescaled_frequencies = np.append(eff_fmin_hz, rescaled_frequencies[limit_index:])
-
-            low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz)
-            connection_f = self.dataset.hz_to_natural_units(eff_fmin_hz)
-
-        # t3 = perf_counter()
-
-        # ----------------------------
-        # High-frequency extension
-        # ----------------------------
-        # The trained band's own top edge, not the theoretical
-        # `eff_srate_hz / 2`: the dataset's frequency grid can land a hair
-        # past that nominal value by construction, which would otherwise
-        # make this model's own last trained point count as "out of band"
-        # and get zeroed out (see `[[predict-amplitude-phase-hf-edge]]`).
-        trained_fmax_hz = self.dataset.frequencies_hz[-1]
-        extend_hf = rescaled_f_max > trained_fmax_hz
-        if extend_hf:
-            if not self.extend_with_zeros_at_high_frequency:
-                raise FrequencyTooHighError("ModeModel not configured to extend with zeros at high frequency.")
-            high_frequency_index = np.searchsorted(rescaled_frequencies, trained_fmax_hz)
-            hf_segment_length = len(rescaled_frequencies) - high_frequency_index
-            rescaled_frequencies = rescaled_frequencies[:high_frequency_index]
-
-        # t4 = perf_counter()
-
-        # ----------------------------
-        # NN Prediction & Residual Combination
-        # ----------------------------
-        self.parameter_ranges.check_parameters_in_ranges(params)
-        intrinsic_params = params.intrinsic(self.dataset)
-
-        residuals = self.predict_residuals_bulk(
-            ParameterSet.from_list_of_waveform_parameters([intrinsic_params]), self.nn
-        )
-        
-        # t5 = perf_counter()
-
-        ds = self.downsampling_indices
-        freqs_hz = self.dataset.frequencies_hz
-
-        # See the note in `predict`: mirrors `generate_residuals`.
         reference = self.dataset.amplitude_reference_parameters
         pn_amp = self.dataset.waveform_generator.post_newtonian_amplitude(
             intrinsic_params if reference is None else reference,
@@ -1548,35 +1122,149 @@ class ModeModel:
         pn_phi = self.dataset.waveform_generator.post_newtonian_phase(
             intrinsic_params, self.dataset.frequencies[ds.phase_indices]
         )
+        return (
+            combine_residuals_amp(residuals.amplitude_residuals[0], pn_amp),
+            combine_residuals_phi(residuals.phase_residuals[0], pn_phi),
+        )
 
-        amp_ds = combine_residuals_amp(residuals.amplitude_residuals[0], pn_amp)
-        phi_ds = combine_residuals_phi(residuals.phase_residuals[0], pn_phi)
+    def merger_reference(
+        self, intrinsic_params, phase_nodes: Optional[np.ndarray] = None
+    ) -> tuple[float, float]:
+        r"""The line :math:`s f + b` this mode's phase tends to at the merger.
 
-        if self.timeshifts_predictor is not None and apply_time_shift:
-            # add back the linear-in-frequency phase trend that
-            # `remove_linear_trend` subtracted from the training residuals
-            phase_freqs_hz = freqs_hz[ds.phase_indices]
-            time_shift = self.timeshifts_predictor.predict(
-                [intrinsic_params.array]
-            )[0]
-            phi_ds = phi_ds + 2 * np.pi * (phase_freqs_hz - phase_freqs_hz[0]) * time_shift
+        :math:`s` and :math:`b` are the slope and intercept of the tangent
+        to the phase (the not-a-knot spline through the phase nodes) at the
+        top of the trained band, in Hz at the reference mass. For the
+        (2,2), whose frequency-domain phase is linear after the merger,
+        :math:`-s/2\pi` is the merger time and :math:`b` the (2,2) phase
+        there; :class:`~mlgw_bns.model.Model` hands the (2,2) reference to
+        every mode, see :meth:`predict_amplitude_phase`.
 
-        phi_ds = phi_ds + self._predicted_mode_phase0(intrinsic_params)
+        Parameters
+        ----------
+        intrinsic_params : WaveformParameters
+        phase_nodes : np.ndarray, optional
+            The phase at the nodes, if already computed.
 
-        # t6 = perf_counter()
+        Returns
+        -------
+        tuple[float, float]
+            ``(slope, intercept)``.
+        """
+        assert self.downsampling_indices is not None
+        if phase_nodes is None:
+            _, phase_nodes = self._nodes(intrinsic_params)
+        knots = self.dataset.frequencies_hz[self.downsampling_indices.phase_indices]
+        slope = float(CubicSpline(knots, phase_nodes)(knots[-1], 1))
+        return slope, float(phase_nodes[-1] - slope * knots[-1])
+
+    @_with_fast_sklearn_config
+    def predict_amplitude_phase(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        merger_reference: Optional[tuple[float, float]] = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        r"""Amplitude and phase of this mode.
+
+        The multipole is :math:`\tilde{h}_{\ell m} = A e^{i \phi}`. The
+        phase is referenced to the merger: with the (2,2) reference line
+        :math:`s f + b` (:meth:`merger_reference`, of the rescaled
+        frequency), the mode's phase is
+
+        .. math::
+            \phi_{\ell m}(f) - s f - \frac{m}{2} b
+            + m \phi_c - 2 \pi f t_c,
+
+        that is, a time shift and an orbital phase rotation, the same for
+        all the modes, which put the merger of the (2,2) at
+        :math:`t_c` = ``params.merger_time`` with a phase
+        :math:`2\phi_c` (``params.coalescence_phase``) there.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Increasing frequencies, in Hz.
+        params : ParametersWithExtrinsic
+        merger_reference : tuple[float, float], optional
+            ``(slope, intercept)`` of the (2,2) of the same parameters, from
+            its :meth:`merger_reference`. Defaults to this mode's own, which
+            is right for the (2,2) itself (and for a model trained on a
+            single mode, since its residuals are referenced to itself).
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            Amplitude and phase.
+
+        Raises
+        ------
+        FrequencyTooLowError, FrequencyTooHighError
+            If ``frequencies`` extend below (above) the trained band and
+            the model is not configured to extend it there.
+        """
+
+        assert self.downsampling_indices is not None
+
+        ratio = params.total_mass / self.dataset.total_mass
+        rescaled_all = frequencies * ratio
+        rescaled_frequencies = rescaled_all
+        eff_fmin_hz = self.dataset.effective_initial_frequency_hz
 
         # ----------------------------
-        # Resample to full frequency resolution
+        # Low-frequency extension
         # ----------------------------
+        extend_with_pn = rescaled_frequencies[0] < eff_fmin_hz
+        if extend_with_pn:
+            if not self.extend_with_post_newtonian:
+                raise FrequencyTooLowError(
+                    "ModeModel not configured to extend with post-Newtonian waveform."
+                )
+            limit_index = np.searchsorted(rescaled_frequencies, eff_fmin_hz)
+            # the connection point is added to both pieces, so that the PN
+            # one can be glued on without a discontinuity in phase
+            low_freqs_hz = np.append(rescaled_frequencies[:limit_index], eff_fmin_hz)
+            rescaled_frequencies = np.append(
+                eff_fmin_hz, rescaled_frequencies[limit_index:]
+            )
+            low_freqs = self.dataset.hz_to_natural_units(low_freqs_hz)
+            connection_f = self.dataset.hz_to_natural_units(eff_fmin_hz)
+
+        # ----------------------------
+        # High-frequency extension
+        # ----------------------------
+        # The trained band's own top edge, not the theoretical
+        # `eff_srate_hz / 2`: the dataset's frequency grid can land a hair
+        # past that nominal value by construction, which would otherwise
+        # make this model's own last trained point count as "out of band"
+        # and get zeroed out.
+        trained_fmax_hz = self.dataset.frequencies_hz[-1]
+        hf_segment_length = 0
+        if rescaled_frequencies[-1] > trained_fmax_hz:
+            if not self.extend_with_zeros_at_high_frequency:
+                raise FrequencyTooHighError(
+                    "ModeModel not configured to extend with zeros at high frequency."
+                )
+            high_frequency_index = np.searchsorted(rescaled_frequencies, trained_fmax_hz)
+            hf_segment_length = len(rescaled_frequencies) - high_frequency_index
+            rescaled_frequencies = rescaled_frequencies[:high_frequency_index]
+
+        # ----------------------------
+        # Nodes, and resampling
+        # ----------------------------
+        self.parameter_ranges.check_parameters_in_ranges(params)
+        intrinsic_params = params.intrinsic(self.dataset)
+        amp_ds, phi_ds = self._nodes(intrinsic_params)
+        if merger_reference is None:
+            merger_reference = self.merger_reference(intrinsic_params, phi_ds)
+        slope, intercept = merger_reference
+
+        ds = self.downsampling_indices
+        freqs_hz = self.dataset.frequencies_hz
         resample = self.downsampling_training.resample
         resampled_amp = resample(freqs_hz[ds.amplitude_indices], rescaled_frequencies, amp_ds)
         resampled_phi = resample(freqs_hz[ds.phase_indices], rescaled_frequencies, phi_ds)
 
-        # t7 = perf_counter()
-
-        # ----------------------------
-        # Low-frequency smoothing
-        # ----------------------------
         if extend_with_pn:
             f_min_connection = connection_f / 2.0
             mask = low_freqs > f_min_connection
@@ -1589,67 +1277,32 @@ class ModeModel:
             low_amp[mask] += smoothing_func(zero_to_one) * amp_diff
 
             resampled_amp = np.concatenate((low_amp[:-1], resampled_amp[1:]))
-            # Glue the PN segment onto the *bottom* of the model band, shifting
-            # the PN piece to match the band at the connection frequency --- not
-            # the other way round. Shifting the band would overwrite its
-            # per-mode phase constant (`_predicted_mode_phase0`, which carries
-            # the inter-mode alignment) with the PN one, mis-phasing the HOM
-            # modes relative to each other for every `total_mass` below the
-            # dataset reference (the only regime in which `extend_with_pn` fires).
-            # `- low_phi[-1]` zeroes the PN phase at the connection first, so
-            # this is correct for an absolute-backbone PN phase too.
+            # the PN segment is shifted to meet the band at the connection
             resampled_phi = np.concatenate(
                 (low_phi[:-1] - low_phi[-1] + resampled_phi[0], resampled_phi[1:])
             )
 
-        # Anchor to zero at the first node for non-HOM models so that
-        # `reference_phase` sets the phase there; HOM per-mode constants are
-        # kept (they carry the inter-mode alignment).
-        if self.mode_phases_predictor is None:
-            resampled_phi = resampled_phi - resampled_phi[0]
-
-        # t8 = perf_counter()
-
         # ----------------------------
-        # High-frequency zero-padding
+        # Merger reference, high-frequency zeros, extrinsic parameters
         # ----------------------------
-        if extend_hf:
+        resampled_phi = (
+            resampled_phi
+            - slope * rescaled_all[: len(resampled_phi)]
+            - self.m / 2 * intercept
+        )
+        if hf_segment_length:
             zeros = np.zeros(hf_segment_length)
             resampled_amp = np.concatenate((resampled_amp, zeros))
             resampled_phi = np.concatenate((resampled_phi, zeros))
 
-        # t9 = perf_counter()
-
-        # ----------------------------
-        # Final amplitude and phase
-        # ----------------------------
         pre = self.dataset.mlgw_bns_prefactor(intrinsic_params.eta, params.total_mass)
         amp = resampled_amp * pre / params.distance_mpc
-
-        # `reference_phase` is the coalescence phase: shifting it by phi_c
-        # rotates the (l, m) mode by exp(i m phi_c). A mode-less model is the
-        # (2,2). `time_shift` is a genuine time-domain shift, the same for
-        # every mode.
-        m_mode = 2 if self.mode is None else self.mode.m
         phi = (
             resampled_phi
-            + m_mode * params.reference_phase
-            + (2 * np.pi * params.time_shift) * frequencies
+            + self.m * params.coalescence_phase
+            - (2 * np.pi * params.merger_time) * frequencies
         )
-
-        # t10 = perf_counter()
-
-        # print(f"🔍 Profiling `predict_amplitude_phase_optimized`")
-        # print(f"  Frequency rescaling        : {t2 - t1:.6f}s")
-        # print(f"  NN + PCA                   : {t5 - t4:.6f}s")
-        # print(f"  Residual + PN              : {t6 - t5:.6f}s")
-        # print(f"  Resampling                 : {t7 - t6:.6f}s")
-        # print(f"  Final amplitude + phase    : {t10 - t9:.6f}s")
-        # print(f"  TOTAL                      : {t10 - t0:.6f}s")
-
         return amp, phi
-
-
 
     def predict(self, frequencies: np.ndarray, params: ParametersWithExtrinsic):
         r"""Calculate the waveforms in the plus and cross polarizations,

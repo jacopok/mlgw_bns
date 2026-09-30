@@ -49,11 +49,13 @@ def test_saving_and_retrieval_of_data_inside_model(generated_mode_model):
 
 
 def test_residuals_are_zero_for_the_initial_frequency(generated_mode_model):
+    """The phase residuals are referenced to their value and slope at f0,
+    from a least-squares fit just above it: zero there, to the accuracy of
+    the fit (and of the first EOB sample, at the start of the integration)."""
 
     residuals = generated_mode_model.training_dataset
 
     phases = residuals.phase_residuals
 
-    # initial phases should have been set to zero
-    assert all(phases[:, 0] == 0.0)
+    assert np.all(np.abs(phases[:, 0]) < 1e-3)
     assert not any(phases[:, 1] == 0.0)
