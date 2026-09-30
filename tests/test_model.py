@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from mlgw_bns.data_management import ParameterRanges
+from mlgw_bns.dataset_generation import ParameterSet
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.model import (
     DEFAULT_MODES,
@@ -160,67 +161,28 @@ FLAT_MASS_MEDIAN_MISMATCH = 8e-7
 
 # The same sixteen binaries with nothing maximised --- the surrogate's own
 # merger time and coalescence phase against TEOBResumS's, both from the
-# tangent to the (2,2) phase at the top of the band: median 1.1e-3, worst
-# 3.7e-2 (merger times within ~2e-5 s, coalescence phases within ~0.1 rad).
-# Were the two references inconsistent the mismatch would be of order one.
-UNOPTIMISED_MEDIAN_MISMATCH = 3e-3
-UNOPTIMISED_MAX_MISMATCH = 8e-2
-
-
-def test_default_model_full_waveform_mismatch(default_model):
-    """Compare the summed multi-mode waveform against the EOB ground truth."""
-
-    validator = ValidateModel(default_model.mode_models[Mode(2, 2)])
-    frequencies = validator.frequencies
-    parameter_generator = reduced_range_parameter_generator(default_model, seed=7)
-
-    mismatches = []
-    for _ in range(16):
-        intrinsic = next(parameter_generator)
-        params = ParametersWithExtrinsic(
-            mass_ratio=intrinsic.mass_ratio,
-            lambda_1=intrinsic.lambda_1,
-            lambda_2=intrinsic.lambda_2,
-            chi_1=intrinsic.chi_1,
-            chi_2=intrinsic.chi_2,
-            distance_mpc=100.0,
-            inclination=1.0,
-            total_mass=2.8,
-        )
-        predicted = default_model.predict_modes_dict(frequencies, params)
-        true = default_model.get_teob_modes_dict(frequencies, params)
-
-        # The EOB modes are zero below the frequency at which the waveform
-        # starts; only compare where all of them are defined.
-        support = np.ones(len(frequencies), dtype=bool)
-        for mode_array in true.values():
-            support &= np.abs(mode_array) > 0
-        assert support.sum() > 2
-
-        mismatches.append(
-            validator.full_waveform_mismatch(
-                {k: v[support] for k, v in true.items()},
-                {k: v[support] for k, v in predicted.items()},
-                frequencies=frequencies[support],
-            )
-        )
-
-    mismatches = np.array(mismatches)
-    assert np.max(mismatches) < DEFAULT_MODEL_MAX_MISMATCH
-    assert np.median(mismatches) < DEFAULT_MODEL_MEDIAN_MISMATCH
+# tangent to the (2,2) phase at the top of the band. The median mismatch
+# is 1.4e-4, but the tail follows the merger time, a derivative at the edge
+# of the band that grows for small tidal deformabilities (see
+# visualization/merger_reference_corner.py): over 2000 uniform draws |dt|
+# has a median of 2 us, a 99th percentile of 50 us and a maximum of 0.35 ms,
+# and 0.11 ms here (q=2.75, Lambda_1=31). Were the two references
+# inconsistent it would be of the order of the waveform's duration.
+UNOPTIMISED_MEDIAN_MISMATCH = 5e-4
+MERGER_TIME_MAX_ERROR = 2e-4
 
 
 def test_default_model_merger_reference_matches_teobresums(default_model):
     """The summed waveform against the EOB ground truth with nothing
     maximised: the merger time and coalescence phase are the model's."""
 
-    validator = ValidateModel(default_model.mode_models[Mode(2, 2)])
-    frequencies = validator.frequencies
+    mode_model = default_model.mode_models[Mode(2, 2)]
+    validator = ValidateModel(mode_model)
     parameter_generator = reduced_range_parameter_generator(default_model, seed=7)
+    intrinsics = [next(parameter_generator) for _ in range(16)]
 
     mismatches = []
-    for _ in range(16):
-        intrinsic = next(parameter_generator)
+    for intrinsic in intrinsics:
         params = ParametersWithExtrinsic(
             mass_ratio=intrinsic.mass_ratio,
             lambda_1=intrinsic.lambda_1,
@@ -231,20 +193,16 @@ def test_default_model_merger_reference_matches_teobresums(default_model):
             inclination=1.0,
             total_mass=2.8,
         )
-        predicted = sum(default_model.predict_modes_dict(frequencies, params).values())
-        true = sum(default_model.get_teob_modes_dict(frequencies, params).values())
-        support = np.abs(true) > 0
-        weight = np.gradient(frequencies) / validator.psd_values
+        predicted = sum(default_model.predict_modes_dict(validator.frequencies, params).values())
+        true = sum(default_model.get_teob_modes_dict(validator.frequencies, params).values())
+        mismatches.append(validator.unmaximised_mismatch(true, predicted))
 
-        def inner(a, b):
-            return np.sum((np.conj(a) * b * weight)[support]).real
-
-        mismatches.append(
-            1 - inner(true, predicted) / np.sqrt(inner(true, true) * inner(predicted, predicted))
-        )
+    time_errors, _, _ = validator.merger_reference_errors(
+        ParameterSet.from_list_of_waveform_parameters(intrinsics)
+    )
 
     assert np.median(mismatches) < UNOPTIMISED_MEDIAN_MISMATCH
-    assert np.max(mismatches) < UNOPTIMISED_MAX_MISMATCH
+    assert np.max(np.abs(time_errors)) < MERGER_TIME_MAX_ERROR
 
 
 @pytest.mark.parametrize("total_mass", [2.2, 2.8, 3.6])

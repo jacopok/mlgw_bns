@@ -144,17 +144,85 @@ class ValidateModel:
         model's, which are referenced to the start of the band, are
         compared with their mergers at the same time.
         """
+        knots, slope, intercept = self._merger_lines(waveforms)
+        return FDWaveforms(
+            waveforms.amplitudes,
+            np.asarray(waveforms.phases, dtype=float)
+            - slope[:, None] * knots
+            - self.model.m / 2 * intercept[:, None],
+        )
+
+    def _merger_lines(
+        self, waveforms: FDWaveforms
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The phase knots (Hz), and the slope and intercept of the tangent
+        to each phase at the top knot."""
         assert self.model.downsampling_indices is not None
         knots = self.model.dataset.frequencies_hz[
             self.model.downsampling_indices.phase_indices
         ]
         phases = np.asarray(waveforms.phases, dtype=float)
-        slope = CubicSpline(knots, phases, axis=1)(knots[-1], 1)[:, None]
-        intercept = phases[:, -1:] - slope * knots[-1]
-        return FDWaveforms(
-            waveforms.amplitudes,
-            phases - slope * knots - self.model.m / 2 * intercept,
+        slope = CubicSpline(knots, phases, axis=1)(knots[-1], 1)
+        intercept = phases[:, -1] - slope * knots[-1]
+        return knots, slope, intercept
+
+    def merger_reference_errors(
+        self, param_set: ParameterSet
+    ) -> Tuple[np.ndarray, np.ndarray, ParameterSet]:
+        r"""Errors of the model's merger reference against the EOB one.
+
+        Both references are the tangent to the phase at the top node, see
+        :meth:`merger_referenced`, with the phase referenced at
+        :math:`f_0` as in training: minus the slope over :math:`2\pi` is
+        the time from the :math:`f_0` reference to the merger, the
+        intercept the phase there. Frequencies are in Hz at the dataset's
+        reference mass, so the times are too. The two phases share their
+        post-Newtonian part, so only the residuals enter.
+
+        Parameters
+        ----------
+        param_set : ParameterSet
+                Parameters at which to compare the references.
+
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray, ParameterSet]
+                Merger-time errors (model minus EOB, in seconds), phase
+                errors at the merger (in radians, wrapped to
+                :math:`(-\pi, \pi]`), and the parameters for which the
+                EOB waveform could be generated.
+        """
+        assert self.model.nn is not None
+        dataset = self.model.dataset
+        true_residuals = []
+        valid_parameters = []
+        for params in param_set.waveform_parameters(dataset):
+            # Same tolerance as `Dataset.generate_waveforms_from_params`.
+            try:
+                _, phase_residual = dataset.waveform_generator.generate_residuals(
+                    params,
+                    dataset.frequencies,
+                    self.model.downsampling_indices,
+                    dataset.amplitude_reference_parameters,
+                )
+            except Exception:
+                continue
+            true_residuals.append(phase_residual)
+            valid_parameters.append(params)
+
+        valid_param_set = ParameterSet.from_list_of_waveform_parameters(
+            valid_parameters
         )
+        predicted_residuals = self.model.predict_residuals_bulk(
+            valid_param_set, self.model.nn
+        ).phase_residuals
+        _, slope, intercept = self._merger_lines(
+            FDWaveforms(
+                np.asarray(predicted_residuals),
+                np.asarray(predicted_residuals) - np.array(true_residuals),
+            )
+        )
+        return -slope / (2 * np.pi), np.angle(np.exp(1j * intercept)), valid_param_set
 
     def param_set(
         self,
@@ -584,6 +652,26 @@ class ValidateModel:
             raise ValueError("Mismatch optimization did not succeed!")
 
         return 1 - (-res.fun) / norm
+
+    def unmaximised_mismatch(
+        self, true_waveform: np.ndarray, predicted_waveform: np.ndarray
+    ) -> float:
+        """Mismatch with nothing maximised over.
+
+        Both waveforms are sampled at :attr:`frequencies`; the product is
+        restricted to where ``true_waveform`` is non-zero, since the EOB
+        waveform vanishes below its starting frequency.
+        """
+        support = np.abs(true_waveform) > 0
+        weight = np.gradient(self.frequencies) / self.psd_values
+
+        def product(a: np.ndarray, b: np.ndarray) -> float:
+            return np.sum((np.conj(a) * b * weight)[support]).real
+
+        return 1 - product(true_waveform, predicted_waveform) / np.sqrt(
+            product(true_waveform, true_waveform)
+            * product(predicted_waveform, predicted_waveform)
+        )
 
     def full_waveform_mismatch(
         self,
