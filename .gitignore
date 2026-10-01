@@ -109,3 +109,6 @@ visualization/interim_default_hom/*
 visualization/merger_conventions.npz
 # reported upstream as a TEOBResumS issue, kept locally
 visualization/teob_alpha_unwrap_bug.*
+
+*.log
+*.npz

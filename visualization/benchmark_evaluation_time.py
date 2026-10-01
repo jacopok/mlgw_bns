@@ -19,20 +19,18 @@ batch) comes in a full-mode and a reduced-mode (:data:`REDUCED_MODES`, the
 (2,2)/(2,1)/(3,3)/(4,4) subset the original shipped model was limited to)
 flavour, so the plot shows the cost of predicting fewer modes directly.
 
-The precessing model comes in the same three forms
-(:meth:`PrecessingModel.predict
-<mlgw_bns.precessing_model.PrecessingModel.predict>` and
-:meth:`PrecessingModel.jax_predict
+The precessing model is timed in its JAX form
+(:meth:`PrecessingModel.jax_predict
 <mlgw_bns.precessing_model.PrecessingModel.jax_predict>`, single and
-batched), next to TEOBResumS-SPA for the same precessing binary. Its numpy
-form spends seconds per waveform integrating the precession angles, whatever
-the grid, so it is timed on a few grid sizes and seeds only
-(:attr:`Approximant.n_points_stride`, :attr:`Approximant.max_seeds`,
-:attr:`Approximant.max_repeats`). TEOBResumS's
+batched, also in both mode flavours), next to TEOBResumS-SPA for the same
+precessing binary; the numpy :meth:`PrecessingModel.predict
+<mlgw_bns.precessing_model.PrecessingModel.predict>` spends ~20 s per
+waveform integrating the precession angles, and is left out. TEOBResumS's
 cost does not depend on the requested mode count here (its ODE-integration
 start is set by the highest-:math:`m` mode either way, since (4,4) is in
 both sets -- see :func:`mlgw_bns.higher_order_modes.initial_frequency_scaling`),
-so it is left as a single reference line.
+so it is left as a single reference line. The figure has one panel for the
+aligned-spin approximants and one for the precessing ones.
 
 For each ``(approximant, seed, n_points)`` triple the setup (parameter
 draw, grid construction) is done outside the timed region and only
@@ -74,7 +72,7 @@ from mlgw_bns.model import Model
 from mlgw_bns.mode_model import ParametersWithExtrinsic
 from mlgw_bns.precessing_model import PrecessingModel, PrecessingParametersWithExtrinsic
 
-import validate_precessing_against_teob as precessing_validation
+import teob_precessing
 
 try:  # optional -- only needed for the LAL approximants
     import lal
@@ -141,7 +139,7 @@ def random_precessing_parameters(
     model: Model, seed: int
 ) -> PrecessingParametersWithExtrinsic:
     """:func:`random_parameters`, with random in-plane spins (as
-    ``validate_precessing_against_teob.py`` draws them), azimuth and
+    ``teob_precessing`` draws them), azimuth and
     reference phase, given at :data:`REFERENCE_FREQUENCY_HZ`."""
     params = random_parameters(model, seed)
     rng = np.random.default_rng(seed)
@@ -149,8 +147,8 @@ def random_precessing_parameters(
         mass_ratio=params.mass_ratio,
         lambda_1=params.lambda_1,
         lambda_2=params.lambda_2,
-        chi_1=precessing_validation.random_spin_vector(rng, params.chi_1),
-        chi_2=precessing_validation.random_spin_vector(rng, params.chi_2),
+        chi_1=teob_precessing.random_spin_vector(rng, params.chi_1),
+        chi_2=teob_precessing.random_spin_vector(rng, params.chi_2),
         distance_mpc=params.distance_mpc,
         inclination=params.inclination,
         total_mass=params.total_mass,
@@ -193,6 +191,8 @@ class Approximant(ABC):
     max_repeats: Optional[int] = None
     #: whether every grid size needs its own warm-up call (a JIT compile).
     warm_up_every_grid: bool = True
+    #: whether it makes precessing waveforms (`make_figure`'s second panel).
+    precessing: bool = False
 
     def __init__(
         self,
@@ -371,29 +371,6 @@ class MlgwBnsJaxBatchReducedModes(MlgwBnsJaxBatch):
         self.name = f"mlgw_bns (JAX, batch {batch}, 22, 21, 33, 44 only)"
 
 
-class MlgwBnsPrecessing(Approximant):
-    """:meth:`PrecessingModel.predict`, numpy, one waveform: seconds of
-    precession-angle integration whatever the grid, so timed sparsely."""
-
-    name = "mlgw_bns precessing"
-    family = "mlgw_bns precessing"
-    n_points_stride = 4
-    max_seeds = 2
-    max_repeats = 1
-    warm_up_every_grid = False
-
-    def __init__(self, model_name: str = MODEL, model: Optional[Model] = None) -> None:
-        super().__init__(model_name, model=model)
-        self.precessing = PrecessingModel(self.model)
-
-    def setup(self, seed: int, n_points: int) -> None:
-        self.params = random_precessing_parameters(self.model, seed)
-        self.frequencies = benchmark_frequencies(self.dataset, n_points)
-
-    def calculate(self) -> None:
-        self.precessing.predict(self.frequencies, self.params)
-
-
 def jax_precessing_arguments(params_list, frequencies) -> tuple:
     """The arguments of :meth:`PrecessingModel.jax_predict`'s function."""
     from mlgw_bns.batched_precession import batch_arguments
@@ -405,10 +382,16 @@ class MlgwBnsJaxPrecessing(Approximant):
     """:meth:`PrecessingModel.jax_predict`, JIT-compiled, ``batch``
     waveforms per call (one by default); the reported time is per waveform."""
 
+    precessing = True
+
     def __init__(
-        self, batch: int = 1, model_name: str = MODEL, model: Optional[Model] = None
+        self,
+        batch: int = 1,
+        model_name: str = MODEL,
+        model: Optional[Model] = None,
+        modes: Optional[list] = None,
     ) -> None:
-        super().__init__(model_name, model=model)
+        super().__init__(model_name, modes=modes, model=model)
         import jax
 
         self._jax = jax
@@ -424,6 +407,9 @@ class MlgwBnsJaxPrecessing(Approximant):
         self.family = self.name
         self._predict = jax.jit(PrecessingModel(self.model).jax_predict())
         self._warm: set[int] = set()
+        if modes is not None:
+            self.is_reduced_modes = True
+            self.name += " (22, 21, 33, 44 only)"
 
     def setup(self, seed: int, n_points: int) -> None:
         params = [
@@ -459,14 +445,15 @@ class TEOBResumSPA(Approximant):
 
 
 class TEOBResumSPAPrecessing(TEOBResumSPA):
-    """:class:`TEOBResumSPA` for the binaries of :class:`MlgwBnsPrecessing`,
+    """:class:`TEOBResumSPA` for the binaries of :class:`MlgwBnsJaxPrecessing`,
     with every multipole the surrogate has, twisted into every inertial one
-    (as ``validate_precessing_against_teob.teob_run``). TEOBResumS starts at
+    (as ``teob_precessing.teob_run``). TEOBResumS starts at
     the band's low edge and takes the spins there, not at
     :data:`REFERENCE_FREQUENCY_HZ`: the cost is the same."""
 
     name = "TEOBResumSPA precessing"
     family = "TEOBResumSPA precessing"
+    precessing = True
     n_points_stride = 4
     max_seeds = 2
     max_repeats = 1
@@ -646,16 +633,16 @@ def make_figure(
     approximants: list[Approximant],
     n_points_list: list[int],
 ) -> None:
-    r"""Loglog fit-line plot, one color per approximant *family* rather than
-    per approximant: an approximant's full-mode variant is drawn faded
-    (:data:`FULL_MODE_ALPHA`) and its reduced-mode sibling (`REDUCED_MODES`)
-    opaque, in the same color, so the pair reads as one line that thins out.
-    Families with no such pair (e.g. TEOBResumSPA) are always opaque.
+    r"""Loglog fit-line plot: the aligned-spin approximants above, the
+    precessing ones below, on the same axes.
 
-    The legend is kept to exactly one entry per family (4, as of writing)
-    rather than one per approximant, which would double-count every pair
-    and repeat the fit formula on every line; the opaque/faded convention
-    is explained by a text annotation instead of extra legend entries.
+    One color per approximant *family*: its full-mode variant is drawn faded
+    (:data:`FULL_MODE_ALPHA`) and its reduced-mode sibling (`REDUCED_MODES`)
+    opaque, in the same color. Each panel's legend has two columns, the full
+    mode set and the reduced one, with every approximant's fit
+    :math:`c_1 + c_2 N` in its entry; a family with no reduced-mode sibling
+    (TEOBResumS, whose cost does not depend on it) leaves its second cell
+    blank.
     """
     families = list(dict.fromkeys(a.family for a in approximants))
     family_members: dict[str, list[Approximant]] = {f: [] for f in families}
@@ -664,11 +651,13 @@ def make_figure(
 
     cmap = plt.get_cmap("viridis")
     family_colors = dict(
-        zip(families, [cmap(i) for i in np.linspace(0.15, 0.85, num=len(families))])
+        zip(families, [cmap(i) for i in np.linspace(0.1, 0.85, num=len(families))])
     )
 
-    plt.figure(figsize=(7, 4.5))
+    fig, axes = plt.subplots(2, 1, figsize=(8, 9), sharex=True, sharey=True)
+    entries: dict[Approximant, Line2D] = {}
     for approximant in approximants:
+        ax = axes[int(approximant.precessing)]
         color = family_colors[approximant.family]
         has_pair = len(family_members[approximant.family]) > 1
         alpha = 1.0 if (approximant.is_reduced_modes or not has_pair) else FULL_MODE_ALPHA
@@ -677,29 +666,40 @@ def make_figure(
         times = get_attribute_by_n_points_for_approx(
             tests, approximant, "avg_time", np.average
         )
-        popt = linear_constant_fit(np.array(points, dtype=float), np.array(times))
-        model = lambda x, c1, c2: c1 + x * c2
-        plt.loglog(points, model(np.array(points), *popt), c=color, lw=0.9, alpha=alpha)
-        plt.scatter(points, times, s=3.0, color=color, alpha=alpha)
+        c1, c2 = linear_constant_fit(np.array(points, dtype=float), np.array(times))
+        grid = np.geomspace(min(n_points_list), max(n_points_list), 50)
+        (line,) = ax.loglog(grid, c1 + c2 * grid, c=color, lw=1.2, alpha=alpha)
+        ax.scatter(points, times, s=6.0, color=color, alpha=alpha)
+        fit = f"{c1:.3g} ms {'+' if c2 >= 0 else '-'} {abs(c2) * 1e6:.0f} ns / node"
+        # the reduced-mode entry sits next to its family's, in its color
+        line.set_label(fit if approximant.is_reduced_modes else f"{approximant.family}: {fit}")
+        entries[approximant] = line
 
-    plt.grid(True, which="both", lw=0.3)
-    plt.gca().set_axisbelow(True)
-    plt.xlabel("Number of evaluation points")
-    plt.ylabel("Evaluation time [ms]")
-
-    family_handles = [
-        Line2D([], [], color=family_colors[f], lw=1.5, label=f) for f in families
-    ]
-    plt.legend(handles=family_handles, fontsize=8, loc="upper left")
-    plt.gca().annotate(
-        "opaque: reduced modes (22, 21, 33, 44)\n"
-        "faint: full mode set",
-        xy=(0.02, 0.02),
-        xycoords="axes fraction",
-        fontsize=7,
-        va="bottom",
-    )
-    plt.tight_layout()
+    blank = Line2D([], [], alpha=0.0, label=" ")
+    for ax, precessing, title in (
+        (axes[0], False, "aligned spins"),
+        (axes[1], True, "precessing"),
+    ):
+        full, reduced = [], []
+        for family in families:
+            members = [a for a in family_members[family] if a.precessing == precessing]
+            if not members:
+                continue
+            full.append(entries[next((a for a in members if not a.is_reduced_modes), members[0])])
+            pair = [a for a in members if a.is_reduced_modes]
+            reduced.append(entries[pair[0]] if pair else blank)
+        ax.legend(handles=full + reduced, ncol=2, fontsize=7, loc="upper left",
+                  title="all modes (faint)  |  22, 21, 33, 44 only (opaque)",
+                  title_fontsize=7)
+        ax.set_title(title, fontsize="medium")
+        ax.grid(True, which="both", lw=0.3)
+        ax.set_axisbelow(True)
+        ax.set_ylabel("Evaluation time per waveform [ms]")
+    axes[1].set_xlabel("Number of evaluation points")
+    # room for the legends above the curves
+    low, high = axes[0].get_ylim()
+    axes[0].set_ylim(low, high * 40)
+    fig.tight_layout()
 
 
 def main() -> None:
@@ -771,15 +771,16 @@ def main() -> None:
         TEOBResumSPA(),
     ]
     if not args.no_precessing:
-        approximants += [MlgwBnsPrecessing(), TEOBResumSPAPrecessing()]
+        approximants.append(TEOBResumSPAPrecessing())
     if _HAVE_JAX and not args.no_jax:
         approximants.append(MlgwBnsJax())
         approximants.append(MlgwBnsJaxReducedModes())
         approximants.append(MlgwBnsJaxBatch(batch=args.jax_batch))
         approximants.append(MlgwBnsJaxBatchReducedModes(batch=args.jax_batch))
         if not args.no_precessing:
-            approximants.append(MlgwBnsJaxPrecessing())
-            approximants.append(MlgwBnsJaxPrecessing(batch=args.jax_batch))
+            for modes in (None, REDUCED_MODES):
+                approximants.append(MlgwBnsJaxPrecessing(modes=modes))
+                approximants.append(MlgwBnsJaxPrecessing(batch=args.jax_batch, modes=modes))
     elif not _HAVE_JAX:
         logging.warning("JAX not importable -- JAX approximants skipped")
     if _HAVE_LAL and not args.no_lal:

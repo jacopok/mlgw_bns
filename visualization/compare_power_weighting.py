@@ -34,7 +34,7 @@ def summarise(name: str, n: int) -> dict:
 
     model = vm.load_model(name)
     by_mode = vm.per_mode_mismatches(model)
-    full, full_no_opt, power = vm.full_waveform_mismatches(model)
+    full, full_no_opt, power, _ = vm.full_waveform_mismatches(model)
 
     result = {"full": full, "full_no_opt": full_no_opt, "power": power}
     for mode in vm.MODES:
