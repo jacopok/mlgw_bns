@@ -151,3 +151,26 @@ def test_reference_phase_rotates_each_coprecessing_mode(default_model):
     rotation = np.exp(1j * emms * delta)[None, :, None]
     want = np.asarray(before[0]) * rotation
     np.testing.assert_allclose(after[0], want, rtol=0, atol=1e-10 * np.max(np.abs(want)))
+
+
+def test_precomputed_angles_evaluate_in_pieces(default_model):
+    """With the angles integrated once (precession_angles), a frequency
+    array evaluated in two pieces is the same as in one."""
+    jax = pytest.importorskip("jax")
+    from mlgw_bns.batched_precession import batch_arguments, precession_angles
+
+    precessing = PrecessingModel(default_model)
+    predict = jax.jit(precessing.jax_predict_modes())
+    arguments = batch_arguments(BINARIES, FREQUENCIES)
+    whole = predict(*arguments)
+    intrinsic, _, total_mass, *_, reference_frequency, _ = arguments
+    angles = jax.jit(precession_angles(default_model))(
+        intrinsic, total_mass, reference_frequency, FREQUENCIES[0])
+    half = FREQUENCIES.size // 2
+    pieces = [
+        predict(intrinsic, part, *arguments[2:], angles=angles)
+        for part in (FREQUENCIES[:half], FREQUENCIES[half:])
+    ]
+    for index, want in enumerate(whole):
+        got = np.concatenate([np.asarray(piece[index]) for piece in pieces], axis=-1)
+        np.testing.assert_allclose(got, want, rtol=0, atol=1e-10 * np.max(np.abs(want)))

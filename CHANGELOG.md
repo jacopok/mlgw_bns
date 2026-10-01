@@ -374,7 +374,10 @@ loaded, and the waveforms are referenced differently in time and phase.
     `c_+` and `c_x` hold the twist and the projection on the line of sight,
     and come from `precessing_model.twist_coefficients`, which is the twist
     of a unit multipole. `PrecessingModel.mode_components` is the numpy
-    equivalent.
+    equivalent. `batched_precession.precession_angles` integrates the
+    precession angles alone, and `precessing_mode_components` takes them as
+    `angles=`, so a long frequency array can be evaluated in pieces with a
+    single integration.
 - **The LVK spin angles**: `mlgw_bns.spin_conversion.lvk_to_precessing`
     maps `theta_jn, phi_jl, tilt_1, tilt_2, phi_12, a_1, a_2` and `phase` at
     `f_ref` to the spins, line of sight and `reference_phase` of
