@@ -87,6 +87,15 @@ and precession_angle_residual.py, 48 binaries, first line of sight each):
   twisted here reproduce its h+, hx to 3.6e-12: the twist and the angles
   are exact.
 
+PrecessingModel now fixes the orbital phase at ``reference_frequency_hz``
+itself, and this script hands it TEOBResumS' reference point
+(:func:`teob_reference`); with that, over 48 binaries x 4 lines of sight,
+the precessing mismatch against TEOBResumS is 4.8e-8 without TEOBResumS'
+alpha-jump frequencies, the same as the aligned-spin mismatch of the same
+binaries with the in-plane spins zeroed, 4.7e-8
+(precessing_vs_aligned_mismatch.py). The numbers in the table above
+predate it.
+
 The reference now asks TEOBResumS for every inertial multipole
 (``use_mode_lm_inertial``, see :func:`teob_run`); the numbers above the
 rebase were taken with the truncated one, which on its own costs 5e-6 to
@@ -107,6 +116,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from dataclasses import replace
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -115,6 +125,7 @@ from mlgw_bns.higher_order_modes import Mode, mode_to_k
 from mlgw_bns.model import Model
 from mlgw_bns.model_validation import ValidateModel
 from mlgw_bns.precessing_model import (
+    LEADING_ORDER_MODE_PHASES,
     PrecessingModel,
     PrecessingParametersWithExtrinsic,
 )
@@ -279,18 +290,55 @@ def teob_run(params, chi_1, chi_2, inclination, azimuth, multipoles=False,
     return f, hp, hc, coprecessing, dynamics
 
 
-def teob_polarizations(params, chi_1, chi_2, inclination, azimuth, frequencies):
+def teob_reference(precessing, params, dynamics):
+    r"""TEOBResumS' reference point, as ``reference_frequency_hz, reference_phase``.
+
+    TEOBResumS imposes the spins, and puts its (dynamical) orbital phase to
+    zero, at the first sample of its integration, ``t = 0``, which two
+    clocks read differently. Its PN spin dynamics, against whose orbital
+    frequency its twist (like :class:`PrecessingModel`'s) reads the Euler
+    angles, starts at ``SPIN_REFERENCE_FREQUENCY_HZ``; its EOB dynamics,
+    which the waveform follows, at twice its ``MOmega[0]``, ~9.506 Hz
+    rather than 9.5. :class:`PrecessingModel` takes the spins and the
+    orbital phase at one frequency, so the spins go at the former, and the
+    orbital phase is carried there from the latter along the model's own
+    phase (a ~0.4 rad advance in those 6 mHz). There, the orbital phase is
+    not zero but the offset of TEOBResumS' (2,2) from its leading-order
+    phase, which :class:`PrecessingModel` defines it by (~5e-3 rad, the
+    multipole's higher-order phase corrections). Carrying both across
+    matters: the spins at 9.506 Hz cost up to ~5e-4 in mismatch.
+    ``dynamics`` is as returned by :func:`teob_run`.
+    """
+    _, phase_22 = dynamics["multipoles"][(2, 2)]
+    offset = phase_22[0] - 2.0 * dynamics["phi"][0] - LEADING_ORDER_MODE_PHASES[(2, 2)]
+    start = replace(params, reference_frequency_hz=(
+        dynamics["MOmega"][0] / (np.pi * params.aligned().mass_sum_seconds)))
+    spins = replace(params, reference_frequency_hz=SPIN_REFERENCE_FREQUENCY_HZ)
+    phase = (
+        np.angle(np.exp(1j * offset)) / 2.0
+        - precessing.reference_orbital_phase(start)
+        + precessing.reference_orbital_phase(spins)
+    )
+    return SPIN_REFERENCE_FREQUENCY_HZ, float(np.angle(np.exp(1j * phase)))
+
+
+def teob_polarizations(params, chi_1, chi_2, inclination, azimuth, frequencies,
+                       with_dynamics=False):
     r"""TEOBResumS :math:`h_+, h_\times` for one binary and line of sight.
 
     Returned on the sub-grid of ``frequencies`` that TEOBResumS covers,
     in the ``mlgw_bns`` Fourier convention (``h_+ - i h_\times`` is the
-    multipole sum), together with the boolean mask of that sub-grid.
+    multipole sum), together with the boolean mask of that sub-grid; with
+    ``with_dynamics``, also its dynamics (see :func:`teob_run`).
     """
-    f, hp, hc = teob_run(params, chi_1, chi_2, inclination, azimuth)
+    f, hp, hc, *extra = teob_run(params, chi_1, chi_2, inclination, azimuth,
+                                 multipoles=with_dynamics)
     inside = (frequencies >= max(BAND_LO, f[0])) & (frequencies <= min(BAND_HI, f[-1]))
     hp_out = interp_fd(frequencies[inside], f, hp)
     hc_out = interp_fd(frequencies[inside], f, hc)
-    return hp_out, hc_out, inside
+    if not with_dynamics:
+        return hp_out, hc_out, inside
+    return hp_out, hc_out, inside, extra[1]
 
 
 def validate(model: Model, n_binaries: int, n_orientations: int):
@@ -327,10 +375,8 @@ def validate(model: Model, n_binaries: int, n_orientations: int):
             distance_mpc=DISTANCE_MPC,
             inclination=0.0,
             total_mass=TOTAL_MASS,
-            # the spins are drawn as TEOBResumS' own, at its initial_frequency
-            reference_frequency_hz=SPIN_REFERENCE_FREQUENCY_HZ,
         )
-        angles = precessing.euler_angles(precessing_params, float(frequencies[0]))
+        angles = None
 
         start = time.time()
         for orientation_index in range(n_orientations):
@@ -344,12 +390,22 @@ def validate(model: Model, n_binaries: int, n_orientations: int):
             precessing_params.azimuth = azimuth
 
             try:
-                hp_teob, hc_teob, inside = teob_polarizations(
-                    intrinsic, chi_1, chi_2, iota, azimuth, frequencies
+                hp_teob, hc_teob, inside, dynamics = teob_polarizations(
+                    intrinsic, chi_1, chi_2, iota, azimuth, frequencies,
+                    with_dynamics=True,
                 )
             except RuntimeError as error:  # TEOBResumS' root finder, occasionally
                 print(f"  binary {index + 1}: TEOBResumS failed ({error}), skipped")
                 break
+            if angles is None:
+                # the spins are drawn as TEOBResumS' own, and its orbital
+                # phase is zero, at the first sample of its integration
+                (precessing_params.reference_frequency_hz,
+                 precessing_params.reference_phase) = teob_reference(
+                    precessing, precessing_params, dynamics)
+                angles = precessing.euler_angles(
+                    precessing_params, float(frequencies[0])
+                )
             strain_teob = f_plus * hp_teob + f_cross * hc_teob
 
             strains = {}

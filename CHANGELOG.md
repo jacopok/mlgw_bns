@@ -190,7 +190,12 @@ loaded, and the waveforms are referenced differently in time and phase.
     5e-6 to 7e-5 of mismatch, growing with the opening angle. It now passes
     `use_mode_lm_inertial` with every multipole up to the highest `l`
     (`teob_run`, which can also return the co-precessing multipoles and
-    dynamics of the same call).
+    dynamics of the same call). And it now gives `PrecessingModel`
+    TEOBResumS' own reference point (`teob_reference`): its spins at
+    0.95 `initial_frequency` on the PN clock its spin dynamics and twist
+    use, and its orbital phase at the first sample of its integration,
+    which its EOB dynamics puts at ~9.506 Hz rather than 9.5, carried
+    back along the model's phase.
 
 ### Added
 
@@ -281,6 +286,32 @@ loaded, and the waveforms are referenced differently in time and phase.
     matching that cuts the mismatch against it ~5x.
 - `Model.coprecessing_amplitudes_and_phases`, the multipoles of
     `coprecessing_modes_dict` as amplitude and continuous phase.
+- **The orbital phase of a precessing waveform is fixed at the reference
+    frequency.** With precession it is no longer a choice of observer: it is
+    the angle between the orbital separation and the in-plane spins. As in
+    LALSuite (`f_ref`, `phiRef`), NRSur7dq4, SEOBNR and TEOBResumS, it is now
+    set where the spins are given: with `reference_frequency_hz`,
+    `PrecessingModel` rotates the co-precessing multipoles so that their
+    orbital phase there is `PrecessingParametersWithExtrinsic.reference_phase`
+    (which replaces `coalescence_phase`; the merger is still the reference
+    without a `reference_frequency_hz`). It reads the orbital phase off the
+    surrogate's own (2,2) at that frequency
+    (`PrecessingModel.reference_orbital_phase`), through the time-shift
+    invariant `X = Psi - f Psi'` (`precessing_model.stationary_phase_transform`)
+    and the leading-order multipole phases (`LEADING_ORDER_MODE_PHASES`),
+    with the branch modulo pi from the (2,1) or (3,3). Before, it was
+    zero at the merger, which against TEOBResumS is a binary-dependent
+    rotation of the co-precessing multipoles worth a 2.4e-3 median
+    mismatch (90th percentile 8.2e-3), independent of the opening
+    angle. With TEOBResumS' reference point given
+    (`validate_precessing_against_teob.teob_reference`), the precessing
+    mismatch against it is 7.0e-8 (90th percentile 1.9e-3), and
+    4.8e-8 (90th percentile 2.0e-7) without the frequencies where TEOBResumS' own `alpha` is wrong
+    (below), the same as the aligned-spin mismatch of the same binaries with
+    the in-plane spins zeroed, 4.7e-8 (1.9e-7); line of sight by line of sight the two
+    agree to a median ratio of 1.00
+    (`visualization/precessing_vs_aligned_mismatch.py`, 48 binaries x 4
+    lines of sight, total mass 2.8).
 - Investigation scripts under `visualization/`:
     `compare_fd_twist_with_teob_formula.py` (our twist against a verbatim port
     of TEOBResumS' `twist_hlm_FD`), `precession_error_vs_inplane_spin.py`,
@@ -290,9 +321,11 @@ loaded, and the waveforms are referenced differently in time and phase.
     `precession_floor_anatomy.py` (splits the mismatch against TEOBResumS
     into interpolation, co-precessing, time and orbital-phase origin, and
     reference contributions), `precession_orbital_phase_origin.py` (predicts
-    TEOBResumS' orbital-phase origin from the surrogate) and
+    TEOBResumS' orbital-phase origin from the surrogate),
     `precession_angle_residual.py` (locates TEOBResumS' `alpha` steps and
-    the truncated inertial sum).
+    the truncated inertial sum) and `precessing_vs_aligned_mismatch.py`
+    (the precessing and aligned-spin mismatches against TEOBResumS, side
+    by side).
 
 ### Known issues
 
@@ -306,23 +339,6 @@ loaded, and the waveforms are referenced differently in time and phase.
     as SNR^2). Evaluating the sum in 80-bit precision removes it (6e-6 rad)
     but costs ~20x; the lasting fix is a better-conditioned regressor, which
     needs retraining.
-- `PrecessingModel` does not fix the orbital phase of the co-precessing
-    multipoles at the spin reference frequency (the angle between the
-    separation vector and the in-plane spins, which precession makes
-    physical): the surrogate puts it to zero at the merger, TEOBResumS at the
-    first sample of its integration, where it also imposes the spins. Against
-    TEOBResumS this is a binary-dependent rotation `exp(i m phi0)` of the
-    co-precessing multipoles and a 2.3e-3 median mismatch (90th percentile
-    9e-3), independent of the opening angle. `phi0` follows from the
-    surrogate's own (2,2) phase at TEOBResumS' starting frequency (to 5e-3
-    rad), and rotating by it gives 6.7e-8, or 3.9e-8 (90th percentile 1.9e-7)
-    without the frequencies at which TEOBResumS' own Euler angle `alpha` is
-    wrong (below), against 2.6e-8 for the aligned-spin multipoles alone
-    (`visualization/precession_orbital_phase_origin.py`, 48 binaries). Only
-    TEOBResumS' *actual* first-sample frequency works (9.5058 Hz median for
-    `initial_frequency = 10`, not the nominal 9.5: at ~2e4 rad/Hz the
-    difference makes the prediction random), which `PrecessingModel` cannot
-    compute on its own, so the convention is not adopted yet.
 - TEOBResumS' precession angle `alpha` has spurious ~2 pi steps (in band on
     22 of 48 binaries), which its frequency-domain twist cubic-splines
     through, so its `h+`, `hx` are wrong on the few frequency bins around

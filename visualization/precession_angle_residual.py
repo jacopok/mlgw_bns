@@ -58,6 +58,24 @@ def alpha_jumps(dynspin: np.ndarray) -> np.ndarray:
     return np.flatnonzero(np.abs(np.diff(dynspin[:, 10])) > np.pi)
 
 
+def alpha_glitched(dynspin, frequencies, orders, mass_sum_seconds, margin):
+    """Where TEOBResumS' own twist read alpha across one of its jumps.
+
+    Boolean mask over ``frequencies`` (Hz): the multipole ``m`` (for each
+    ``m`` in ``orders``) is stationary at ``M Omega = 2 pi f M / m``, and the
+    frequency is flagged if that falls in a spline interval of the spin
+    dynamics within ``margin`` intervals of an :func:`alpha_jumps` step.
+    """
+    jumps = alpha_jumps(dynspin)
+    near = np.concatenate([jumps + k for k in range(-margin, margin + 1)])
+    glitched = np.zeros(frequencies.size, bool)
+    for m in orders:
+        sample = np.searchsorted(
+            dynspin[:, 13], 2 * np.pi * frequencies * mass_sum_seconds / m) - 1
+        glitched |= np.isin(sample, near)
+    return glitched
+
+
 def teob_angles(directory: str) -> EulerAngles:
     """TEOBResumS' Euler angles against M Omega, from its ``dynspin.txt``."""
     data = teob_dynspin(directory)
@@ -106,11 +124,8 @@ def evaluate_binary(case):
         for margin in MARGINS:
             glitched = np.zeros(fb.size, bool)
             if margin is not None:
-                near = np.concatenate([jumps + k for k in range(-margin, margin + 1)])
-                for m in sorted({m for (_, m) in raw}):
-                    sample = np.searchsorted(
-                        dynspin[:, 13], 2 * np.pi * fb * mass_seconds / m) - 1
-                    glitched |= np.isin(sample, near)
+                glitched = alpha_glitched(
+                    dynspin, fb, sorted({m for (_, m) in raw}), mass_seconds, margin)
             keep = ~glitched
             for label, angles in (("ours", ours), ("teob", theirs)):
                 row[f"{reference}_{margin}_{label}"] = validator.full_waveform_mismatch(

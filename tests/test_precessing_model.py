@@ -6,18 +6,23 @@ conventions involved: with no in-plane spin it must be the identity, and
 in general it must conserve the power in each :math:`\\ell`.
 """
 
+import dataclasses
+
 import numpy as np
 import pytest
 
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.model import Model
 from mlgw_bns.precessing_model import (
+    LEADING_ORDER_MODE_PHASES,
     EulerAngles,
     PrecessingModel,
     PrecessingParametersWithExtrinsic,
     check_aligned_spin_limit,
     eob_orbital_frequency_rate,
     newtonian_time_to_merger,
+    stationary_phase_transform,
+    stationary_phase_window,
     twist_modes_frequency_domain,
 )
 from mlgw_bns.special_func import spinsphericalharm, wigner_d_function
@@ -235,6 +240,53 @@ def test_aligned_spin_limit_of_the_twist(frequencies, precessing_params):
     check_aligned_spin_limit(
         Model.default_for_testing(), frequencies, precessing_params
     )
+
+
+def test_reference_phase_is_the_orbital_phase_at_the_reference_frequency(
+    precessing_params,
+):
+    """With a reference frequency, every multipole reads back the requested
+    orbital phase there (the odd-m ones on the right branch), whatever the
+    merger time."""
+
+    model = Model.default_for_testing(
+        modes=[Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
+    )
+    precessing = PrecessingModel(model)
+    # aligned spins: the twist is the identity, so the positive-frequency
+    # inertial multipoles are the rotated co-precessing ones
+    params = dataclasses.replace(
+        precessing_params,
+        chi_1=(0.0, 0.0, 0.15),
+        chi_2=(0.0, 0.0, -0.1),
+        reference_frequency_hz=9.5,
+        reference_phase=0.7,
+        merger_time=0.3,
+    )
+    keys = [(2, 1), (2, 2), (3, 3)]
+    centres = [m / 2.0 * params.reference_frequency_hz for _, m in keys]
+    windows = [stationary_phase_window(centre) for centre in centres]
+    modes, _ = precessing.predict_modes_dict(np.concatenate(windows), params)
+
+    start = 0
+    for key, centre, window in zip(keys, centres, windows):
+        phase = np.unwrap(np.angle(modes[key][start : start + window.size]))
+        start += window.size
+        m = key[1]
+        transform = stationary_phase_transform(window, phase, centre)
+        error = np.angle(
+            np.exp(1j * (transform - LEADING_ORDER_MODE_PHASES[key] - np.pi / 4.0
+                         - m * params.reference_phase))
+        )
+        # exact for the (2,2), which defines it; the others carry their
+        # higher-order phase corrections
+        assert abs(error) < (1e-6 if m == 2 else 0.2), (key, error)
+
+    shifted = dataclasses.replace(params, merger_time=0.0)
+    assert abs(
+        precessing.reference_orbital_phase(shifted)
+        - precessing.reference_orbital_phase(params)
+    ) < 1e-6
 
 
 def test_precessing_prediction_is_finite(frequencies, precessing_params):
