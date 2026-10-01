@@ -416,6 +416,8 @@ class MlgwBnsJaxPrecessing(Approximant):
         self.n_waveforms = batch
         if batch > 1:
             self.max_points = MAX_BATCH_POINTS
+            # a call takes seconds and already averages over `batch` binaries
+            self.max_seeds, self.max_repeats = 4, 2
             self.name = f"mlgw_bns precessing (JAX, batch {batch})"
         else:
             self.name = "mlgw_bns precessing (JAX)"

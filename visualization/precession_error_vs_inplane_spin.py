@@ -19,6 +19,23 @@ frequency, which differs between our EOB call and TEOBResumS' precessing
 run by a binary-dependent n * phi0 (see the docstring of
 validate_precessing_against_teob).
 
+Since then the model is handed TEOBResumS' own reference point
+(:func:`validate_precessing_against_teob.teob_reference`), which removes
+that floor. Rerun 2026-10-01, median mismatch over the same cases:
+
+       s   median beta   surrogate   eob
+    0.00      0.000      6.4e-07   6.3e-07
+    0.03      0.004      1.7e-06   1.5e-06
+    0.10      0.014      9.1e-07   8.9e-07
+    0.20      0.028      9.1e-07   9.0e-07
+    0.50      0.068      1.4e-06   1.3e-06
+    1.00      0.122      9.2e-07   9.0e-07
+
+flat in the opening angle, at the aligned-spin level, and still the same
+for both sources. TEOBResumS' alpha-jump frequency nodes are not masked
+here (they are in precessing_vs_aligned_mismatch.py), so they may be in
+the tail at s > 0.
+
 Run with: python visualization/precession_error_vs_inplane_spin.py [--plot-only]
 """
 
@@ -85,16 +102,18 @@ def evaluate(task):
         lambda_2=intrinsic.lambda_2, chi_1=chi_1, chi_2=chi_2,
         distance_mpc=v.DISTANCE_MPC, inclination=orientation["inclination"],
         azimuth=orientation["azimuth"], total_mass=v.TOTAL_MASS,
-        reference_frequency_hz=v.SPIN_REFERENCE_FREQUENCY_HZ,
     )
     f_plus, f_cross = v.antenna_patterns(orientation["theta"], orientation["phi"],
                                          orientation["psi"])
-    angles = precessing.euler_angles(params, float(frequencies[0]))
     try:
-        hp_t, hc_t, inside = v.teob_polarizations(
-            intrinsic, chi_1, chi_2, params.inclination, params.azimuth, frequencies)
+        hp_t, hc_t, inside, dynamics = v.teob_polarizations(
+            intrinsic, chi_1, chi_2, params.inclination, params.azimuth, frequencies,
+            with_dynamics=True)
     except RuntimeError:  # TEOBResumS' root finder, occasionally
-        return index, scale, float(angles.beta.max()), [np.nan] * len(SOURCES)
+        return index, scale, np.nan, [np.nan] * len(SOURCES)
+    params.reference_frequency_hz, params.reference_phase = v.teob_reference(
+        precessing, params, dynamics)
+    angles = precessing.euler_angles(params, float(frequencies[0]))
     teob = f_plus * hp_t + f_cross * hc_t
     mismatches = []
     for source in SOURCES:
