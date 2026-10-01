@@ -258,6 +258,51 @@ class PrecessingParametersWithExtrinsic:
     merger_time: float = 0.0
     reference_frequency_hz: Optional[float] = None
 
+    @classmethod
+    def from_lvk(
+        cls,
+        mass_1: float,
+        mass_2: float,
+        theta_jn: float,
+        phi_jl: float,
+        tilt_1: float,
+        tilt_2: float,
+        phi_12: float,
+        a_1: float,
+        a_2: float,
+        phase: float,
+        reference_frequency_hz: float,
+        lambda_1: float,
+        lambda_2: float,
+        distance_mpc: float,
+        merger_time: float = 0.0,
+    ) -> "PrecessingParametersWithExtrinsic":
+        r"""A binary given by the LVK spin angles, at ``reference_frequency_hz``.
+
+        Masses in solar masses, the heavier first; see
+        :func:`mlgw_bns.spin_conversion.lvk_to_precessing`.
+        """
+        from .spin_conversion import lvk_to_precessing
+
+        orientation = lvk_to_precessing(
+            theta_jn, phi_jl, tilt_1, tilt_2, phi_12, a_1, a_2, mass_1, mass_2,
+            reference_frequency_hz, phase,
+        )
+        return cls(
+            mass_ratio=mass_1 / mass_2,
+            lambda_1=lambda_1,
+            lambda_2=lambda_2,
+            chi_1=tuple(float(c) for c in orientation.chi_1),
+            chi_2=tuple(float(c) for c in orientation.chi_2),
+            distance_mpc=distance_mpc,
+            inclination=float(orientation.inclination),
+            total_mass=mass_1 + mass_2,
+            azimuth=float(orientation.azimuth),
+            reference_phase=float(orientation.reference_phase),
+            merger_time=merger_time,
+            reference_frequency_hz=reference_frequency_hz,
+        )
+
     @property
     def chi_1_vector(self) -> np.ndarray:
         """Spin of the larger star as a length-3 array."""
@@ -752,6 +797,65 @@ def polarizations_from_inertial_modes(
     return h_plus, h_cross
 
 
+def twist_coefficients(
+    keys: Sequence[ModeKey],
+    frequencies: np.ndarray,
+    angles: EulerAngles,
+    mass_sum_seconds: float,
+    inclination: float,
+    azimuth: float,
+    xp=np,
+) -> Dict[ModeKey, Tuple[np.ndarray, np.ndarray]]:
+    r"""The twist and sky projection of each co-precessing multipole.
+
+    The polarizations are linear in the co-precessing multipoles:
+
+    .. math::
+        \tilde{h}_{+, \times}(f) = \sum_{\ell m} c^{+, \times}_{\ell m}(f)
+        \, \tilde{h}^{\rm co}_{\ell m}(f) \,.
+
+    :func:`twist_modes_frequency_domain` builds the inertial multipoles at
+    :math:`-f` from the complex conjugates of the co-precessing ones, but
+    :func:`polarizations_from_inertial_modes` conjugates those again, so
+    the coefficients are those of a unit multipole twisted and projected.
+    They vary only on the precession time scale --- what mode-by-mode
+    relative binning interpolates (Leslie, Dai and Pratten,
+    `arXiv:2109.09872 <https://arxiv.org/abs/2109.09872>`_, eq. 3).
+
+    Parameters
+    ----------
+    keys : sequence of (l, m)
+        Co-precessing multipoles, :math:`m > 0`.
+    frequencies : np.ndarray
+        The (positive) frequency grid, in Hz.
+    angles : EulerAngles
+        Precession angles; anything with an ``at_momega`` method.
+    mass_sum_seconds : float
+        Total mass of the binary, in seconds.
+    inclination, azimuth : float
+        Line of sight, in radians; see
+        :class:`PrecessingParametersWithExtrinsic`.
+    xp : module
+        Array namespace, ``numpy`` (default) or ``jax.numpy``.
+
+    Returns
+    -------
+    dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]
+        Mapping ``(l, m) -> (c_plus, c_cross)``, on ``frequencies``.
+    """
+    unit = xp.ones_like(xp.asarray(frequencies, dtype=float), dtype=complex)
+    coefficients = {}
+    for key in keys:
+        key = (int(key[0]), int(key[1]))
+        positive_f, negative_f = twist_modes_frequency_domain(
+            {key: unit}, frequencies, angles, mass_sum_seconds, xp=xp
+        )
+        coefficients[key] = polarizations_from_inertial_modes(
+            positive_f, negative_f, inclination, azimuth, xp=xp
+        )
+    return coefficients
+
+
 class PrecessingModel:
     r"""A precessing waveform model built on an aligned-spin :class:`Model`.
 
@@ -852,6 +956,69 @@ class PrecessingModel:
         return precessing_waveform(
             self.model, modes, N_STEPS if n_steps is None else n_steps
         )
+
+    def jax_predict_modes(
+        self, modes: Optional[Sequence] = None, n_steps: Optional[int] = None
+    ) -> Callable:
+        r"""A pure JAX function giving each co-precessing multipole and its
+        twist, for a batch of binaries.
+
+        See :func:`mlgw_bns.batched_precession.precessing_mode_components`;
+        the arguments are those of :meth:`jax_predict`.
+        """
+        from .batched_precession import N_STEPS, precessing_mode_components
+
+        return precessing_mode_components(
+            self.model, modes, N_STEPS if n_steps is None else n_steps
+        )
+
+    def mode_components(
+        self,
+        frequencies: np.ndarray,
+        params: PrecessingParametersWithExtrinsic,
+        source: str = "surrogate",
+        angles: Optional[EulerAngles] = None,
+    ) -> Dict[ModeKey, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        r"""Each co-precessing multipole and its twist coefficients.
+
+        The numpy counterpart of :meth:`jax_predict_modes`: :meth:`predict` is
+        ``sum(c_plus * coprecessing), sum(c_cross * coprecessing)`` over the
+        multipoles (see :func:`twist_coefficients`).
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate the waveform, in Hz.
+        params : PrecessingParametersWithExtrinsic
+            Source parameters.
+        source : str
+            Where the co-precessing multipoles come from; see
+            :meth:`predict_modes_dict`.
+        angles : EulerAngles, optional
+            Precomputed Euler angles; see :meth:`predict_modes_dict`.
+
+        Returns
+        -------
+        dict[tuple[int, int], tuple[np.ndarray, np.ndarray, np.ndarray]]
+            Mapping ``(l, m) -> (coprecessing, c_plus, c_cross)``.
+        """
+        if angles is None:
+            angles = self.euler_angles(params, float(frequencies[0]))
+        amplitudes_and_phases = self.coprecessing_amplitudes_and_phases(
+            frequencies, params, source=source
+        )
+        coefficients = twist_coefficients(
+            list(amplitudes_and_phases),
+            frequencies,
+            angles,
+            params.aligned().mass_sum_seconds,
+            params.inclination,
+            params.azimuth,
+        )
+        return {
+            key: (amplitude * np.exp(1j * phase), *coefficients[key])
+            for key, (amplitude, phase) in amplitudes_and_phases.items()
+        }
 
     def reference_orbital_phase(
         self,

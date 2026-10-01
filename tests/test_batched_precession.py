@@ -1,5 +1,7 @@
 """Tests for the batched JAX precessing waveform (:mod:`mlgw_bns.batched_precession`)."""
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -102,3 +104,50 @@ def test_stationary_phase_transform_matches_the_analytic_one(default_model):
             analytic = at[0, 0, 0] + 2 * np.pi * frequency * time[0, 0, 0]
             # the phase is ~4e5 rad at 4.75 Hz
             assert abs(fitted - analytic) < 1e-5, (key, frequency)
+
+
+def test_mode_components_sum_to_the_waveform(default_model):
+    """The polarizations are linear in the co-precessing multipoles: the
+    components, recombined, are the waveform, in JAX and in numpy."""
+    jax = pytest.importorskip("jax")
+    from mlgw_bns.batched_precession import batch_arguments
+
+    precessing = PrecessingModel(default_model)
+    arguments = batch_arguments(BINARIES, FREQUENCIES)
+    coprecessing, c_plus, c_cross = jax.jit(precessing.jax_predict_modes())(*arguments)
+    h_plus, h_cross = jax.jit(precessing.jax_predict())(*arguments)
+    assert coprecessing.shape == (len(BINARIES), len(default_model.modes), FREQUENCIES.size)
+    for got, want in ((np.sum(c_plus * coprecessing, axis=1), h_plus),
+                      (np.sum(c_cross * coprecessing, axis=1), h_cross)):
+        np.testing.assert_allclose(got, want, rtol=0, atol=1e-12 * np.max(np.abs(want)))
+
+    # numpy, with the angles of the first binary computed once
+    params = BINARIES[0]
+    angles = precessing.euler_angles(params, float(FREQUENCIES[0]))
+    components = precessing.mode_components(FREQUENCIES, params, angles=angles)
+    expected = precessing.predict(FREQUENCIES, params, angles=angles)
+    for index, want in enumerate(expected):
+        got = sum(value[0] * value[1 + index] for value in components.values())
+        np.testing.assert_allclose(got, want, rtol=0, atol=1e-12 * np.max(np.abs(want)))
+
+
+def test_reference_phase_rotates_each_coprecessing_mode(default_model):
+    """The orbital phase at the reference frequency multiplies the
+    co-precessing multipole m by exp(i m delta) and leaves the twist alone:
+    what relative binning (and the phase folds of a sampler) rely on."""
+    jax = pytest.importorskip("jax")
+    from mlgw_bns.batched_precession import batch_arguments
+
+    precessing = PrecessingModel(default_model)
+    predict = jax.jit(precessing.jax_predict_modes())
+    delta = 0.7
+    shifted = [dataclasses.replace(p, reference_phase=p.reference_phase + delta)
+               for p in BINARIES]
+    before = predict(*batch_arguments(BINARIES, FREQUENCIES))
+    after = predict(*batch_arguments(shifted, FREQUENCIES))
+    for got, want in zip(after[1:], before[1:]):
+        np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
+    emms = np.array([mode.m for mode in default_model.modes])
+    rotation = np.exp(1j * emms * delta)[None, :, None]
+    want = np.asarray(before[0]) * rotation
+    np.testing.assert_allclose(after[0], want, rtol=0, atol=1e-10 * np.max(np.abs(want)))

@@ -23,6 +23,8 @@ Precessing waveforms
 
 .. autofunction:: mlgw_bns.precessing_model.polarizations_from_inertial_modes
 
+.. autofunction:: mlgw_bns.precessing_model.twist_coefficients
+
 .. autofunction:: mlgw_bns.precessing_model.newtonian_time_to_merger
 
 .. autofunction:: mlgw_bns.precessing_model.check_aligned_spin_limit
@@ -34,12 +36,27 @@ Batched, in JAX
 
 .. autofunction:: mlgw_bns.batched_precession.precessing_waveform
 
+.. autofunction:: mlgw_bns.batched_precession.precessing_mode_components
+
 .. autofunction:: mlgw_bns.batched_precession.batch_arguments
 
 .. autofunction:: mlgw_bns.batched_precession.integrate_angles
 
 .. autoclass:: mlgw_bns.batched_precession.TabulatedAngles
     :members: at_momega
+
+From the LVK spin angles
+------------------------
+
+.. automodule:: mlgw_bns.spin_conversion
+
+.. autofunction:: mlgw_bns.spin_conversion.lvk_to_precessing
+
+.. autoclass:: mlgw_bns.spin_conversion.PrecessingOrientation
+
+.. autofunction:: mlgw_bns.spin_conversion.lal_precessing_spins
+
+.. autofunction:: mlgw_bns.spin_conversion.orbital_angular_momentum
 
 The precession dynamics
 -----------------------

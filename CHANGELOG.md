@@ -362,6 +362,32 @@ loaded, and the waveforms are referenced differently in time and phase.
     (`--no-precessing` to skip them).
 - `visualization/probe_hcross_sign.py`, which shows `Model.predict`'s `hx`
     sign against TEOBResumS' (Known issues).
+- **Twisted co-precessing multipoles, for mode-by-mode relative binning**
+    (Leslie, Dai & Pratten 2021): `precessing_waveform` is now the sum over
+    co-precessing `(l, m)` of `c_+ h_lm` and `c_x h_lm`.
+    `batched_precession.precessing_mode_components` (and
+    `PrecessingModel.jax_predict_modes(modes, n_steps)`) returns the three
+    factors, each of shape `(N, n_modes, k)`. `h_lm` is the co-precessing
+    multipole with the reference-phase rotation and the merger-time shift
+    applied, so a change of `reference_phase` by `delta` multiplies it by
+    `exp(i m delta)` and leaves `c_+`, `c_x` alone.
+    `c_+` and `c_x` hold the twist and the projection on the line of sight,
+    and come from `precessing_model.twist_coefficients`, which is the twist
+    of a unit multipole. `PrecessingModel.mode_components` is the numpy
+    equivalent.
+- **The LVK spin angles**: `mlgw_bns.spin_conversion.lvk_to_precessing`
+    maps `theta_jn, phi_jl, tilt_1, tilt_2, phi_12, a_1, a_2` and `phase` at
+    `f_ref` to the spins, line of sight and `reference_phase` of
+    `PrecessingParametersWithExtrinsic` (and `.from_lvk`).
+    `lal_precessing_spins` is a vectorised numpy/JAX port of LALSuite's
+    `SimInspiralTransformPrecessingNewInitialConditions` and agrees with it
+    to 1e-11. `lvk_to_precessing` takes the spins at `phiRef = 0` and passes
+    `phase` as `reference_phase`, so the precession angles do not depend on
+    it. Against IMRPhenomXPHM, co-precessing mode by co-precessing mode,
+    the overlap phases do not depend on `phase`, `phi_jl` or `theta_jn`:
+    the geometry and the sense of `phase` are LALSuite's, apart from the
+    sign of `hx` (Known issues), with matches of ~0.997
+    (`visualization/validate_lvk_conventions.py`).
 
 ### Known issues
 
