@@ -116,6 +116,16 @@ SEED = 17
 DISTANCE_MPC = 100.0
 INCLINATION = 1.0
 TOTAL_MASS = 2.8
+#: Where the precessing binaries' spins (and orbital phase) are given.
+PRECESSING_REFERENCE_FREQUENCY_HZ = 20.0
+#: Time window, in seconds, over which :func:`twisted_mismatch_vs_power_by_mode`
+#: optimises each multipole's mismatch. ``full_waveform_mismatch``'s default
+#: +-0.07 s is searched on a 3.6 ms grid, coarser than the overlap peak of a
+#: contribution whose power sits at a few hundred Hz (a precessing (3,2),
+#: (4,3), (4,4)): the search lands on a side lobe, at mismatches of ~0.8
+#: where the unshifted one is ~1e-4. Surrogate and TEOBResumS are both
+#: referenced to the merger, well within this.
+TWISTED_MAX_DELTA_T = 2e-3
 
 #: Low-frequency floor for the full-waveform validation, in Hz. Below the
 #: trained band's own edge (``dataset.effective_initial_frequency_hz``,
@@ -824,7 +834,24 @@ def plot_mismatch_vs_power(data: dict) -> None:
     distinguishable while sharing that mode's color.
     """
     fig, ax = plt.subplots(figsize=(8, 6))
+    _scatter_mismatch_vs_power(ax, data)
+    ax.set_title(
+        "full: residual time+phase optimised    "
+        r"faint: predicted $\Delta t$ + reference phase, nothing optimised (regressed)",
+        fontsize="small",
+    )
+    fig.suptitle("Per-mode mismatch vs. power fraction")
+    fig.tight_layout()
+    ax.set_xlim(ax.get_xlim()[0], 1-1e-5)
 
+    outfile = f"{OUTPUT_PREFIX}_mismatch_vs_power.png"
+    fig.savefig(outfile, dpi=150)
+    print(f"Saved plot to {outfile}")
+
+
+def _scatter_mismatch_vs_power(ax, data: dict) -> None:
+    """One mismatch-vs-power-fraction scatter, as :func:`plot_mismatch_vs_power`
+    and :func:`plot_twisted_mismatch_vs_power` draw it."""
     for mode, color in zip(
         MODES, plt.rcParams["axes.prop_cycle"].by_key()["color"]
     ):
@@ -856,20 +883,198 @@ def plot_mismatch_vs_power(data: dict) -> None:
     ax.set_yscale("log")
     ax.set_xlabel("Power fraction, $\\max$(EOB, mlgw)")
     ax.set_ylabel("Mismatch")
-    ax.set_title(
-        "full: residual time+phase optimised    "
-        r"faint: predicted $\Delta t$ + reference phase, nothing optimised (regressed)",
-        fontsize="small",
-    )
     ax.grid(True)
     ax.legend()
-    fig.suptitle("Per-mode mismatch vs. power fraction")
-    fig.tight_layout()
-    ax.set_xlim(ax.get_xlim()[0], 1-1e-5)
 
-    outfile = f"{OUTPUT_PREFIX}_mismatch_vs_power.png"
+
+def twisted_mismatch_vs_power_by_mode(
+    model: Model, n_waveforms: int = N_FULL_WAVEFORM_MISMATCHES
+) -> dict:
+    r""":func:`mismatch_vs_power_by_mode` for precessing binaries, by
+    co-precessing multipole.
+
+    Each binary gets random in-plane spins (given at
+    :data:`PRECESSING_REFERENCE_FREQUENCY_HZ`), and an isotropic inclination,
+    sky position and polarization, as
+    ``validate_precessing_against_teob.py`` draws them. Each co-precessing
+    multipole of the surrogate and of TEOBResumS (``source="eob"``) is
+    twisted on its own along the same Euler angles and projected on the
+    detector; its power fraction is that of its projected contribution in
+    the projected sum, and its mismatches compare the two projected
+    contributions, optimised (time, within :data:`TWISTED_MAX_DELTA_T`, and
+    phase) and not (both referenced as
+    :class:`~mlgw_bns.precessing_model.PrecessingModel` references them).
+
+    The same binaries with their in-plane spins zeroed are the
+    ``"aligned"`` baseline: the same pipeline, with a trivial twist.
+
+    Returns
+    -------
+    dict
+        ``{"aligned": data, "precessing": data}``, each in the format of
+        :func:`mismatch_vs_power_by_mode`'s output.
+    """
+    import dataclasses
+
+    import jax
+
+    import validate_precessing_against_teob as precessing_validation
+    from mlgw_bns.batched_precession import TabulatedAngles, integrate_angles
+    from mlgw_bns.precessing_model import (
+        PrecessingModel,
+        PrecessingParametersWithExtrinsic,
+        polarizations_from_inertial_modes,
+        twist_modes_frequency_domain,
+    )
+
+    precessing = PrecessingModel(model)
+    power_validator = ValidateModel(model.mode_models[Mode(2, 2)])
+    all_frequencies, all_psd = extended_frequency_grid(power_validator)
+    largest_m = max(mode.m for mode in model.modes)
+
+    # the angles in JAX: the numpy integration takes up to a minute a binary
+    jax.config.update("jax_enable_x64", True)
+
+    @jax.jit
+    def angles_tuple(*args):
+        angles = integrate_angles(*args)
+        return tuple(getattr(angles, field.name) for field in dataclasses.fields(angles))
+
+    class NumpyAngles:
+        def __init__(self, angles):
+            self.angles = angles
+
+        def at_momega(self, momega):
+            return tuple(np.asarray(a) for a in self.angles.at_momega(momega))
+
+    parameter_generator = model.dataset.make_parameter_generator(SEED)
+    rng = np.random.default_rng(SEED)
+    results: dict = {
+        kind: {mode: {"power_fraction": [], "optimised": [], "regressed": []} for mode in MODES}
+        for kind in ("aligned", "precessing")
+    }
+
+    for _ in tqdm(range(n_waveforms), unit="waveform"):
+        intrinsic = next(parameter_generator)
+        orientation = precessing_validation.random_orientation(rng)
+        antenna = precessing_validation.antenna_patterns(
+            orientation["theta"], orientation["phi"], orientation["psi"]
+        )
+        spins = (
+            precessing_validation.random_spin_vector(rng, intrinsic.chi_1),
+            precessing_validation.random_spin_vector(rng, intrinsic.chi_2),
+        )
+        params = PrecessingParametersWithExtrinsic(
+            mass_ratio=intrinsic.mass_ratio,
+            lambda_1=intrinsic.lambda_1,
+            lambda_2=intrinsic.lambda_2,
+            chi_1=spins[0],
+            chi_2=spins[1],
+            distance_mpc=DISTANCE_MPC,
+            inclination=orientation["inclination"],
+            azimuth=orientation["azimuth"],
+            total_mass=TOTAL_MASS,
+            reference_phase=rng.uniform(0.0, 2.0 * np.pi),
+            reference_frequency_hz=PRECESSING_REFERENCE_FREQUENCY_HZ,
+        )
+        aligned_params = dataclasses.replace(
+            params, chi_1=(0.0, 0.0, intrinsic.chi_1), chi_2=(0.0, 0.0, intrinsic.chi_2)
+        )
+        # the co-precessing multipoles do not depend on the in-plane spins
+        sources = {
+            source: precessing.coprecessing_amplitudes_and_phases(
+                all_frequencies, params, source=source
+            )
+            for source in ("eob", "surrogate")
+        }
+        support = np.ones(len(all_frequencies), dtype=bool)
+        for amplitude, _ in sources["eob"].values():
+            support &= np.abs(amplitude) > 0
+        if support.sum() < 2:
+            continue
+        frequencies, psd_values = all_frequencies[support], all_psd[support]
+        weight = np.gradient(frequencies) / psd_values
+
+        def product(a: np.ndarray, b: np.ndarray) -> float:
+            return float(np.sum(np.conj(a) * b * weight).real)
+
+        mass_seconds = params.aligned().mass_sum_seconds
+        for kind, binary in (("aligned", aligned_params), ("precessing", params)):
+            angles = NumpyAngles(TabulatedAngles(*angles_tuple(
+                binary.mass_ratio, binary.lambda_1, binary.lambda_2,
+                np.asarray(binary.chi_1_vector), np.asarray(binary.chi_2_vector),
+                binary.reference_frequency_hz * mass_seconds,
+                2.0 * frequencies[0] * mass_seconds / largest_m,
+            )))
+            strains = {}
+            for source, multipoles in sources.items():
+                for key, (amplitude, phase) in multipoles.items():
+                    positive, negative = twist_modes_frequency_domain(
+                        {key: (amplitude * np.exp(1j * phase))[support]},
+                        frequencies, angles, mass_seconds,
+                    )
+                    h_plus, h_cross = polarizations_from_inertial_modes(
+                        positive, negative, binary.inclination, binary.azimuth
+                    )
+                    strains[source, key] = antenna[0] * h_plus + antenna[1] * h_cross
+            total = {
+                source: product(*2 * [sum(strains[source, key] for key in sources[source])])
+                for source in sources
+            }
+            for mode in MODES:
+                key = (mode.l, mode.m)
+                true, predicted = strains["eob", key], strains["surrogate", key]
+                results[kind][mode]["power_fraction"].append(max(
+                    product(true, true) / total["eob"],
+                    product(predicted, predicted) / total["surrogate"],
+                ))
+                results[kind][mode]["optimised"].append(power_validator.full_waveform_mismatch(
+                    {(2, 2): true}, {(2, 2): predicted}, frequencies=frequencies,
+                    max_delta_t=TWISTED_MAX_DELTA_T,
+                ))
+                results[kind][mode]["regressed"].append(1.0 - product(true, predicted) / np.sqrt(
+                    product(true, true) * product(predicted, predicted)
+                ))
+
+    return {
+        kind: {
+            mode: {key: np.array(values) for key, values in per_mode.items()}
+            for mode, per_mode in per_kind.items()
+        }
+        for kind, per_kind in results.items()
+    }
+
+
+def plot_twisted_mismatch_vs_power(data: dict) -> None:
+    r""":func:`plot_mismatch_vs_power` for :func:`twisted_mismatch_vs_power_by_mode`:
+    the in-plane-zeroed binaries and the precessing ones side by side."""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharex=True, sharey=True)
+    for ax, (kind, title) in zip(axes, (
+        ("aligned", "in-plane spins zeroed"),
+        ("precessing", "precessing"),
+    )):
+        _scatter_mismatch_vs_power(ax, data[kind])
+        ax.set_title(title)
+        ax.set_xlabel("Power fraction after the twist, $\\max$(EOB, mlgw)")
+    fig.suptitle(
+        "Per co-precessing multipole, twisted and projected on a detector "
+        "(full: time+phase optimised; faint: nothing optimised)"
+    )
+    fig.tight_layout()
+    axes[0].set_xlim(axes[0].get_xlim()[0], 1 - 1e-5)
+
+    outfile = f"{OUTPUT_PREFIX}_twisted_mismatch_vs_power.png"
     fig.savefig(outfile, dpi=150)
     print(f"Saved plot to {outfile}")
+    for kind in ("aligned", "precessing"):
+        print(f"  {kind}: median power fraction / optimised mismatch / not optimised")
+        for mode in MODES:
+            per_mode = data[kind][mode]
+            if len(per_mode["power_fraction"]):
+                print(
+                    f"    ({mode.l},{mode.m}): {np.median(per_mode['power_fraction']):.2e} / "
+                    f"{np.median(per_mode['optimised']):.2e} / {np.median(per_mode['regressed']):.2e}"
+                )
 
 
 def _mode_bases(model: Model, params: ParametersWithExtrinsic, frequencies: np.ndarray):
@@ -1465,6 +1670,9 @@ def timing_benchmark(
         from mlgw_bns.jax_predict import model_to_jax_waveform
     except Exception as exc:  # pragma: no cover - environment dependent
         logging.warning("JAX not available (%s); skipping JAX timing", exc)
+        result["precessing"] = precessing_timing_benchmark(
+            model, n_points_list, n_seeds, n_epochs, jax_batch=None
+        )
         return result
 
     def pack(params, freqs):
@@ -1536,6 +1744,57 @@ def timing_benchmark(
         result["jax_batch"].append(float(np.median(times_ms)))
         print(f"    n_points={n_points:>6}  median {result['jax_batch'][-1]:.4f} ms")
 
+    result["precessing"] = precessing_timing_benchmark(
+        model, n_points_list, n_seeds, n_epochs, jax_batch
+    )
+    return result
+
+
+def precessing_timing_benchmark(
+    model: Model,
+    n_points_list=TIMING_N_POINTS,
+    n_seeds: int = TIMING_SEEDS,
+    n_epochs: int = TIMING_EPOCHS,
+    jax_batch: Optional[int] = TIMING_JAX_BATCH,
+) -> dict:
+    r"""Median wall-clock time per waveform of :meth:`PrecessingModel.predict
+    <mlgw_bns.precessing_model.PrecessingModel.predict>` and of its JAX port
+    (single call, and ``jax_batch`` per call unless ``None``).
+
+    The approximants are ``benchmark_evaluation_time``'s, on ``model``: the
+    numpy one integrates the precession angles for seconds whatever the
+    grid, so it is timed on a few grid sizes and seeds only.
+
+    Returns
+    -------
+    dict
+        ``{approximant name: (n_points, median ms)}``.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from benchmark_evaluation_time import (
+        _HAVE_JAX,
+        MlgwBnsJaxPrecessing,
+        MlgwBnsPrecessing,
+        create_and_run_tests,
+        get_attribute_by_n_points_for_approx,
+    )
+
+    approximants = [MlgwBnsPrecessing(model=model)]
+    if _HAVE_JAX:
+        approximants.append(MlgwBnsJaxPrecessing(1, model=model))
+        if jax_batch is not None:
+            approximants.append(MlgwBnsJaxPrecessing(jax_batch, model=model))
+    n_points_list = list(n_points_list)
+    tests = create_and_run_tests(n_seeds, n_epochs, n_points_list, approximants)
+    result = {}
+    print("  precessing:")
+    for approximant in approximants:
+        medians = get_attribute_by_n_points_for_approx(
+            tests, approximant, "times_ms", lambda v: float(np.median(np.concatenate(v)))
+        )
+        result[approximant.name] = (approximant.grid_sizes(n_points_list), medians)
+        for n_points, median in zip(*result[approximant.name]):
+            print(f"    {approximant.name}: n_points={n_points:>6}  median {median:.3f} ms")
     return result
 
 
@@ -1556,12 +1815,14 @@ def plot_timing_benchmark(data: dict) -> None:
             n_points, data["jax_batch"], marker="o",
             label=f"JAX (jax.vmap batch of {TIMING_JAX_BATCH})",
         )
+    for name, (points, times) in data.get("precessing", {}).items():
+        ax.loglog(points, times, marker="s", ls="--", label=name)
 
     ax.set_xlabel("Number of evaluation points")
     ax.set_ylabel("Time per waveform [ms]")
     ax.grid(True, which="both", lw=0.3)
     ax.legend()
-    fig.suptitle("Model.predict wall-clock time: numpy vs. JAX")
+    fig.suptitle("Model.predict and PrecessingModel.predict wall-clock time: numpy vs. JAX")
     fig.tight_layout()
 
     outfile = f"{OUTPUT_PREFIX}_timing.png"
@@ -1585,7 +1846,9 @@ def plot_evaluation_time_fit(
     only ``benchmark_evaluation_time.REDUCED_MODES``), TEOBResumS-SPA and,
     when ``jax`` is importable, the JAX port (single call + a
     ``jax.vmap``-batched call, see ``TIMING_JAX_BATCH``) -- both of the
-    latter also in a reduced-mode flavour.
+    latter also in a reduced-mode flavour. Then the same for precessing
+    binaries: :class:`~benchmark_evaluation_time.MlgwBnsPrecessing`, its
+    JAX port (single and batched) and TEOBResumS-SPA precessing.
 
     Skipped --- with a warning --- if ``model_name`` is not one of
     :data:`mlgw_bns.model.MODELS_AVAILABLE`, since the approximants there
@@ -1610,9 +1873,12 @@ def plot_evaluation_time_fit(
         MlgwBnsJax,
         MlgwBnsJaxBatch,
         MlgwBnsJaxBatchReducedModes,
+        MlgwBnsJaxPrecessing,
         MlgwBnsJaxReducedModes,
+        MlgwBnsPrecessing,
         MlgwBnsReducedModes,
         TEOBResumSPA,
+        TEOBResumSPAPrecessing,
         create_and_run_tests,
         make_figure,
     )
@@ -1621,12 +1887,16 @@ def plot_evaluation_time_fit(
         MlgwBns(model_name),
         MlgwBnsReducedModes(model_name),
         TEOBResumSPA(model_name),
+        MlgwBnsPrecessing(model_name),
+        TEOBResumSPAPrecessing(model_name),
     ]
     if _HAVE_JAX:
         approximants.append(MlgwBnsJax(model_name))
         approximants.append(MlgwBnsJaxReducedModes(model_name))
         approximants.append(MlgwBnsJaxBatch(TIMING_JAX_BATCH, model_name))
         approximants.append(MlgwBnsJaxBatchReducedModes(TIMING_JAX_BATCH, model_name))
+        approximants.append(MlgwBnsJaxPrecessing(1, model_name))
+        approximants.append(MlgwBnsJaxPrecessing(TIMING_JAX_BATCH, model_name))
     else:
         logging.warning("JAX not importable -- skipping it in the fit-line timing benchmark")
 
@@ -1699,6 +1969,9 @@ if __name__ == "__main__":
     print("Computing per-mode mismatch vs. power fraction...")
     mismatch_vs_power = mismatch_vs_power_by_mode(model)
     plot_mismatch_vs_power(mismatch_vs_power)
+
+    print("Computing per co-precessing multipole mismatch vs. power fraction, twisted...")
+    plot_twisted_mismatch_vs_power(twisted_mismatch_vs_power_by_mode(model))
 
     print("Computing full-waveform mismatch vs. mode subset...")
     plot_mode_subset_boxplots(mode_subset_data(model))
