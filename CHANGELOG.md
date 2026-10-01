@@ -184,6 +184,13 @@ loaded, and the waveforms are referenced differently in time and phase.
     mapped the azimuth to TEOBResumS' `coalescence_angle` as `pi/2 - phi`.
     `PrecessingModel` at azimuth `phi` is TEOBResumS at `pi/2 + phi` with `hx`
     negated -- a consequence of `Model.predict`'s `hx` sign, below.
+    It also compared against TEOBResumS' `h+`, `hx` summed over only the
+    inertial multipoles listed in `use_mode_lm`, dropping the (3,1), (3,2),
+    (4,1)--(4,3) that precession mixes out of the co-precessing (3,3), (4,4):
+    5e-6 to 7e-5 of mismatch, growing with the opening angle. It now passes
+    `use_mode_lm_inertial` with every multipole up to the highest `l`
+    (`teob_run`, which can also return the co-precessing multipoles and
+    dynamics of the same call).
 
 ### Added
 
@@ -278,7 +285,14 @@ loaded, and the waveforms are referenced differently in time and phase.
     `compare_fd_twist_with_teob_formula.py` (our twist against a verbatim port
     of TEOBResumS' `twist_hlm_FD`), `precession_error_vs_inplane_spin.py`,
     `probe_hcross_sign.py`, `ab_precession_floor.py`,
-    `probe_mismatch_quadrature.py`, `probe_coprecessing_network_error.py`.
+    `probe_mismatch_quadrature.py`, `probe_coprecessing_network_error.py`;
+    and the ones that account for the remaining precessing floor:
+    `precession_floor_anatomy.py` (splits the mismatch against TEOBResumS
+    into interpolation, co-precessing, time and orbital-phase origin, and
+    reference contributions), `precession_orbital_phase_origin.py` (predicts
+    TEOBResumS' orbital-phase origin from the surrogate) and
+    `precession_angle_residual.py` (locates TEOBResumS' `alpha` steps and
+    the truncated inertial sum).
 
 ### Known issues
 
@@ -294,13 +308,27 @@ loaded, and the waveforms are referenced differently in time and phase.
     needs retraining.
 - `PrecessingModel` does not fix the orbital phase of the co-precessing
     multipoles at the spin reference frequency (the angle between the
-    separation vector and the in-plane spins, which precession makes physical):
-    it inherits whatever the aligned-spin model's phase convention gives.
-    Against TEOBResumS this is a binary-dependent rotation `exp(i n phi0)` of
-    the co-precessing multipoles and a ~2e-3 median mismatch, ~4e-3 edge-on,
-    independent of the opening angle; with the rotation applied the mismatch
-    drops to the aligned-spin floor. TEOBResumS' convention for it is not
-    reproduced yet.
+    separation vector and the in-plane spins, which precession makes
+    physical): the surrogate puts it to zero at the merger, TEOBResumS at the
+    first sample of its integration, where it also imposes the spins. Against
+    TEOBResumS this is a binary-dependent rotation `exp(i m phi0)` of the
+    co-precessing multipoles and a 2.3e-3 median mismatch (90th percentile
+    9e-3), independent of the opening angle. `phi0` follows from the
+    surrogate's own (2,2) phase at TEOBResumS' starting frequency (to 5e-3
+    rad), and rotating by it gives 6.7e-8, or 3.9e-8 (90th percentile 1.9e-7)
+    without the frequencies at which TEOBResumS' own Euler angle `alpha` is
+    wrong (below), against 2.6e-8 for the aligned-spin multipoles alone
+    (`visualization/precession_orbital_phase_origin.py`, 48 binaries). Only
+    TEOBResumS' *actual* first-sample frequency works (9.5058 Hz median for
+    `initial_frequency = 10`, not the nominal 9.5: at ~2e4 rad/Hz the
+    difference makes the prediction random), which `PrecessingModel` cannot
+    compute on its own, so the convention is not adopted yet.
+- TEOBResumS' precession angle `alpha` has spurious ~2 pi steps (in band on
+    22 of 48 binaries), which its frequency-domain twist cubic-splines
+    through, so its `h+`, `hx` are wrong on the few frequency bins around
+    each (up to 4% of them; up to ~2e-3 of mismatch). This is a
+    defect of the reference, not of `PrecessingModel`
+    (`visualization/precession_angle_residual.py`).
 - `Model.predict` (and so `PrecessingModel.predict`) returns `hx` with the
     opposite sign to TEOBResumS' (and LAL's) convention relative to `h+`:
     `hx/h+ = +0.836i` at inclination 1 against TEOBResumS' `-0.836i`
