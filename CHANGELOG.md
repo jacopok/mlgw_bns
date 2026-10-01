@@ -168,6 +168,19 @@ loaded, and the waveforms are referenced differently in time and phase.
 
 - `Model.get_teob_modes_dict` returned amplitudes without the physical
     prefactor (off by ~1e-27 relative to `predict_modes_dict`).
+- Below the reference frequency, every odd-m co-precessing multipole of a
+    precessing waveform had its sign flipped. The PN integration runs
+    backwards from `Lhat = z` there, where `alpha = atan2(L_y, L_x)` jumps by
+    pi and the integrated `gamma` did not follow, a rotation by pi about
+    `Lhat` (`precessing_model.backward_gamma`). TEOBResumS' angles do the
+    same, but its multipoles start at the reference frequency, so nothing
+    reads them there.
+- `stationary_phase_transform` fitted a quadratic to the phase in its
+    +-2 mHz window, biased by `f Psi''' w^2 / 10`: -3.4e-3 rad on the (2,2)'s
+    `X` at 9.5 Hz. A cubic agrees with the analytic `X = phi + 2 pi f t(f)`
+    to ~1e-6. The bias happened to cancel part of a ~-7e-3 rad offset
+    between the surrogate's (2,2) phase at 9.5 Hz and TEOBResumS', so the
+    mismatches against it below went from 4.8e-8 to 7.0e-8.
 - `twist_modes_frequency_domain` rotated the surrogate's multipoles by
     `D(alpha, beta, gamma)`; being the complex conjugates of the multipoles'
     transforms, they need `D* = D(-alpha, beta, -gamma)`. The precession came
@@ -305,13 +318,36 @@ loaded, and the waveforms are referenced differently in time and phase.
     mismatch (90th percentile 8.2e-3), independent of the opening
     angle. With TEOBResumS' reference point given
     (`validate_precessing_against_teob.teob_reference`), the precessing
-    mismatch against it is 7.0e-8 (90th percentile 1.9e-3), and
-    4.8e-8 (90th percentile 2.0e-7) without the frequencies where TEOBResumS' own `alpha` is wrong
+    mismatch against it is 9.8e-8 (90th percentile 1.9e-3), and
+    7.0e-8 (90th percentile 2.4e-7) without the frequencies where TEOBResumS' own `alpha` is wrong
     (below), the same as the aligned-spin mismatch of the same binaries with
-    the in-plane spins zeroed, 4.7e-8 (1.9e-7); line of sight by line of sight the two
+    the in-plane spins zeroed, 6.8e-8 (2.3e-7); line of sight by line of sight the two
     agree to a median ratio of 1.00
     (`visualization/precessing_vs_aligned_mismatch.py`, 48 binaries x 4
     lines of sight, total mass 2.8).
+- **Batched precessing waveforms in JAX**: `PrecessingModel.jax_predict()`
+    (`mlgw_bns.batched_precession`) returns a pure JAX function of `N`
+    binaries at once, which can be jitted, vmapped and differentiated. It
+    integrates the PN precession equations against the orbital frequency
+    with fixed DOP853 steps (2048 each way from the reference frequency, in
+    `x = ln Omega - 16 Omega_lo / Omega`), integrating `alpha - gamma`,
+    which is regular where `Lhat` passes through `z`. It matches
+    `PrecessingModel.predict` to mismatches of 1e-11--3e-10
+    (`tests/test_batched_precession.py`). On a CPU a waveform takes ~0.25 s
+    alone and ~45 ms in a batch of 128, against ~50 s for the numpy path
+    from the bottom of the band (SciPy's adaptive integration) and ~0.4 s
+    for TEOBResumS. `special_func.wigner_d_function`/`spinsphericalharm`,
+    `twist_modes_frequency_domain`, `polarizations_from_inertial_modes` and
+    the PN precession right-hand side now take `xp=` (numpy or
+    `jax.numpy`); `batched.py`'s duplicate Wigner d function is gone.
+- `validate_model.py` times `PrecessingModel.predict` and its JAX port
+    (`precessing_timing_benchmark`, and in the fit-line benchmark, with
+    TEOBResumS precessing), and compares surrogate and TEOBResumS
+    co-precessing multipole by multipole after the twist and the
+    projection on a detector, against their power fraction
+    (`twisted_mismatch_vs_power_by_mode`), next to the same binaries with
+    the in-plane spins zeroed. `benchmark_evaluation_time.py` has the
+    precessing approximants (`--no-precessing` to skip them).
 - Investigation scripts under `visualization/`:
     `compare_fd_twist_with_teob_formula.py` (our twist against a verbatim port
     of TEOBResumS' `twist_hlm_FD`), `precession_error_vs_inplane_spin.py`,
@@ -342,9 +378,11 @@ loaded, and the waveforms are referenced differently in time and phase.
 - TEOBResumS' precession angle `alpha` has spurious ~2 pi steps (in band on
     22 of 48 binaries), which its frequency-domain twist cubic-splines
     through, so its `h+`, `hx` are wrong on the few frequency bins around
-    each (up to 4% of them; up to ~2e-3 of mismatch). This is a
-    defect of the reference, not of `PrecessingModel`
-    (`visualization/precession_angle_residual.py`).
+    each (up to 4% of them; up to ~4e-3 of mismatch). This is a
+    defect of the reference, not of `PrecessingModel`: its
+    `prolong_euler_angles_FD` unwraps `alpha` with `unwrap_HM`, which misses
+    the wraps of `alpha` running backwards through +-pi; the time-domain path
+    uses `unwrap_euler` (reported upstream to the TEOBResumS developers).
 - `Model.predict` (and so `PrecessingModel.predict`) returns `hx` with the
     opposite sign to TEOBResumS' (and LAL's) convention relative to `h+`:
     `hx/h+ = +0.836i` at inclination 1 against TEOBResumS' `-0.836i`

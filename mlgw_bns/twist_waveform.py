@@ -75,7 +75,7 @@ def complex_to_amp_phase(h):
 # ---------------------------------------------------------------------------
 
 def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial,
-                include_positive_n=True, include_negative_n=True):
+                include_positive_n=True, include_negative_n=True, xp=np):
     """
     Twist co-precessing multipoles into the inertial frame.
 
@@ -99,6 +99,9 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial,
         co-precessing multipoles have their support at opposite signs of
         the frequency and so must be twisted separately --- see
         :func:`~mlgw_bns.precessing_model.twist_modes_frequency_domain`.
+    xp : module
+        Array namespace, ``numpy`` (default) or ``jax.numpy``; the arrays
+        may then have any (common) shape.
 
     Returns
     -------
@@ -106,10 +109,9 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial,
         Twisted inertial multipoles for m>0, m<0 (keyed by the negative m)
         and m=0 respectively, h = A*exp(-i*phi) convention.
     """
-    alpha = np.asarray(alpha, dtype=float)
-    beta = np.asarray(beta, dtype=float)
-    gamma = np.asarray(gamma, dtype=float)
-    size = alpha.size
+    alpha = xp.asarray(alpha, dtype=float)
+    beta = xp.asarray(beta, dtype=float)
+    gamma = xp.asarray(gamma, dtype=float)
 
     hTlm, hTlm_neg, hTl0 = {}, {}, {}
     m0_done_for_ell = set()
@@ -121,8 +123,8 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial,
             if q == 2 and ell in m0_done_for_ell:
                 continue
 
-            sumr = np.zeros(size)
-            sumi = np.zeros(size)
+            sumr = xp.zeros_like(alpha)
+            sumi = xp.zeros_like(alpha)
 
             for n in range(1, ell + 1):
                 if (ell, n) not in hlm_coprec:
@@ -130,12 +132,12 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial,
 
                 real, imag = hlm_coprec[(ell, n)].real, hlm_coprec[(ell, n)].imag
 
-                cosng = np.cos(n * gamma)
-                sinng = np.sin(n * gamma)
+                cosng = xp.cos(n * gamma)
+                sinng = xp.sin(n * gamma)
 
                 # d^l_{n,emm}(-beta) and d^l_{-n,emm}(-beta)
-                dl_mn = wigner_d_function(ell, n, emm, -beta)
-                dl_mnn = wigner_d_function(ell, -n, emm, -beta)
+                dl_mn = wigner_d_function(ell, n, emm, -beta, xp=xp)
+                dl_mnn = wigner_d_function(ell, -n, emm, -beta, xp=xp)
 
                 # n>0 co-precessing multipole
                 hln_real_p, hln_imag_p = real, imag
@@ -149,8 +151,8 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial,
                     sumr += dl_mnn * (cosng * hln_real_n + sinng * hln_imag_n)
                     sumi += dl_mnn * (-sinng * hln_real_n + cosng * hln_imag_n)
 
-            hTlm_real = sumr * np.cos(emm * alpha) + sumi * np.sin(emm * alpha)
-            hTlm_imag = -sumr * np.sin(emm * alpha) + sumi * np.cos(emm * alpha)
+            hTlm_real = sumr * xp.cos(emm * alpha) + sumi * xp.sin(emm * alpha)
+            hTlm_imag = -sumr * xp.sin(emm * alpha) + sumi * xp.cos(emm * alpha)
             h_out = hTlm_real + 1j * hTlm_imag
 
             if q == 0:
@@ -171,22 +173,23 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial,
 #  C/src/TEOBResumSFits.c: eob_mrg_momg)
 # ---------------------------------------------------------------------------
 
-def nu_to_X1(nu):
+def nu_to_X1(nu, xp=np):
     """Mass fraction M1/M from the symmetric mass ratio nu. Mirrors
-    nu_to_X1() in C/src/TEOBResumSUtils.c."""
-    if nu < 0.0 or nu > 0.25:
+    nu_to_X1() in C/src/TEOBResumSUtils.c. ``xp`` is the array namespace,
+    ``numpy`` (default) or ``jax.numpy``, as for the functions below."""
+    if xp is np and (nu < 0.0 or nu > 0.25):
         raise ValueError("symmetric mass ratio must be 0 <= nu <= 1/4")
-    return 0.5 * (1.0 + math.sqrt(1.0 - 4.0 * nu))
+    return 0.5 * (1.0 + xp.sqrt(1.0 - 4.0 * nu))
 
 
-def eob_mrg_momg(nu, X1, X2, chi1, chi2):
+def eob_mrg_momg(nu, X1, X2, chi1, chi2, xp=np):
     """
     NR fit for M*Omega_orb at merger. Mirrors eob_mrg_momg() in
     C/src/TEOBResumSFits.c. `chi1`, `chi2` are the (z-component,
     dimensionless) spins of the two bodies.
     """
     nu2 = nu * nu
-    X12 = math.sqrt(1.0 - 4.0 * nu)
+    X12 = xp.sqrt(1.0 - 4.0 * nu)
     a1 = X1 * chi1
     a2 = X2 * chi2
     a0 = a1 + a2
@@ -200,35 +203,35 @@ def eob_mrg_momg(nu, X1, X2, chi1, chi2):
             / (1.0 + ((-0.83053 + b2 * X12) / (1.0 + b3 * X12)) * Shat))
 
 
-def alpha_initial_condition(q, chi1x, chi1y, chi1z, chi2x, chi2y, chi2z, f0):
+def alpha_initial_condition(q, chi1x, chi1y, chi1z, chi2x, chi2y, chi2z, f0, xp=np):
     """
     NLO initial value of the alpha (and, per the C code, gamma) Euler
     angle. Eq. A5 of arXiv:2111.03675. Mirrors alpha_initial_condition()
     in C/src/TEOBResumSDynamics.c. Geometric units (G=c=M=1); `f0` is the
     initial GW (2,2) frequency (so that the initial M*Omega_orb = pi*f0).
     """
-    v = (math.pi * f0) ** (1.0 / 3.0)
+    v = (np.pi * f0) ** (1.0 / 3.0)
     alpha_x_NLO = (-3.0 * q * (chi1y + chi2y * q) * (chi1z + chi2z * q) * v
                    + q * (chi1y * (4.0 + 3.0 * q) + chi2y * q * (3.0 + 4.0 * q)))
     alpha_y_NLO = (3.0 * q * (chi1x + chi2x * q) * (chi1z + chi2z * q) * v
                    - q * (chi1x * (4.0 + 3.0 * q) + chi2x * q * (3.0 + 4.0 * q)))
-    return math.atan2(alpha_y_NLO, alpha_x_NLO)
+    return xp.arctan2(alpha_y_NLO, alpha_x_NLO)
 
 
-def tidal_flux_coefficient(nu, lambda_1, lambda_2):
+def tidal_flux_coefficient(nu, lambda_1, lambda_2, xp=np):
     """
     Coefficient of the leading-order (5PN) tidal term TEOBResumS adds to
     the PN dOmega/dt of its spin dynamics for a BNS: Eq. A21 of
     arXiv:1402.5156, `a10_tidal` in eob_spin_dyn_rhs_PN(). `lambda_1` is
     the heavier body's quadrupolar tidal polarizability (LambdaAl2).
     """
-    MA = nu_to_X1(nu)
+    MA = nu_to_X1(nu, xp)
     MB = 1.0 - MA
     return (6.0 * MA ** 4 * (12.0 - 11.0 * MA) * lambda_1
             + 6.0 * MB ** 4 * (12.0 - 11.0 * MB) * lambda_2)
 
 
-def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0):
+def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0, xp=np):
     """
     Core of the PN spin-precession ODE system, EOBPars->spin_flx ==
     SPIN_FLX_PN branch: N4LO spin-orbit + spin-spin precession of SA, SB,
@@ -251,6 +254,9 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0):
         See :func:`tidal_flux_coefficient`; the C code adds this LO 5PN
         tidal term to the 3.5PN dOmega/dt whenever ``use_tidal`` is on,
         i.e. for every BNS. Zero (the default) for black holes.
+    xp : module
+        Array namespace, ``numpy`` (default) or ``jax.numpy``. The
+        right-hand side is for one binary: the vectors have shape (3,).
 
     Returns
     -------
@@ -273,25 +279,25 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0):
     oothree = 1.0 / 3.0
     eleven_o_three = 11.0 / 3.0
 
-    MA = nu_to_X1(nu)
+    MA = nu_to_X1(nu, xp)
     MB = 1.0 - MA
     dm = MA - MB
     ma_o_mb = MA / MB
     mb_o_ma = MB / MA
 
-    SA = np.asarray(SA, dtype=float)
-    SB = np.asarray(SB, dtype=float)
-    Lh = np.asarray(Lh, dtype=float)
+    SA = xp.asarray(SA, dtype=float)
+    SB = xp.asarray(SB, dtype=float)
+    Lh = xp.asarray(Lh, dtype=float)
 
-    lnomg = math.log(omg)
+    lnomg = xp.log(omg)
     v = omg ** oothree
     v2, v3 = v * v, v ** 3
     v5, v6, v7, v9 = v ** 5, v ** 6, v ** 7, v ** 9
 
     qSAB = SA / q + SB
     SABq = SA + SB * q
-    qSABLh = np.dot(qSAB, Lh)
-    SABqLh = np.dot(SABq, Lh)
+    qSABLh = xp.dot(qSAB, Lh)
+    SABqLh = xp.dot(SABq, Lh)
 
     v5_cA = nu * (2.0 + 1.5 / q)
     v5_cB = nu * (2.0 + 1.5 * q)
@@ -318,12 +324,12 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0):
     OmgAN4LO = OmgANNLO + v9 * v9_cA * Lh
     OmgBN4LO = OmgBNNLO + v9 * v9_cB * Lh
 
-    SdotANLO  = np.cross(OmgANLO,  SA)
-    SdotANNLO = np.cross(OmgANNLO, SA)
-    SdotAN4LO = np.cross(OmgAN4LO, SA)
-    SdotBNLO  = np.cross(OmgBNLO,  SB)
-    SdotBNNLO = np.cross(OmgBNNLO, SB)
-    SdotBN4LO = np.cross(OmgBN4LO, SB)
+    SdotANLO  = xp.cross(OmgANLO,  SA)
+    SdotANNLO = xp.cross(OmgANNLO, SA)
+    SdotAN4LO = xp.cross(OmgAN4LO, SA)
+    SdotBNLO  = xp.cross(OmgBNLO,  SB)
+    SdotBNNLO = xp.cross(OmgBNNLO, SB)
+    SdotBN4LO = xp.cross(OmgBN4LO, SB)
 
     dSA = SdotAN4LO
     dSB = SdotBN4LO
@@ -331,12 +337,12 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0):
     L2PN = 1.0 + v2 * L2PN_v2 + v4 * L2PN_v4
     v_o_nu = v / nu
 
-    SALh = np.dot(SA, Lh)
-    SBLh = np.dot(SB, Lh)
-    dSBNLOSA  = np.dot(SdotBNLO,  SA)
-    dSANLOSB  = np.dot(SdotANLO,  SB)
-    dSANNLOLh = np.dot(SdotANNLO, Lh)
-    dSBNNLOLh = np.dot(SdotBNNLO, Lh)
+    SALh = xp.dot(SA, Lh)
+    SBLh = xp.dot(SB, Lh)
+    dSBNLOSA  = xp.dot(SdotBNLO,  SA)
+    dSANLOSB  = xp.dot(SdotANLO,  SB)
+    dSANNLOLh = xp.dot(SdotANNLO, Lh)
+    dSBNNLOLh = xp.dot(SdotBNNLO, Lh)
 
     # Eq. (4c) of arXiv:2005.05338
     LNdotN4LO = (
@@ -349,15 +355,20 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0):
     ) / L2PN
 
     # Eq. (7) of arXiv:2005.05338 -- keep only the component perp. to Lh
-    LNdotN4LOLh = np.dot(LNdotN4LO, Lh)
+    LNdotN4LOLh = xp.dot(LNdotN4LO, Lh)
     dLh = LNdotN4LO - LNdotN4LOLh * Lh
 
     # dot{gamma} = + dot{alpha} * cos(beta), with cos(beta) = Lh_z
     div = Lh[0] ** 2 + Lh[1] ** 2
-    if div == 0.0:
-        dgamma = 0.0
+    if xp is np:
+        dgamma = 0.0 if div == 0.0 else Lh[2] * (Lh[0] * dLh[1] - Lh[1] * dLh[0]) / div
     else:
-        dgamma = Lh[2] * (Lh[0] * dLh[1] - Lh[1] * dLh[0]) / div
+        on_axis = div == 0.0
+        dgamma = xp.where(
+            on_axis,
+            0.0,
+            Lh[2] * (Lh[0] * dLh[1] - Lh[1] * dLh[0]) / xp.where(on_axis, 1.0, div),
+        )
 
     # --- Eq. (A1) of arXiv:1307.4418: PN energy-balance domega/dt (3.5PN) ---
     sigma4_SASB      =  247.0 / (48.0 * nu)
@@ -390,9 +401,9 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0):
     a7_nobeta  = -4415.0 / 4032 * Pi + 358675.0 / 6048 * Pi * nu + 91495.0 / 1512 * Pi * nu2
 
     SAdotLh, SBdotLh = SALh, SBLh
-    SAdotSB = np.dot(SA, SB)
-    SA2 = np.dot(SA, SA)
-    SB2 = np.dot(SB, SB)
+    SAdotSB = xp.dot(SA, SB)
+    SA2 = xp.dot(SA, SA)
+    SB2 = xp.dot(SB, SB)
 
     sigma4 = (sigma4_SASB * SAdotSB + sigma4_SALh_SBLh * SAdotLh * SBdotLh
               + sigma4_SA2 * SA2 + sigma4_SALh2 * SAdotLh ** 2
