@@ -53,7 +53,9 @@ def alpha_jumps(dynspin: np.ndarray) -> np.ndarray:
     than a precession cycle): harmless in :math:`e^{i n \alpha}` at the
     samples, but ``twist_hlm_FD`` splines :math:`\alpha` through them, so
     between those samples (and, by the spline's ringing, next to them) its
-    twist uses a wrong angle.
+    twist uses a wrong angle. They are the wraps of :math:`\alpha` running
+    backwards through :math:`\pm\pi`, which the frequency-domain path's
+    ``unwrap_HM`` misses (reported upstream to the TEOBResumS developers).
     """
     return np.flatnonzero(np.abs(np.diff(dynspin[:, 10])) > np.pi)
 

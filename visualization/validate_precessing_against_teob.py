@@ -90,9 +90,9 @@ and precession_angle_residual.py, 48 binaries, first line of sight each):
 PrecessingModel now fixes the orbital phase at ``reference_frequency_hz``
 itself, and this script hands it TEOBResumS' reference point
 (:func:`teob_reference`); with that, over 48 binaries x 4 lines of sight,
-the precessing mismatch against TEOBResumS is 4.8e-8 without TEOBResumS'
+the precessing mismatch against TEOBResumS is 7.0e-8 without TEOBResumS'
 alpha-jump frequencies, the same as the aligned-spin mismatch of the same
-binaries with the in-plane spins zeroed, 4.7e-8
+binaries with the in-plane spins zeroed, 6.8e-8
 (precessing_vs_aligned_mismatch.py). The numbers in the table above
 predate it.
 

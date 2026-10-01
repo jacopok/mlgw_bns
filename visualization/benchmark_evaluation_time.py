@@ -14,10 +14,21 @@ for the current API:
 * parameters are drawn from ``model.dataset.make_parameter_generator``,
   with distance and inclination randomised on top.
 
-Every ``mlgw_bns`` approximant (plain, JAX single-call, JAX batch) comes in
-a full-mode and a reduced-mode (:data:`REDUCED_MODES`, the (2,2)/(2,1)/
-(3,3)/(4,4) subset the original shipped model was limited to) flavour, so
-the plot shows the cost of predicting fewer modes directly. TEOBResumS's
+Every aligned-spin ``mlgw_bns`` approximant (plain, JAX single-call, JAX
+batch) comes in a full-mode and a reduced-mode (:data:`REDUCED_MODES`, the
+(2,2)/(2,1)/(3,3)/(4,4) subset the original shipped model was limited to)
+flavour, so the plot shows the cost of predicting fewer modes directly.
+
+The precessing model comes in the same three forms
+(:meth:`PrecessingModel.predict
+<mlgw_bns.precessing_model.PrecessingModel.predict>` and
+:meth:`PrecessingModel.jax_predict
+<mlgw_bns.precessing_model.PrecessingModel.jax_predict>`, single and
+batched), next to TEOBResumS-SPA for the same precessing binary. Its numpy
+form spends seconds per waveform integrating the precession angles, whatever
+the grid, so it is timed on a few grid sizes and seeds only
+(:attr:`Approximant.n_points_stride`, :attr:`Approximant.max_seeds`,
+:attr:`Approximant.max_repeats`). TEOBResumS's
 cost does not depend on the requested mode count here (its ODE-integration
 start is set by the highest-:math:`m` mode either way, since (4,4) is in
 both sets -- see :func:`mlgw_bns.higher_order_modes.initial_frequency_scaling`),
@@ -58,9 +69,12 @@ from scipy.optimize import curve_fit
 from tqdm import tqdm
 
 import mlgw_bns
-from mlgw_bns.higher_order_modes import SUMMED_MODES
+from mlgw_bns.higher_order_modes import SUMMED_MODES, Mode, mode_to_k
 from mlgw_bns.model import Model
 from mlgw_bns.mode_model import ParametersWithExtrinsic
+from mlgw_bns.precessing_model import PrecessingModel, PrecessingParametersWithExtrinsic
+
+import validate_precessing_against_teob as precessing_validation
 
 try:  # optional -- only needed for the LAL approximants
     import lal
@@ -100,6 +114,11 @@ DEFAULT_BATCH = 128
 
 MODEL = "default_hom"
 
+#: Where the spins of the precessing binaries are given, in Hz (LALSuite's
+#: usual ``f_ref``).
+REFERENCE_FREQUENCY_HZ = 20.0
+
+
 def random_parameters(model: Model, seed: int) -> ParametersWithExtrinsic:
     """Draw one intrinsic point from the model's own generator, then add
     a random distance (log-uniform, 0.1--1e4 Mpc) and inclination."""
@@ -118,6 +137,38 @@ def random_parameters(model: Model, seed: int) -> ParametersWithExtrinsic:
     )
 
 
+def random_precessing_parameters(
+    model: Model, seed: int
+) -> PrecessingParametersWithExtrinsic:
+    """:func:`random_parameters`, with random in-plane spins (as
+    ``validate_precessing_against_teob.py`` draws them), azimuth and
+    reference phase, given at :data:`REFERENCE_FREQUENCY_HZ`."""
+    params = random_parameters(model, seed)
+    rng = np.random.default_rng(seed)
+    return PrecessingParametersWithExtrinsic(
+        mass_ratio=params.mass_ratio,
+        lambda_1=params.lambda_1,
+        lambda_2=params.lambda_2,
+        chi_1=precessing_validation.random_spin_vector(rng, params.chi_1),
+        chi_2=precessing_validation.random_spin_vector(rng, params.chi_2),
+        distance_mpc=params.distance_mpc,
+        inclination=params.inclination,
+        total_mass=params.total_mass,
+        azimuth=rng.uniform(0.0, 2.0 * np.pi),
+        reference_phase=rng.uniform(0.0, 2.0 * np.pi),
+        reference_frequency_hz=REFERENCE_FREQUENCY_HZ,
+    )
+
+
+def benchmark_frequencies(dataset, n_points: int) -> np.ndarray:
+    """``n_points`` frequencies spanning the model's band."""
+    return np.linspace(
+        float(np.min(dataset.frequencies_hz)),
+        float(np.max(dataset.frequencies_hz)) - 1,
+        num=n_points,
+    )
+
+
 class Approximant(ABC):
     name: str = ""
     #: Shared across an approximant's full- and reduced-mode variants, so
@@ -133,10 +184,28 @@ class Approximant(ABC):
     #: grid sizes above this are skipped for this approximant (the batched
     #: JAX path needs O(batch * n_points) memory).
     max_points: float = float("inf")
+    #: only every this many grid sizes are timed, for approximants whose
+    #: cost hardly depends on the grid and is large.
+    n_points_stride: int = 1
+    #: if set, only this many seeds per grid size...
+    max_seeds: Optional[int] = None
+    #: ...each timed at most this many times over all the epochs.
+    max_repeats: Optional[int] = None
+    #: whether every grid size needs its own warm-up call (a JIT compile).
+    warm_up_every_grid: bool = True
 
-    def __init__(self, model_name: str = MODEL, modes: Optional[list] = None):
+    def __init__(
+        self,
+        model_name: str = MODEL,
+        modes: Optional[list] = None,
+        model: Optional[Model] = None,
+    ):
+        """``model``, if given, is used as is in place of loading
+        ``model_name`` (``modes`` is then ignored)."""
         kwargs = {} if modes is None else {"modes": list(modes)}
-        self.model = Model.default_for_testing(model_name, **kwargs)
+        self.model = model if model is not None else Model.default_for_testing(
+            model_name, **kwargs
+        )
         self.dataset = self.model.dataset
 
     @abstractmethod
@@ -146,6 +215,11 @@ class Approximant(ABC):
     @abstractmethod
     def calculate(self) -> None:
         ...
+
+    def grid_sizes(self, n_points_list: list[int]) -> list[int]:
+        """The grid sizes this approximant is timed on."""
+        sizes = [n for n in n_points_list if n <= self.max_points]
+        return sizes[:: self.n_points_stride]
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Approximant) and self.name == other.name
@@ -160,12 +234,7 @@ class MlgwBns(Approximant):
 
     def setup(self, seed: int, n_points: int) -> None:
         self.params = random_parameters(self.model, seed)
-        self.frequencies = np.linspace(
-            float(np.min(self.dataset.frequencies_hz)),
-            float(np.max(self.dataset.frequencies_hz)) - 1,
-            num=n_points,
-        )
-        assert len(self.frequencies) == n_points
+        self.frequencies = benchmark_frequencies(self.dataset, n_points)
 
     def calculate(self) -> None:
         self.model.predict(self.frequencies, self.params)
@@ -202,13 +271,7 @@ class MlgwBnsJax(Approximant):
         import jax.numpy as jnp
 
         params = random_parameters(self.model, seed)
-        freqs = jnp.asarray(
-            np.linspace(
-                float(np.min(self.dataset.frequencies_hz)),
-                float(np.max(self.dataset.frequencies_hz)) - 1,
-                num=n_points,
-            )
-        )
+        freqs = jnp.asarray(benchmark_frequencies(self.dataset, n_points))
         args = (
             jnp.asarray(
                 [params.mass_ratio, params.lambda_1, params.lambda_2,
@@ -281,13 +344,7 @@ class MlgwBnsJaxBatch(Approximant):
              centre.chi_1, centre.chi_2]
         )
         params = base * (1.0 + 0.05 * self._rng.standard_normal((self.batch, 5)))
-        freqs = jnp.asarray(
-            np.linspace(
-                float(np.min(self.dataset.frequencies_hz)),
-                float(np.max(self.dataset.frequencies_hz)) - 1,
-                num=n_points,
-            )
-        )
+        freqs = jnp.asarray(benchmark_frequencies(self.dataset, n_points))
         self.args = (
             jnp.asarray(params),
             freqs,
@@ -314,6 +371,74 @@ class MlgwBnsJaxBatchReducedModes(MlgwBnsJaxBatch):
         self.name = f"mlgw_bns (JAX, batch {batch}, 22, 21, 33, 44 only)"
 
 
+class MlgwBnsPrecessing(Approximant):
+    """:meth:`PrecessingModel.predict`, numpy, one waveform: seconds of
+    precession-angle integration whatever the grid, so timed sparsely."""
+
+    name = "mlgw_bns precessing"
+    family = "mlgw_bns precessing"
+    n_points_stride = 4
+    max_seeds = 2
+    max_repeats = 1
+    warm_up_every_grid = False
+
+    def __init__(self, model_name: str = MODEL, model: Optional[Model] = None) -> None:
+        super().__init__(model_name, model=model)
+        self.precessing = PrecessingModel(self.model)
+
+    def setup(self, seed: int, n_points: int) -> None:
+        self.params = random_precessing_parameters(self.model, seed)
+        self.frequencies = benchmark_frequencies(self.dataset, n_points)
+
+    def calculate(self) -> None:
+        self.precessing.predict(self.frequencies, self.params)
+
+
+def jax_precessing_arguments(params_list, frequencies) -> tuple:
+    """The arguments of :meth:`PrecessingModel.jax_predict`'s function."""
+    from mlgw_bns.batched_precession import batch_arguments
+
+    return batch_arguments(params_list, frequencies)
+
+
+class MlgwBnsJaxPrecessing(Approximant):
+    """:meth:`PrecessingModel.jax_predict`, JIT-compiled, ``batch``
+    waveforms per call (one by default); the reported time is per waveform."""
+
+    def __init__(
+        self, batch: int = 1, model_name: str = MODEL, model: Optional[Model] = None
+    ) -> None:
+        super().__init__(model_name, model=model)
+        import jax
+
+        self._jax = jax
+        self.batch = batch
+        self.n_waveforms = batch
+        if batch > 1:
+            self.max_points = MAX_BATCH_POINTS
+            self.name = f"mlgw_bns precessing (JAX, batch {batch})"
+        else:
+            self.name = "mlgw_bns precessing (JAX)"
+        self.family = self.name
+        self._predict = jax.jit(PrecessingModel(self.model).jax_predict())
+        self._warm: set[int] = set()
+
+    def setup(self, seed: int, n_points: int) -> None:
+        params = [
+            random_precessing_parameters(self.model, seed * self.batch + i)
+            for i in range(self.batch)
+        ]
+        self.args = jax_precessing_arguments(
+            params, benchmark_frequencies(self.dataset, n_points)
+        )
+        if n_points not in self._warm:  # compile once per grid size
+            self._jax.block_until_ready(self._predict(*self.args))
+            self._warm.add(n_points)
+
+    def calculate(self) -> None:
+        self._jax.block_until_ready(self._predict(*self.args))
+
+
 class TEOBResumSPA(Approximant):
     name = "TEOBResumSPA"
     family = "TEOBResumSPA"
@@ -329,6 +454,35 @@ class TEOBResumSPA(Approximant):
 
     def calculate(self) -> None:
         self.dataset.waveform_generator.eobrun_callable(self.teob_dict)
+
+
+class TEOBResumSPAPrecessing(TEOBResumSPA):
+    """:class:`TEOBResumSPA` for the binaries of :class:`MlgwBnsPrecessing`,
+    with every multipole the surrogate has, twisted into every inertial one
+    (as ``validate_precessing_against_teob.teob_run``). TEOBResumS starts at
+    the band's low edge and takes the spins there, not at
+    :data:`REFERENCE_FREQUENCY_HZ`: the cost is the same."""
+
+    name = "TEOBResumSPA precessing"
+    family = "TEOBResumSPA precessing"
+    n_points_stride = 4
+    max_seeds = 2
+    max_repeats = 1
+    warm_up_every_grid = False
+
+    def setup(self, seed: int, n_points: int) -> None:
+        params = random_precessing_parameters(self.model, seed)
+        super().setup(seed, n_points)
+        largest_l = max(mode.l for mode in self.model.modes)
+        self.teob_dict.update(
+            use_spins=2,
+            chi1x=params.chi_1[0], chi1y=params.chi_1[1], chi1z=params.chi_1[2],
+            chi2x=params.chi_2[0], chi2y=params.chi_2[1], chi2z=params.chi_2[2],
+            use_mode_lm=sorted(mode_to_k(mode) for mode in self.model.modes),
+            use_mode_lm_inertial=list(
+                range(mode_to_k(Mode(largest_l, largest_l)) + 1)
+            ),
+        )
 
 
 def lalwf_maker(lal_approx: str) -> type:
@@ -392,6 +546,11 @@ class TestCase:
         return float(np.std(self.times_ms))
 
     def run(self) -> None:
+        if (
+            self.approximant.max_repeats is not None
+            and len(self.times_ms) >= self.approximant.max_repeats
+        ):
+            return
         self.approximant.setup(self.seed, self.n_points)
         start = perf_counter()
         self.approximant.calculate()
@@ -410,8 +569,10 @@ def make_test_cases(
     )
     return [
         TestCase(approximant=approx, seed=int(seed), n_points=int(n_points))
-        for approx, seed, n_points in product(approximants, seeds, n_points_list)
-        if n_points <= approx.max_points
+        for approx in approximants
+        for seed, n_points in product(
+            seeds[: approx.max_seeds], approx.grid_sizes(n_points_list)
+        )
     ]
 
 
@@ -454,9 +615,10 @@ def create_and_run_tests(
     # `calculate` is timed) but still very much part of the wall-clock time,
     # making the run look far slower than the recorded timings suggest.
     for approx in approximants:
-        for n_points in tqdm(n_points_list, desc="warm-up", unit=f"grid sizes for {approx}"):
-            if n_points > approx.max_points:
-                continue
+        sizes = approx.grid_sizes(n_points_list)
+        if not approx.warm_up_every_grid:
+            sizes = sizes[:1]
+        for n_points in tqdm(sizes, desc="warm-up", unit=f"grid sizes for {approx.name}"):
             approx.setup(100, n_points)
             approx.calculate()
 
@@ -509,7 +671,7 @@ def make_figure(
         has_pair = len(family_members[approximant.family]) > 1
         alpha = 1.0 if (approximant.is_reduced_modes or not has_pair) else FULL_MODE_ALPHA
 
-        points = [n for n in n_points_list if n <= approximant.max_points]
+        points = approximant.grid_sizes(n_points_list)
         times = get_attribute_by_n_points_for_approx(
             tests, approximant, "avg_time", np.average
         )
@@ -573,6 +735,9 @@ def main() -> None:
     )
     parser.add_argument("--no-lal", action="store_true", help="skip LAL approximants")
     parser.add_argument(
+        "--no-precessing", action="store_true", help="skip the precessing approximants"
+    )
+    parser.add_argument(
         "--no-jax",
         action="store_true",
         help="skip the JAX port (single call + a batch under jax.vmap)",
@@ -603,11 +768,16 @@ def main() -> None:
         MlgwBnsReducedModes(),
         TEOBResumSPA(),
     ]
+    if not args.no_precessing:
+        approximants += [MlgwBnsPrecessing(), TEOBResumSPAPrecessing()]
     if _HAVE_JAX and not args.no_jax:
         approximants.append(MlgwBnsJax())
         approximants.append(MlgwBnsJaxReducedModes())
         approximants.append(MlgwBnsJaxBatch(batch=args.jax_batch))
         approximants.append(MlgwBnsJaxBatchReducedModes(batch=args.jax_batch))
+        if not args.no_precessing:
+            approximants.append(MlgwBnsJaxPrecessing())
+            approximants.append(MlgwBnsJaxPrecessing(batch=args.jax_batch))
     elif not _HAVE_JAX:
         logging.warning("JAX not importable -- JAX approximants skipped")
     if _HAVE_LAL and not args.no_lal:
