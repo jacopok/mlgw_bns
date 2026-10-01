@@ -58,20 +58,39 @@ TEOBResumS itself does -- its twist reads the PN-integrated angles against
 the PN orbital frequency, in both domains -- so re-anchoring moves *away*
 from it, and ``reanchor`` is now off by default.
 
-What is left does not grow with beta and does not depend on the surrogate
-(``network``; precession_error_vs_inplane_spin.py shows it already there
-for aligned spins), but on inclination: ~2e-4 face-on, ~4e-3 edge-on. It
-is the co-precessing orbital phase at the reference frequency. Our
-multipoles and those TEOBResumS twists agree mode by mode only up to a
-rotation exp(i n phi0), phi0 binary-dependent; applying it brings the
-precessing mismatch to the aligned-spin floor (4e-6, 1.7e-4 on two
-binaries at chi_perp 0.35). The SPA orbital phase read off our (2,2) at
-the reference frequency is ~0 (as for an orbit started there), that of
-TEOBResumS' multipoles is not: its convention for the initial orbital
-phase of the co-precessing multipoles (plausibly tied to its initial
-Euler angles, alpha_0 = gamma_0) is not reproduced yet. Without
-precession the same rotation is an observer rotation, which the
-single-phase marginalisation absorbs only for the (2, 2).
+After the rebase onto the merger-referenced surrogate, with no time-shift
+or mode-phase regressors (11 of these 12 binaries, per-binary medians,
+validate_precessing_against_teob_{prerebase,rebased}.log), ``plain`` went
+from 1.4e-3 to 1.6e-3, ``reanchored`` from 5.3e-3 to 4.7e-3, and
+``network`` from 1.1e-5 to 3.3e-7: the co-precessing multipoles got ~30x
+better, the precessing mismatch did not, because it was never theirs.
+
+What is left (precession_floor_anatomy.py, precession_orbital_phase_origin.py
+and precession_angle_residual.py, 48 binaries, first line of sight each):
+
+* the orbital-phase origin. TEOBResumS puts the orbital phase to zero at
+  the first sample of its integration, where it also imposes the spins,
+  and whose (2,2) frequency is ~9.506 Hz rather than the nominal
+  0.95 * F0_TEOB; the surrogate puts it to zero at the merger. Without
+  precession that is an observer rotation, which the aligned-spin
+  mismatch maximises over; with it, it sets the angle between the orbital
+  separation and the in-plane spins. It costs 2.3e-3 (90th percentile
+  9e-3), independent of the opening angle. Predicting phi0 from the
+  surrogate's own (2,2) phase at TEOBResumS' actual starting frequency
+  (to 5e-3 rad; at the nominal one the prediction is random) and rotating
+  the multipoles by it brings this to 6.7e-8;
+* spurious ~2 pi steps in TEOBResumS' alpha (on 22 of the 48 binaries, in
+  band), which its twist_hlm_FD splines through, corrupting the angle on
+  the frequency nodes around each. Without those nodes (at most 4%) the
+  mismatch is 3.9e-8 (90th percentile 1.9e-7), against 2.6e-8 for the
+  aligned-spin multipoles on their own, and TEOBResumS' own multipoles
+  twisted here reproduce its h+, hx to 3.6e-12: the twist and the angles
+  are exact.
+
+The reference now asks TEOBResumS for every inertial multipole
+(``use_mode_lm_inertial``, see :func:`teob_run`); the numbers above the
+rebase were taken with the truncated one, which on its own costs 5e-6 to
+7e-5, growing with the opening angle.
 
 The earlier explanations of the floor -- the stationary-phase twist, the
 co-precessing approximation, the N4LO PN equations, the orbital-frequency
@@ -184,12 +203,23 @@ def interp_fd(target_frequencies, frequencies, series):
     return amplitude * np.exp(1j * phase)
 
 
-def teob_polarizations(params, chi_1, chi_2, inclination, azimuth, frequencies):
-    r"""TEOBResumS :math:`h_+, h_\times` for one binary and line of sight.
+def teob_run(params, chi_1, chi_2, inclination, azimuth, multipoles=False,
+             overrides=None):
+    r"""One frequency-domain TEOBResumS call for a precessing binary, on its own grid.
 
-    Returned on the sub-grid of ``frequencies`` that TEOBResumS covers,
-    in the ``mlgw_bns`` Fourier convention (``h_+ - i h_\times`` is the
-    multipole sum), together with the boolean mask of that sub-grid.
+    Returns ``(f, h_plus, h_cross)`` on TEOBResumS' uniform grid, in the
+    ``mlgw_bns`` Fourier convention (``h_+ - i h_\times`` is the multipole
+    sum). With ``multipoles``, also the co-precessing multipoles this very
+    call twisted (``hflm``, which ``twist_hlm_FD`` only reads), as
+    ``{(l, m): (amplitude, phase)}`` with the multipole ``A e^{i phi}`` in
+    the ``mlgw_bns`` convention, in TEOBResumS' own time and orbital-phase
+    origin (the start of its integration), and its EOB dynamics (the
+    ``dyn`` dict: ``t`` in units of the total mass, ``phi``, ``MOmega``,
+    ..., plus the time-domain multipoles on the same samples as
+    ``multipoles``: ``{(l, m): (amplitude, phase)}``). The phase is continuous
+    as returned: it advances by up to ~2 pi t df per sample, more than pi
+    for t > 1 / (2 df), so it must not be unwrapped. ``overrides`` are
+    extra TEOBResumS parameters, applied last.
     """
     from EOBRun_module import EOBRunPy
 
@@ -215,17 +245,48 @@ def teob_polarizations(params, chi_1, chi_2, inclination, azimuth, frequencies):
         # h+, hx (1e-3 at beta ~ 0.36, against 0.16 with pi/2 - phi).
         coalescence_angle=np.pi / 2.0 + azimuth,
         output_hpc="no",
-        arg_out="no",
+        arg_out="yes" if multipoles else "no",
         use_spins=2,
         chi1x=chi_1[0], chi1y=chi_1[1], chi1z=chi_1[2],
         chi2x=chi_2[0], chi2y=chi_2[1], chi2z=chi_2[2],
         use_mode_lm=sorted({mode_to_k(mode) for mode in MODES}),
+        # Every inertial multipole the twist of those feeds: by default
+        # TEOBResumS keeps only the inertial (l, m) listed in use_mode_lm,
+        # dropping e.g. the (3, 1), (3, 2), (4, 1)-(4, 3) that precession
+        # mixes out of the co-precessing (3, 3), (4, 4). Without them its h+,
+        # hx differ from the full twist of its own multipoles by 1e-5 - 1e-4,
+        # growing with the opening angle (precession_orbital_phase_origin.py).
+        use_mode_lm_inertial=list(range(
+            mode_to_k(Mode(max(mode.l for mode in MODES), max(mode.l for mode in MODES))) + 1)),
     )
-    f, real_hp, imag_hp, real_hc, imag_hc = EOBRunPy(par)
+    par.update(overrides or {})
+    f, real_hp, imag_hp, real_hc, imag_hc, *extra = EOBRunPy(par)
     f = np.asarray(f)
     hp = np.conj(np.asarray(real_hp) + 1j * np.asarray(imag_hp))
     hc = -np.conj(np.asarray(real_hc) + 1j * np.asarray(imag_hc))
+    if not multipoles:
+        return f, hp, hc
+    hflm, htlm, dynamics = extra
+    coprecessing = {}
+    for mode in MODES:
+        amplitude, phase = hflm[str(mode_to_k(mode))][:2]
+        coprecessing[(mode.l, mode.m)] = (np.asarray(amplitude), -np.asarray(phase))
+    dynamics = {k: np.asarray(x) for k, x in dynamics.items()}
+    dynamics["multipoles"] = {
+        (mode.l, mode.m): tuple(np.asarray(x) for x in htlm[str(mode_to_k(mode))][:2])
+        for mode in MODES
+    }
+    return f, hp, hc, coprecessing, dynamics
 
+
+def teob_polarizations(params, chi_1, chi_2, inclination, azimuth, frequencies):
+    r"""TEOBResumS :math:`h_+, h_\times` for one binary and line of sight.
+
+    Returned on the sub-grid of ``frequencies`` that TEOBResumS covers,
+    in the ``mlgw_bns`` Fourier convention (``h_+ - i h_\times`` is the
+    multipole sum), together with the boolean mask of that sub-grid.
+    """
+    f, hp, hc = teob_run(params, chi_1, chi_2, inclination, azimuth)
     inside = (frequencies >= max(BAND_LO, f[0])) & (frequencies <= min(BAND_HI, f[-1]))
     hp_out = interp_fd(frequencies[inside], f, hp)
     hc_out = interp_fd(frequencies[inside], f, hc)
