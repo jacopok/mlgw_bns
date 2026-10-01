@@ -54,6 +54,40 @@ Two consequences shape the implementation:
 The whole construction reduces, identically, to
 :meth:`~mlgw_bns.model.Model.predict` when the in-plane spin components
 vanish; :func:`check_aligned_spin_limit` asserts exactly that.
+
+The orbital phase at the reference frequency
+--------------------------------------------
+
+With precession the orbital phase is no longer a choice of observer: it
+sets the angle between the orbital separation and the in-plane spins. As
+in LALSuite (``f_ref``, ``phiRef``, LIGO-T1500606), NRSur7dq4, SEOBNR and
+TEOBResumS (at the start of its integration), it is fixed at the
+frequency where the spins are given, ``reference_frequency_hz``; the
+aligned-spin surrogate instead puts it to zero at the merger. The
+stationary-phase transform :math:`X_{\ell m}(f) = \Psi_{\ell m} - f
+\Psi'_{\ell m}` of a frequency-domain multipole's phase does not change
+under time shifts, and at :math:`f = m F` equals
+
+.. math::
+    X_{\ell m}(m F) = m \phi_{\rm orb} + \delta_{\ell m} + \pi / 4 \,,
+
+with :math:`\phi_{\rm orb}` the orbital phase when the orbital frequency
+is :math:`F`, and :math:`\delta_{\ell m}` the multipole's phase at zero
+orbital phase. :meth:`PrecessingModel.reference_orbital_phase` reads
+:math:`\phi_{\rm orb}` off the surrogate's own :math:`(2, 2)` at the
+reference frequency (modulo :math:`\pi`, the branch from the
+:math:`(2, 1)` or :math:`(3, 3)`), taking for :math:`\delta_{\ell m}`
+its leading-order value (:data:`LEADING_ORDER_MODE_PHASES`), and the
+multipoles are rotated so that it equals
+:attr:`PrecessingParametersWithExtrinsic.reference_phase`. Like
+NRSur7dq4's, this orbital phase is defined by the waveform: TEOBResumS'
+dynamical one differs from it by its multipoles' higher-order phase
+corrections, ~5e-3 m rad at 10 Hz for a binary neutron star. The spins,
+on the other hand, are placed on the PN orbital-frequency track the Euler
+angles are integrated (and looked up) along, as in TEOBResumS; the two
+read the same instant slightly differently (TEOBResumS' EOB and PN spin
+dynamics start at 9.506 and 9.5 Hz), which a comparison with it has to
+account for (``visualization/validate_precessing_against_teob.py``).
 """
 
 from __future__ import annotations
@@ -73,6 +107,47 @@ from .twist_waveform import integrate_pn_spin_precession, twist_modes
 
 #: Key of a spherical-harmonic multipole, ``(l, m)``.
 ModeKey = Tuple[int, int]
+
+#: Phase of a co-precessing multipole at zero orbital phase, to leading
+#: (Newtonian) order: :math:`\delta_{\ell m}` in
+#: :math:`X_{\ell m}(m F) = m \phi_{\rm orb} + \delta_{\ell m} + \pi / 4`
+#: (see the module docstring). TEOBResumS' multipoles at the first sample
+#: of its integration have these plus ~5e-3 m rad at 10 Hz (a binary
+#: neutron star), the same for every binary.
+LEADING_ORDER_MODE_PHASES: Dict[ModeKey, float] = {
+    (2, 2): -np.pi,
+    (2, 1): np.pi / 2.0,
+    (3, 3): -np.pi / 2.0,
+}
+
+#: Half-width, in Hz, of the window :func:`stationary_phase_transform` is
+#: fitted on: narrow enough for a quadratic to describe the phase (which
+#: at 10 Hz advances by ~2 pi per mHz for a binary neutron star), wide
+#: enough to be insensitive to its rounding.
+STATIONARY_PHASE_HALF_WIDTH_HZ = 2e-3
+
+
+def stationary_phase_window(frequency: float) -> np.ndarray:
+    """The frequencies :func:`stationary_phase_transform` is fitted on, in Hz."""
+    return np.linspace(
+        frequency - STATIONARY_PHASE_HALF_WIDTH_HZ,
+        frequency + STATIONARY_PHASE_HALF_WIDTH_HZ,
+        401,
+    )
+
+
+def stationary_phase_transform(
+    frequencies: np.ndarray, phase: np.ndarray, frequency: float
+) -> float:
+    r""":math:`X = \Psi - f \Psi'` at ``frequency``.
+
+    From a quadratic fit of the continuous phase :math:`\Psi` sampled at
+    ``frequencies`` (:func:`stationary_phase_window`). It is unchanged by
+    a time shift, which adds :math:`2 \pi f t` to :math:`\Psi`, and equals
+    the time-domain phase plus :math:`\pi / 4` at the stationary time.
+    """
+    c2, c1, c0 = np.polyfit(frequencies - frequency, phase, 2)
+    return float(c0 - frequency * c1)
 
 
 @dataclass
@@ -109,13 +184,18 @@ class PrecessingParametersWithExtrinsic:
         Defaults to 0.
     total_mass : float
         Total mass of the binary, in solar masses.
-    coalescence_phase : float
-        Orbital phase at the merger, in radians. Defaults to 0.
+    reference_phase : float
+        Orbital phase at ``reference_frequency_hz``, in radians (see the
+        module docstring), which for a precessing binary is the angle
+        between the orbital separation and the in-plane spins; at the
+        merger, as for the aligned-spin model, if
+        ``reference_frequency_hz`` is ``None``. Defaults to 0.
     merger_time : float
         Time of the merger, in seconds. Defaults to 0.
     reference_frequency_hz : float, optional
         The :math:`(2, 2)` gravitational-wave frequency, in Hz, at which
-        ``chi_1``, ``chi_2`` and :math:`\hat{L}_0 = \hat{z}` are given ---
+        ``chi_1``, ``chi_2``, :math:`\hat{L}_0 = \hat{z}` and
+        ``reference_phase`` are given ---
         TEOBResumS' ``initial_frequency``, LALSuite's ``f_ref``. Precession
         rotates both the in-plane spins and :math:`\hat{L}` between any
         two frequencies, so the same vectors given at two different
@@ -133,7 +213,7 @@ class PrecessingParametersWithExtrinsic:
     inclination: float
     total_mass: float
     azimuth: float = 0.0
-    coalescence_phase: float = 0.0
+    reference_phase: float = 0.0
     merger_time: float = 0.0
     reference_frequency_hz: Optional[float] = None
 
@@ -160,7 +240,11 @@ class PrecessingParametersWithExtrinsic:
         inclination is set to zero, since the co-precessing multipoles
         returned by
         :meth:`~mlgw_bns.model.Model.coprecessing_modes_dict` carry no
-        sky projection --- the projection happens after the twist.
+        sky projection --- the projection happens after the twist. Its
+        coalescence phase is ``reference_phase`` only if
+        ``reference_frequency_hz`` is ``None``: otherwise
+        :class:`PrecessingModel` sets the orbital phase at the reference
+        frequency itself.
 
         Returns
         -------
@@ -176,7 +260,9 @@ class PrecessingParametersWithExtrinsic:
             distance_mpc=self.distance_mpc,
             inclination=0.0,
             total_mass=self.total_mass,
-            coalescence_phase=self.coalescence_phase,
+            coalescence_phase=(
+                self.reference_phase if self.reference_frequency_hz is None else 0.0
+            ),
             merger_time=self.merger_time,
         )
 
@@ -785,6 +871,71 @@ class PrecessingModel:
             omega_dot=omega_dot,
         )
 
+    def reference_orbital_phase(
+        self,
+        params: PrecessingParametersWithExtrinsic,
+        source: str = "surrogate",
+    ) -> float:
+        r"""Orbital phase of the bare co-precessing multipoles at the reference frequency.
+
+        The multipoles as :meth:`~mlgw_bns.model.Model.coprecessing_modes_dict`
+        returns them for ``params.aligned()``, at the time their orbital
+        frequency is half of ``params.reference_frequency_hz``. From the
+        :math:`(2, 2)`, modulo :math:`\pi`; the branch is the one closer to
+        the estimate of the :math:`(2, 1)` (else the :math:`(3, 3)`), and
+        irrelevant if the model has no odd-:math:`m` multipole. See the
+        module docstring.
+
+        Parameters
+        ----------
+        params : PrecessingParametersWithExtrinsic
+            Source parameters; ``reference_frequency_hz`` must be set.
+        source : str
+            Where the co-precessing multipoles come from; see
+            :meth:`predict_modes_dict`.
+
+        Returns
+        -------
+        float
+            The orbital phase, in radians, in :math:`(-\pi, \pi]`.
+        """
+        if params.reference_frequency_hz is None:
+            raise ValueError("the parameters have no reference frequency")
+        keys = [(2, 2)] + [
+            key for key in ((2, 1), (3, 3)) if Mode(*key) in self.model.modes
+        ][:1]
+        keys.sort(key=lambda key: key[1])
+        windows = [
+            stationary_phase_window(key[1] / 2.0 * params.reference_frequency_hz)
+            for key in keys
+        ]
+        # one evaluation for every window; the phase is continuous within
+        # each, which is all the fit needs
+        phases = self.model.coprecessing_amplitudes_and_phases(
+            np.concatenate(windows), params.aligned(), source=source
+        )
+        estimates = {}
+        start = 0
+        for key, window in zip(keys, windows):
+            m = key[1]
+            transform = stationary_phase_transform(
+                window,
+                phases[key][1][start : start + window.size],
+                m / 2.0 * params.reference_frequency_hz,
+            )
+            start += window.size
+            # modulo 2 pi / m
+            estimates[m] = (transform - LEADING_ORDER_MODE_PHASES[key] - np.pi / 4.0) / m
+        phase = estimates[2]
+        if len(keys) > 1:
+            (m_odd,) = (m for m in estimates if m % 2)
+            candidates = np.array([phase, phase + np.pi])
+            distance = np.abs(
+                np.angle(np.exp(1j * m_odd * (candidates - estimates[m_odd])))
+            )
+            phase = candidates[np.argmin(distance)]
+        return float(np.angle(np.exp(1j * phase)))
+
     def predict_modes_dict(
         self,
         frequencies: np.ndarray,
@@ -837,6 +988,14 @@ class PrecessingModel:
             key: amplitude * np.exp(1j * phase)
             for key, (amplitude, phase) in amplitudes_and_phases.items()
         }
+        if params.reference_frequency_hz is not None:
+            rotation = params.reference_phase - self.reference_orbital_phase(
+                params, source=source
+            )
+            coprecessing = {
+                (l, m): value * np.exp(1j * m * rotation)
+                for (l, m), value in coprecessing.items()
+            }
 
         if reanchor and (2, 2) in coprecessing:
             angles = angles.reanchored(

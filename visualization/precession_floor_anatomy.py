@@ -112,6 +112,20 @@ def time_origin_offset(frequencies, teob_22, surrogate_22):
     return slope / (2.0 * np.pi), float(np.max(np.abs(residual)))
 
 
+def comparison_nodes(validator, f_native):
+    """The model's grid within the comparison band, snapped to TEOBResumS' own.
+
+    Returns the indices into TEOBResumS' uniform grid ``f_native`` and the
+    frequencies there, so that its output is used as it comes.
+    """
+    df = f_native[1] - f_native[0]
+    model_grid = validator.frequencies
+    model_grid = model_grid[(model_grid >= max(v.BAND_LO, f_native[0]))
+                            & (model_grid <= min(v.BAND_HI, f_native[-1]))]
+    nodes = np.unique(np.rint((model_grid - f_native[0]) / df).astype(int))
+    return nodes, f_native[nodes]
+
+
 def aligned_fit(model, validator, params, f_native, raw):
     """The aligned-spin multipoles of one binary, and how they relate.
 
@@ -127,12 +141,7 @@ def aligned_fit(model, validator, params, f_native, raw):
     -------
     nodes, fb, surrogate, eob, teob_raw, fit
     """
-    df = f_native[1] - f_native[0]
-    model_grid = validator.frequencies
-    model_grid = model_grid[(model_grid >= max(v.BAND_LO, f_native[0]))
-                            & (model_grid <= min(v.BAND_HI, f_native[-1]))]
-    nodes = np.unique(np.rint((model_grid - f_native[0]) / df).astype(int))
-    fb = f_native[nodes]
+    nodes, fb = comparison_nodes(validator, f_native)
     surrogate = model.coprecessing_modes_dict(fb, params.aligned())
     eob = model.coprecessing_modes_dict(fb, params.aligned(), source="eob")
 

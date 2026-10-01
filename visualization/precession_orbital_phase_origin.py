@@ -47,13 +47,12 @@ import numpy as np
 
 import precession_error_vs_inplane_spin as scaling
 import precession_floor_anatomy as anatomy
-from precession_angle_residual import alpha_jumps, teob_dynspin
+from precession_angle_residual import alpha_glitched, alpha_jumps, teob_dynspin
 import validate_precessing_against_teob as v
+from mlgw_bns import precessing_model
 from mlgw_bns.precessing_model import PrecessingParametersWithExtrinsic
 
 DATA_PATH = Path(__file__).with_name("precession_orbital_phase_origin.npz")
-#: Half-width, in Hz, of the window the stationary-phase transform is fitted on.
-HALF_WIDTH = 2e-3
 #: Spline intervals of TEOBResumS' spin dynamics masked on either side of each
 #: of its alpha jumps: the cubic spline's error decays by ~2 + sqrt(3) per
 #: interval away from a 2 pi step, so one interval leaves ~1e-5 in some
@@ -67,10 +66,11 @@ def wrap(angle):
 
 
 def stationary_phase_transform(phase_function, frequency):
-    r""":math:`X = \Psi - f \Psi'` at ``frequency``, from a quadratic fit."""
-    window = np.linspace(frequency - HALF_WIDTH, frequency + HALF_WIDTH, 401)
-    c2, c1, c0 = np.polyfit(window - frequency, phase_function(window), 2)
-    return c0 - frequency * c1
+    r""":math:`X = \Psi - f \Psi'` at ``frequency``; see
+    :func:`mlgw_bns.precessing_model.stationary_phase_transform`."""
+    window = precessing_model.stationary_phase_window(frequency)
+    return precessing_model.stationary_phase_transform(
+        window, phase_function(window), frequency)
 
 
 def evaluate_binary(case):
@@ -136,14 +136,10 @@ def evaluate_binary(case):
     # The nodes where TEOBResumS' own twist read alpha across one of its
     # spurious 2 pi steps, for any multipole (its stationary-phase orbital
     # frequency is f / m), with JUMP_MARGIN spline intervals either side.
-    jumps = alpha_jumps(dynspin)
-    glitched = np.zeros(fb.size, bool)
-    near_jumps = np.concatenate([jumps + k for k in range(-JUMP_MARGIN, JUMP_MARGIN + 1)])
-    for m in sorted({m for (_, m) in raw}):
-        sample = np.searchsorted(dynspin[:, 13], 2 * np.pi * fb * mass_seconds / m) - 1
-        glitched |= np.isin(sample, near_jumps)
+    glitched = alpha_glitched(
+        dynspin, fb, sorted({m for (_, m) in raw}), mass_seconds, JUMP_MARGIN)
     clean = ~glitched
-    row["alpha_jumps"] = jumps.size
+    row["alpha_jumps"] = alpha_jumps(dynspin).size
     row["glitched_fraction"] = glitched.mean()
 
     def mismatch(modes, keep=slice(None)):
