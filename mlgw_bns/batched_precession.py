@@ -16,8 +16,12 @@ Every stage is the numpy one, run on :mod:`jax.numpy`:
   window fit of :func:`~mlgw_bns.precessing_model.stationary_phase_transform`,
   which it matches to ~1e-6 rad;
 * the twist and the projection are
+  :func:`~mlgw_bns.precessing_model.twist_coefficients`, which applies
   :func:`~mlgw_bns.precessing_model.twist_modes_frequency_domain` and
-  :func:`~mlgw_bns.precessing_model.polarizations_from_inertial_modes`.
+  :func:`~mlgw_bns.precessing_model.polarizations_from_inertial_modes` to a
+  unit multipole: the polarizations are linear in the co-precessing
+  multipoles, and :func:`precessing_mode_components` returns them and their
+  coefficients separately, as mode-by-mode relative binning needs.
 
 The one stage that is not shared is the integration of the PN
 spin-precession equations (the same right-hand side,
@@ -51,9 +55,8 @@ from scipy.integrate._ivp import dop853_coefficients as dop853
 
 from .precessing_model import (
     orbital_phase_from_transforms,
-    polarizations_from_inertial_modes,
     reference_phase_keys,
-    twist_modes_frequency_domain,
+    twist_coefficients,
 )
 from .taylorf2 import SUN_MASS_SECONDS
 from .twist_waveform import (
@@ -330,29 +333,62 @@ def batch_arguments(
     )
 
 
-def precessing_waveform(
+def _reference_rotation(
+    predict_reference, keys, aligned, total_mass, distance_mpc, reference_phase,
+    reference_frequency_hz,
+):
+    r"""The rotation :math:`\phi_0 - \phi_{\rm orb}` that brings the orbital
+    phase at the reference frequency to ``reference_phase``: co-precessing
+    multipole :math:`m` is multiplied by :math:`e^{i m \times {\rm rotation}}`.
+
+    From the stationary-phase transforms :math:`X = \Psi - f \Psi' = \Psi +
+    2 \pi f t(f)` of the :func:`reference_phase_keys` multipoles, with
+    ``predict_reference`` their batched surrogate (``return_tf=True``).
+    """
+    _, jnp = _jnp()
+    centres = jnp.stack([key[1] / 2.0 * reference_frequency_hz for key in keys], axis=1)
+    _, reference, time = predict_reference(aligned, total_mass, centres, distance_mpc)
+    transforms = {
+        key: reference[:, i, i] + 2 * np.pi * centres[:, i] * time[:, i, i]
+        for i, key in enumerate(keys)
+    }
+    return reference_phase - orbital_phase_from_transforms(transforms, xp=jnp)
+
+
+def precessing_mode_components(
     model: "Model", modes: Optional[Sequence] = None, n_steps: int = N_STEPS
 ) -> Callable:
-    r"""A JAX function reproducing :meth:`PrecessingModel.predict
-    <mlgw_bns.precessing_model.PrecessingModel.predict>`, batched.
+    r"""A JAX function giving each co-precessing multipole and its twist,
+    batched.
 
-    Returns ``predict(intrinsic, frequencies, total_mass, distance_mpc,
-    inclination, azimuth, reference_phase, reference_frequency_hz,
-    merger_time=0.0) -> (h_plus, h_cross)``, where ``intrinsic`` has shape
-    ``(N, 9)``, rows :math:`[q, \Lambda_1, \Lambda_2, \vec{\chi}_1,
-    \vec{\chi}_2]`, ``frequencies`` ``(k,)`` or ``(N, k)`` (positive and
-    increasing, in Hz) and the rest are scalars or of shape ``(N,)``; the
-    polarizations have shape ``(N, k)``. The parameters are those of
-    :class:`~mlgw_bns.precessing_model.PrecessingParametersWithExtrinsic`;
-    the reference frequency is required. The Euler angles are integrated
-    from the lowest frequency of each row, as the numpy path does.
+    The precessing polarizations are linear in the co-precessing multipoles,
+
+    .. math::
+        \tilde{h}_{+, \times}(f) = \sum_{\ell m} c^{+, \times}_{\ell m}(f) \,
+        \tilde{h}^{\rm co}_{\ell m}(f) \,,
+
+    where the coefficients :math:`c_{\ell m}` hold the twist (the Euler
+    angles at the multipole's own stationary-phase point) and the projection
+    on the sky (:func:`~mlgw_bns.precessing_model.twist_coefficients`). The
+    co-precessing multipoles carry the fast orbital phase, the coefficients
+    only the slow precession: this is the split that mode-by-mode relative
+    binning needs (Leslie, Dai and Pratten, `arXiv:2109.09872
+    <https://arxiv.org/abs/2109.09872>`_, eqs. 1--4).
+
+    Returns ``predict(...) -> (coprecessing, c_plus, c_cross)``, with the
+    arguments of :func:`precessing_waveform` and three complex arrays of
+    shape ``(N, n_modes, k)``, the modes in the order of ``modes``.
+    ``coprecessing`` already has its orbital phase set at the reference
+    frequency and the merger-time shift; :func:`precessing_waveform` is
+    ``(sum(c_plus * coprecessing), sum(c_cross * coprecessing))`` over the
+    modes.
 
     Parameters
     ----------
     model : Model
         The aligned-spin surrogate.
     modes : sequence of (l, m), optional
-        Co-precessing multipoles to twist; defaults to all of ``model.modes``.
+        Co-precessing multipoles; defaults to all of ``model.modes``.
     n_steps : int
         Steps of each leg of the precession integration
         (:func:`integrate_angles`).
@@ -366,20 +402,19 @@ def precessing_waveform(
     keys = reference_phase_keys(model.modes)
     predict_reference = model.jax_modes_amp_phase(keys, return_tf=True)
 
-    def one_binary(row, frequencies, amp, phase, mass_seconds, inclination, azimuth,
-                   reference_frequency):
+    def one_binary(row, frequencies, mass_seconds, inclination, azimuth, reference_frequency):
         angles = integrate_angles(
             row[0], row[1], row[2], row[3:6], row[6:9],
             reference_frequency * mass_seconds,
             2.0 * frequencies[0] * mass_seconds / largest_m,
             n_steps,
         )
-        coprecessing = {key: amp[i] * jnp.exp(1j * phase[i]) for i, key in enumerate(modes)}
-        positive, negative = twist_modes_frequency_domain(
-            coprecessing, frequencies, angles, mass_seconds, xp=jnp
+        coefficients = twist_coefficients(
+            modes, frequencies, angles, mass_seconds, inclination, azimuth, xp=jnp
         )
-        return polarizations_from_inertial_modes(
-            positive, negative, inclination, azimuth, xp=jnp
+        return (
+            jnp.stack([coefficients[key][0] for key in modes]),
+            jnp.stack([coefficients[key][1] for key in modes]),
         )
 
     def predict(
@@ -411,18 +446,10 @@ def precessing_waveform(
             (n_rows, frequencies.shape[-1]),
         )
         aligned = jnp.stack([intrinsic[:, i] for i in (0, 1, 2, 5, 8)], axis=1)
-
-        # the orbital phase at the reference frequency, from the
-        # stationary-phase transforms X = phi - f dphi/df = phi + 2 pi f t(f)
-        centres = jnp.stack(
-            [key[1] / 2.0 * reference_frequency_hz for key in keys], axis=1
+        rotation = _reference_rotation(
+            predict_reference, keys, aligned, total_mass, distance_mpc,
+            reference_phase, reference_frequency_hz,
         )
-        _, reference, time = predict_reference(aligned, total_mass, centres, distance_mpc)
-        transforms = {
-            key: reference[:, i, i] + 2 * np.pi * centres[:, i] * time[:, i, i]
-            for i, key in enumerate(keys)
-        }
-        rotation = reference_phase - orbital_phase_from_transforms(transforms, xp=jnp)
 
         amp, phase = predict_modes(aligned, total_mass, frequencies, distance_mpc)
         emms = jnp.asarray([m for _, m in modes], dtype=float)
@@ -431,9 +458,51 @@ def precessing_waveform(
             + emms[None, :, None] * rotation[:, None, None]
             - 2 * np.pi * frequencies[:, None, :] * merger_time[:, None, None]
         )
-        return jax.vmap(one_binary)(
-            intrinsic, frequencies, amp, phase, total_mass * SUN_MASS_SECONDS,
+        c_plus, c_cross = jax.vmap(one_binary)(
+            intrinsic, frequencies, total_mass * SUN_MASS_SECONDS,
             inclination, azimuth, reference_frequency_hz,
+        )
+        return amp * jnp.exp(1j * phase), c_plus, c_cross
+
+    return predict
+
+
+def precessing_waveform(
+    model: "Model", modes: Optional[Sequence] = None, n_steps: int = N_STEPS
+) -> Callable:
+    r"""A JAX function reproducing :meth:`PrecessingModel.predict
+    <mlgw_bns.precessing_model.PrecessingModel.predict>`, batched.
+
+    Returns ``predict(intrinsic, frequencies, total_mass, distance_mpc,
+    inclination, azimuth, reference_phase, reference_frequency_hz,
+    merger_time=0.0) -> (h_plus, h_cross)``, where ``intrinsic`` has shape
+    ``(N, 9)``, rows :math:`[q, \Lambda_1, \Lambda_2, \vec{\chi}_1,
+    \vec{\chi}_2]`, ``frequencies`` ``(k,)`` or ``(N, k)`` (positive and
+    increasing, in Hz) and the rest are scalars or of shape ``(N,)``; the
+    polarizations have shape ``(N, k)``. The parameters are those of
+    :class:`~mlgw_bns.precessing_model.PrecessingParametersWithExtrinsic`;
+    the reference frequency is required. The Euler angles are integrated
+    from the lowest frequency of each row, as the numpy path does. The sum
+    over the modes of :func:`precessing_mode_components`.
+
+    Parameters
+    ----------
+    model : Model
+        The aligned-spin surrogate.
+    modes : sequence of (l, m), optional
+        Co-precessing multipoles to twist; defaults to all of ``model.modes``.
+    n_steps : int
+        Steps of each leg of the precession integration
+        (:func:`integrate_angles`).
+    """
+    _, jnp = _jnp()
+    components = precessing_mode_components(model, modes, n_steps)
+
+    def predict(*args, **kwargs):
+        coprecessing, c_plus, c_cross = components(*args, **kwargs)
+        return (
+            jnp.sum(c_plus * coprecessing, axis=1),
+            jnp.sum(c_cross * coprecessing, axis=1),
         )
 
     return predict
