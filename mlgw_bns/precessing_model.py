@@ -87,7 +87,7 @@ on the other hand, are placed on the PN orbital-frequency track the Euler
 angles are integrated (and looked up) along, as in TEOBResumS; the two
 read the same instant slightly differently (TEOBResumS' EOB and PN spin
 dynamics start at 9.506 and 9.5 Hz), which a comparison with it has to
-account for (``visualization/validate_precessing_against_teob.py``).
+account for (:meth:`PrecessingModel.teob_reference_phase`).
 """
 
 from __future__ import annotations
@@ -324,18 +324,12 @@ class EulerAngles:
         Orbital frequency :math:`M \Omega_{\rm orb}`, increasing.
     alpha, beta, gamma : np.ndarray
         The three Euler angles at those frequencies, in radians.
-    time : np.ndarray, optional
-        The integration time, in units of the total mass, at each sample.
-        Kept so that :meth:`reanchored` can re-tabulate the angles
-        against a more accurate time--frequency relation than the
-        3.5PN one the integration itself marches with.
     """
 
     momega: np.ndarray
     alpha: np.ndarray
     beta: np.ndarray
     gamma: np.ndarray
-    time: Optional[np.ndarray] = None
 
     def at_momega(
         self, momega: np.ndarray
@@ -373,25 +367,15 @@ class EulerAngles:
         steps (see
         :func:`~mlgw_bns.twist_waveform.integrate_pn_spin_precession`),
         and linear interpolation between them is a coarser approximation
-        of the (smooth) angle trajectory. A plain (non-monotone) natural
-        cubic spline was tried first and rejected: ``self.momega`` can
-        have knot spacings spanning many orders of magnitude (most
-        strikingly after :meth:`reanchored`, whose
-        ``np.maximum.accumulate`` can leave long plateaus followed by
-        sharp jumps), and a global cubic spline rings badly across such
-        spacing -- it made the re-anchored mismatch dramatically *worse*
-        (median mismatch ~0.7, i.e. uncorrelated) rather than better.
-        PCHIP trades some smoothness for being shape-preserving (no
-        overshoot between knots regardless of spacing), which is safe
-        here since it still exactly reproduces the ODE solution at every
-        returned node.
+        of the (smooth) angle trajectory. PCHIP is shape-preserving (no
+        overshoot between knots, whatever their spacing, which spans
+        orders of magnitude here), and it still reproduces the ODE
+        solution exactly at every returned node.
         """
         momega = np.asarray(momega)
         clipped = np.clip(momega, self.momega[0], self.momega[-1])
 
-        # reanchored() can produce a non-decreasing (not strictly
-        # increasing) momega axis via np.maximum.accumulate; the
-        # interpolator needs strictly increasing knots.
+        # the interpolator needs strictly increasing knots
         unique_momega, unique_index = np.unique(self.momega, return_index=True)
 
         def spline(values: np.ndarray) -> np.ndarray:
@@ -402,109 +386,6 @@ class EulerAngles:
             spline(self.beta),
             spline(np.unwrap(self.gamma)),
         )
-
-    def reanchored(
-        self,
-        frequencies_hz: np.ndarray,
-        reference_phase: np.ndarray,
-        mass_sum_seconds: float,
-        reference_frequency_hz: float,
-    ) -> "EulerAngles":
-        r"""Re-tabulate the angles against a better orbital-frequency axis.
-
-        :func:`~mlgw_bns.twist_waveform.integrate_pn_spin_precession`
-        advances :math:`M \Omega_{\rm orb}` along the inspiral with a
-        3.5PN energy-balance :math:`\dot\Omega`, which runs fast through
-        the late inspiral; the angles are accurate as *functions of
-        time*, but the frequency they are labelled with drifts from the
-        true one. Given the phase of a frequency-domain :math:`(2, 2)`
-        multipole that carries an accurate time--frequency relation --- the
-        surrogate's, or TEOBResumS' --- this returns a copy of the angles
-        whose ``momega`` axis is rebuilt from that relation, so that the
-        stationary-phase lookup in
-        :func:`twist_modes_frequency_domain` reads them at the right
-        point of the precession cycle. The angle values themselves are
-        untouched; only the frequency they sit at changes.
-
-        Below ``reference_frequency_hz`` --- where the reference multipole
-        has little power and its phase derivative is unreliable --- the
-        original PN ``momega`` is kept, and the two are matched there.
-
-        Parameters
-        ----------
-        frequencies_hz : np.ndarray
-            The (positive, increasing) frequency grid of
-            ``reference_phase``, in Hz.
-        reference_phase : np.ndarray
-            The continuous phase of the :math:`(2, 2)` co-precessing
-            multipole :math:`\tilde{h}_{22}(f)` on that grid --- as the
-            model provides it
-            (:meth:`~mlgw_bns.model.Model.coprecessing_amplitudes_and_phases`),
-            *not* recovered with ``np.unwrap(np.angle(h22))``: on a grid
-            as sparse as the model's the inspiral phase advances by far
-            more than :math:`\pi` between samples below a few hundred Hz,
-            the unwrap is aliased there, and the stationary-phase time it
-            implies is noise (seconds instead of hours at 5 Hz for a BNS).
-            Unwrapping is only safe on a grid with
-            :math:`\Delta f \, |t(f)| < 1/2` throughout.
-        mass_sum_seconds : float
-            Total mass of the binary in seconds, converting
-            :math:`M \Omega_{\rm orb} = \pi M f_{22}`.
-        reference_frequency_hz : float
-            Frequency below which the reference phase is not trusted and
-            the PN ``momega`` is kept; the two axes are matched here.
-
-        Returns
-        -------
-        EulerAngles
-            A copy with the re-anchored ``momega``; ``self`` unchanged
-            (and returned as-is if it carries no ``time``).
-        """
-        if self.time is None:
-            return self
-
-        phase = np.asarray(reference_phase)
-
-        # Only differentiate where the reference phase is trusted: the
-        # running maximum below locks in any excursion for the whole rest
-        # of the table. (What was first taken for low-power noise at the
-        # band edge -- spa_time off by tens of seconds -- was mostly the
-        # aliased np.unwrap(np.angle(h22)) this used to take; see the
-        # ``reference_phase`` parameter.)
-        trusted = frequencies_hz >= reference_frequency_hz
-        freq_trusted = frequencies_hz[trusted]
-        phase_trusted = phase[trusted]
-
-        # Stationary-phase time of the (2,2): it reaches GW frequency f at
-        # t(f) = (1 / 2 pi) dphi/df. The sign of the phase convention is
-        # absorbed by requiring t to increase with f (an inspiral chirps
-        # up).
-        spa_time = np.gradient(phase_trusted, freq_trusted) / (2.0 * np.pi)
-        if spa_time[-1] < spa_time[0]:
-            spa_time = -spa_time
-        spa_time = np.maximum.accumulate(spa_time)
-
-        # PN (2,2) GW frequency along its own integration time.
-        pn_f22 = self.momega / (np.pi * mass_sum_seconds)
-        anchor = max(reference_frequency_hz, freq_trusted[0], pn_f22[0])
-
-        spa_time = spa_time - np.interp(anchor, freq_trusted, spa_time)
-        # self.time is in geometric units (M = 1); spa_time is in real
-        # seconds (built from frequencies_hz in Hz), so it must be
-        # converted before the two are compared/interpolated together.
-        time_seconds = self.time * mass_sum_seconds
-        pn_time = time_seconds - np.interp(anchor, pn_f22, time_seconds)
-
-        # true (2,2) frequency at each PN sample: from the reference phase
-        # above the anchor, from the PN integration below it
-        f22 = np.where(
-            pn_time >= 0.0,
-            np.interp(pn_time, spa_time, freq_trusted,
-                      left=freq_trusted[0], right=freq_trusted[-1]),
-            pn_f22,
-        )
-        momega = np.maximum.accumulate(np.pi * mass_sum_seconds * f22)
-        return replace(self, momega=momega)
 
 
 def newtonian_time_to_merger(eta: float, momega: float) -> float:
@@ -695,7 +576,6 @@ def euler_angles(
             np.hypot(solution["Lh"][:, 0], solution["Lh"][:, 1]),
             np.pi * reference_frequency_22,
         ),
-        time=solution["t"],
     )
 
 
@@ -783,9 +663,8 @@ def twist_modes_frequency_domain(
         # invisibly in the aligned-spin limit (alpha = gamma = 0): against
         # TEOBResumS' own h+, hx that was a mismatch of ~9e-2 at beta ~
         # 0.27, ~5e-4 with the sign fixed; TEOBResumS' frequency-domain
-        # twist (twist_hlm_FD) is in turn checked against the Fourier
-        # transform of its time-domain one to ~2e-4
-        # (visualization/compare_fd_twist_with_teob_formula.py).
+        # twist (twist_hlm_FD) was in turn checked against the Fourier
+        # transform of its time-domain one to ~2e-4.
         wanted = [(ell, m) for m in range(1, ell + 1)]
         for target, include_positive_n in ((positive_f, True), (negative_f, False)):
             twisted, twisted_negative_m, twisted_m0 = twist_modes(
@@ -1025,6 +904,60 @@ class PrecessingModel:
             start += window.size
         return float(orbital_phase_from_transforms(transforms))
 
+    def teob_reference_phase(
+        self,
+        params: PrecessingParametersWithExtrinsic,
+        start_momega: float,
+        start_orbital_phase: float,
+        start_phase_22: float,
+    ) -> float:
+        r"""The ``reference_phase`` that reproduces a TEOBResumS precessing run.
+
+        TEOBResumS imposes the spins, and puts its orbital phase to zero, at
+        the first sample of its integration, which two of its clocks read
+        differently: its PN spin dynamics, along whose orbital frequency the
+        Euler angles are read, starts at 0.95 ``initial_frequency`` (in the
+        frequency domain); its EOB dynamics, which the waveform follows, at a
+        slightly different frequency (~9.506 Hz for 9.5). ``params`` must give
+        the spins at the former, ``reference_frequency_hz = 0.95 *
+        initial_frequency``. The orbital phase is then carried there from the
+        latter along this model's own phase (a ~0.4 rad advance in those 6 mHz
+        for a binary neutron star). At the start of the integration it is not
+        zero in the sense of the module docstring, but the offset of
+        TEOBResumS' :math:`(2, 2)` from its leading-order phase (~5e-3 rad,
+        the multipole's higher-order phase corrections).
+
+        Parameters
+        ----------
+        params : PrecessingParametersWithExtrinsic
+            The binary, with ``reference_frequency_hz`` where TEOBResumS
+            imposes the spins.
+        start_momega : float
+            :math:`M \Omega` of TEOBResumS' EOB dynamics at its first sample
+            (``MOmega[0]`` of the dynamics ``EOBRunPy`` returns with
+            ``arg_out``).
+        start_orbital_phase : float
+            Its orbital phase there (``Phi[0]``, zero).
+        start_phase_22 : float
+            The phase of its time-domain :math:`(2, 2)` multipole there, in
+            its own convention :math:`h_{22} = A e^{-i \phi}`.
+
+        Returns
+        -------
+        float
+            The orbital phase at ``params.reference_frequency_hz``, in
+            :math:`(-\pi, \pi]`.
+        """
+        offset = start_phase_22 - 2.0 * start_orbital_phase - LEADING_ORDER_MODE_PHASES[(2, 2)]
+        start = replace(params, reference_frequency_hz=(
+            start_momega / (np.pi * params.aligned().mass_sum_seconds)))
+        phase = (
+            np.angle(np.exp(1j * offset)) / 2.0
+            - self.reference_orbital_phase(start)
+            + self.reference_orbital_phase(params)
+        )
+        return float(np.angle(np.exp(1j * phase)))
+
     def coprecessing_amplitudes_and_phases(
         self,
         frequencies: np.ndarray,
@@ -1073,7 +1006,6 @@ class PrecessingModel:
         params: PrecessingParametersWithExtrinsic,
         source: str = "surrogate",
         angles: Optional[EulerAngles] = None,
-        reanchor: bool = False,
     ) -> Tuple[Dict[ModeKey, np.ndarray], Dict[ModeKey, np.ndarray]]:
         r"""Inertial-frame multipoles of the precessing waveform.
 
@@ -1093,15 +1025,6 @@ class PrecessingModel:
             dynamics when comparing two sources of co-precessing
             multipoles for the same binary. Computed from ``params`` if
             ``None``.
-        reanchor : bool
-            Whether to re-tabulate the Euler angles against the
-            time--frequency relation carried by the :math:`(2, 2)`
-            co-precessing phase, rather than the 3.5PN one the PN
-            integration marches with; see :meth:`EulerAngles.reanchored`.
-            Off by default: TEOBResumS itself does not re-anchor (its twist
-            reads the angles against the PN orbital frequency, in both
-            domains), and against it re-anchoring is ~6x worse
-            (``visualization/validate_precessing_against_teob.py``).
 
         Returns
         -------
@@ -1120,16 +1043,6 @@ class PrecessingModel:
             for key, (amplitude, phase) in amplitudes_and_phases.items()
         }
 
-        if reanchor and (2, 2) in coprecessing:
-            angles = angles.reanchored(
-                frequencies,
-                amplitudes_and_phases[(2, 2)][1],
-                params.aligned().mass_sum_seconds,
-                reference_frequency_hz=max(
-                    float(frequencies[0]), self.model.dataset.initial_frequency_hz
-                ),
-            )
-
         return twist_modes_frequency_domain(
             coprecessing,
             frequencies,
@@ -1143,7 +1056,6 @@ class PrecessingModel:
         params: PrecessingParametersWithExtrinsic,
         source: str = "surrogate",
         angles: Optional[EulerAngles] = None,
-        reanchor: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray]:
         r"""Predict the two polarizations of a precessing waveform.
 
@@ -1158,9 +1070,6 @@ class PrecessingModel:
             :meth:`predict_modes_dict`.
         angles : EulerAngles, optional
             Precomputed Euler angles; see :meth:`predict_modes_dict`.
-        reanchor : bool
-            Whether to re-anchor the Euler angles to the :math:`(2, 2)`
-            phase; see :meth:`predict_modes_dict`. Off by default.
 
         Returns
         -------
@@ -1169,7 +1078,7 @@ class PrecessingModel:
             convention as :meth:`~mlgw_bns.model.Model.predict`.
         """
         modes_positive_f, modes_negative_f = self.predict_modes_dict(
-            frequencies, params, source=source, angles=angles, reanchor=reanchor
+            frequencies, params, source=source, angles=angles
         )
         return polarizations_from_inertial_modes(
             modes_positive_f,

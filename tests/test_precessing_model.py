@@ -15,7 +15,6 @@ from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.model import Model
 from mlgw_bns.precessing_model import (
     LEADING_ORDER_MODE_PHASES,
-    EulerAngles,
     PrecessingModel,
     PrecessingParametersWithExtrinsic,
     check_aligned_spin_limit,
@@ -204,12 +203,8 @@ def test_anchoring_to_the_reference_phase_moves_only_precessing_waveforms(
     anchored = precessing.euler_angles(
         precessing_params, float(frequencies[0]), anchor_to_reference_phase=True
     )
-    hp_plain, _ = precessing.predict(
-        frequencies, precessing_params, angles=plain, reanchor=False
-    )
-    hp_anchored, _ = precessing.predict(
-        frequencies, precessing_params, angles=anchored, reanchor=False
-    )
+    hp_plain, _ = precessing.predict(frequencies, precessing_params, angles=plain)
+    hp_anchored, _ = precessing.predict(frequencies, precessing_params, angles=anchored)
     scale = np.max(np.abs(hp_plain))
     assert np.max(np.abs(hp_anchored - hp_plain)) > 1e-3 * scale
 
@@ -228,9 +223,8 @@ def test_anchoring_to_the_reference_phase_moves_only_precessing_waveforms(
         angles=precessing.euler_angles(
             aligned, float(frequencies[0]), anchor_to_reference_phase=True
         ),
-        reanchor=False,
     )
-    without = precessing.predict(frequencies, aligned, reanchor=False)
+    without = precessing.predict(frequencies, aligned)
     np.testing.assert_allclose(with_anchor[0], without[0], rtol=1e-8, atol=0.0)
 
 
@@ -301,81 +295,6 @@ def test_precessing_prediction_is_finite(frequencies, precessing_params):
     assert np.max(np.abs(h_plus)) > 0.0
 
 
-def test_reanchored_without_time_is_a_no_op():
-    """An ``EulerAngles`` carrying no integration time is returned unchanged."""
-
-    angles = EulerAngles(
-        momega=np.linspace(1e-3, 0.1, 50),
-        alpha=np.linspace(0.0, 3.0, 50),
-        beta=np.full(50, 0.2),
-        gamma=np.linspace(0.0, -2.0, 50),
-    )
-    frequencies = np.linspace(20.0, 1024.0, 128)
-    reference = -(frequencies**2)  # any chirp-like phase
-
-    assert angles.reanchored(frequencies, reference, 1.0e-5, 20.0) is angles
-
-
-def test_reanchoring_follows_the_reference_phase(frequencies, precessing_params):
-    r"""The re-anchored ``momega`` axis tracks the (2,2) phase's own
-    stationary-phase time-frequency map, not the PN one."""
-
-    model = Model.default_for_testing()
-    precessing = PrecessingModel(model)
-    angles = precessing.euler_angles(precessing_params, float(frequencies[0]))
-
-    _, phase_22 = model.coprecessing_amplitudes_and_phases(
-        frequencies, precessing_params.aligned()
-    )[(2, 2)]
-    mass_sum_seconds = precessing_params.aligned().mass_sum_seconds
-    reanchored = angles.reanchored(
-        frequencies, phase_22, mass_sum_seconds, float(frequencies[0])
-    )
-
-    assert reanchored is not angles
-    assert np.all(np.isfinite(reanchored.momega))
-    assert np.all(np.diff(reanchored.momega) >= 0.0)
-    # the angle values are carried over untouched
-    np.testing.assert_array_equal(reanchored.alpha, angles.alpha)
-    np.testing.assert_array_equal(reanchored.beta, angles.beta)
-
-    # the (2,2) angles, looked up at pi M f on the re-anchored axis, must
-    # match the ones the surrogate (2,2) phase implies: at the frequency
-    # where the re-anchored beta peaks, the plain-PN axis puts a
-    # different beta
-    target = np.pi * mass_sum_seconds * frequencies
-    _, beta_anchored, _ = reanchored.at_momega(target)
-    _, beta_plain, _ = angles.at_momega(target)
-    assert np.max(np.abs(beta_anchored - beta_plain)) > 1e-4
-
-
-def test_reanchoring_changes_a_precessing_waveform_but_not_an_aligned_one(
-    frequencies, precessing_params
-):
-    """Re-anchoring moves a precessing waveform and leaves the aligned limit alone."""
-
-    precessing = PrecessingModel(Model.default_for_testing())
-
-    anchored = precessing.predict(frequencies, precessing_params, reanchor=True)
-    plain = precessing.predict(frequencies, precessing_params, reanchor=False)
-    scale = np.max(np.abs(plain[0]))
-    assert np.max(np.abs(anchored[0] - plain[0])) > 1e-3 * scale
-
-    aligned = PrecessingParametersWithExtrinsic(
-        mass_ratio=precessing_params.mass_ratio,
-        lambda_1=precessing_params.lambda_1,
-        lambda_2=precessing_params.lambda_2,
-        chi_1=(0.0, 0.0, precessing_params.chi_1_vector[2]),
-        chi_2=(0.0, 0.0, precessing_params.chi_2_vector[2]),
-        distance_mpc=precessing_params.distance_mpc,
-        inclination=precessing_params.inclination,
-        total_mass=precessing_params.total_mass,
-    )
-    with_reanchor = precessing.predict(frequencies, aligned, reanchor=True)
-    without = precessing.predict(frequencies, aligned, reanchor=False)
-    np.testing.assert_allclose(with_reanchor[0], without[0], rtol=1e-10, atol=0.0)
-
-
 def test_twist_reproduces_teobresums_frequency_domain_polarizations():
     r"""Against TEOBResumS' own precessing :math:`h_+, h_\times`.
 
@@ -409,7 +328,7 @@ def test_twist_reproduces_teobresums_frequency_domain_polarizations():
         initial_frequency=initial_frequency, srate_interp=4096.0,
         use_geometric_units="no", interp_uniform_grid="yes", domain=1, df=1.0 / 128.0,
         # mirror of compute_hpc's pi/2 - azimuth, see
-        # visualization/validate_precessing_against_teob.teob_polarizations
+        # visualization/teob_precessing.teob_run
         inclination=inclination, coalescence_angle=np.pi / 2.0 + azimuth,
         output_hpc="no", arg_out="no", use_spins=2,
         chi1x=chi_1[0], chi1y=chi_1[1], chi1z=chi_1[2],
@@ -432,7 +351,7 @@ def test_twist_reproduces_teobresums_frequency_domain_polarizations():
     angles = precessing.euler_angles(params, float(grid[0]))
     assert angles.beta.max() > 0.2
 
-    hp, hc = precessing.predict(grid, params, source="eob", angles=angles, reanchor=False)
+    hp, hc = precessing.predict(grid, params, source="eob", angles=angles)
     for ours, (real, imag) in ((hp, (real_hp, imag_hp)), (-hc, (real_hc, imag_hc))):
         mismatch = validator.full_waveform_mismatch(
             {(2, 2): resampled(real, imag, grid)}, {(2, 2): ours}, frequencies=grid

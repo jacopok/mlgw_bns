@@ -49,7 +49,6 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 import numpy as np
 from scipy.integrate._ivp import dop853_coefficients as dop853
 
-from .higher_order_modes import Mode
 from .precessing_model import (
     orbital_phase_from_transforms,
     polarizations_from_inertial_modes,
@@ -362,7 +361,9 @@ def precessing_waveform(
     modes = [tuple(int(i) for i in lm) for lm in (model.modes if modes is None else modes)]
     largest_m = max(m for _, m in model.modes)
     predict_modes = model.jax_modes_amp_phase(modes)
-    keys = reference_phase_keys([Mode(*key) for key in modes])
+    # from the model's multipoles, as the numpy path, whichever are twisted:
+    # the odd-m one picks the branch of the orbital phase
+    keys = reference_phase_keys(model.modes)
     predict_reference = model.jax_modes_amp_phase(keys, return_tf=True)
 
     def one_binary(row, frequencies, amp, phase, mass_seconds, inclination, azimuth,

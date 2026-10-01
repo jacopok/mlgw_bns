@@ -14,6 +14,11 @@ Precessing waveforms
 
 .. autofunction:: mlgw_bns.precessing_model.euler_angles
 
+.. autofunction:: mlgw_bns.precessing_model.backward_gamma
+
+.. autodata:: mlgw_bns.precessing_model.LEADING_ORDER_MODE_PHASES
+    :no-value:
+
 .. autofunction:: mlgw_bns.precessing_model.twist_modes_frequency_domain
 
 .. autofunction:: mlgw_bns.precessing_model.polarizations_from_inertial_modes
@@ -21,6 +26,20 @@ Precessing waveforms
 .. autofunction:: mlgw_bns.precessing_model.newtonian_time_to_merger
 
 .. autofunction:: mlgw_bns.precessing_model.check_aligned_spin_limit
+
+Batched, in JAX
+---------------
+
+.. automodule:: mlgw_bns.batched_precession
+
+.. autofunction:: mlgw_bns.batched_precession.precessing_waveform
+
+.. autofunction:: mlgw_bns.batched_precession.batch_arguments
+
+.. autofunction:: mlgw_bns.batched_precession.integrate_angles
+
+.. autoclass:: mlgw_bns.batched_precession.TabulatedAngles
+    :members: at_momega
 
 The precession dynamics
 -----------------------
