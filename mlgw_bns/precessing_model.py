@@ -121,9 +121,9 @@ LEADING_ORDER_MODE_PHASES: Dict[ModeKey, float] = {
 }
 
 #: Half-width, in Hz, of the window :func:`stationary_phase_transform` is
-#: fitted on: narrow enough for a quadratic to describe the phase (which
-#: at 10 Hz advances by ~2 pi per mHz for a binary neutron star), wide
-#: enough to be insensitive to its rounding.
+#: fitted on: narrow enough for a cubic to describe the phase (which at
+#: 10 Hz advances by ~2 pi per mHz for a binary neutron star), wide enough
+#: to be insensitive to its rounding.
 STATIONARY_PHASE_HALF_WIDTH_HZ = 2e-3
 
 
@@ -141,13 +141,54 @@ def stationary_phase_transform(
 ) -> float:
     r""":math:`X = \Psi - f \Psi'` at ``frequency``.
 
-    From a quadratic fit of the continuous phase :math:`\Psi` sampled at
+    From a cubic fit of the continuous phase :math:`\Psi` sampled at
     ``frequencies`` (:func:`stationary_phase_window`). It is unchanged by
     a time shift, which adds :math:`2 \pi f t` to :math:`\Psi`, and equals
     the time-domain phase plus :math:`\pi / 4` at the stationary time.
+    It agrees to ~1e-6 rad with :math:`\Psi - f \Psi'` from the
+    surrogate's analytic :math:`\Psi'`, which
+    :mod:`~mlgw_bns.batched_precession` uses. A quadratic fit was biased
+    by :math:`f \Psi''' w^2 / 10` (:math:`w` the half-width): -3e-3 rad
+    for the :math:`(2, 2)` of a binary neutron star at 9.5 Hz.
     """
-    c2, c1, c0 = np.polyfit(frequencies - frequency, phase, 2)
+    c3, c2, c1, c0 = np.polyfit(frequencies - frequency, phase, 3)
     return float(c0 - frequency * c1)
+
+
+def reference_phase_keys(modes: Sequence[Mode]) -> list:
+    r"""The multipoles the orbital phase at the reference frequency is read
+    from: the :math:`(2, 2)` and, for the branch, the :math:`(2, 1)` (else the
+    :math:`(3, 3)`) if ``modes`` has it; in increasing :math:`m`."""
+    keys = [(2, 2)] + [key for key in ((2, 1), (3, 3)) if Mode(*key) in modes][:1]
+    return sorted(keys, key=lambda key: key[1])
+
+
+def orbital_phase_from_transforms(transforms: Dict[ModeKey, float], xp=np):
+    r"""The orbital phase given the stationary-phase transforms
+    :math:`X_{\ell m}` of the :func:`reference_phase_keys` multipoles.
+
+    From the :math:`(2, 2)`, modulo :math:`\pi`; the branch is the one
+    closer to the estimate of the odd-:math:`m` multipole, if there is one.
+    In :math:`(-\pi, \pi]`. ``xp`` is ``numpy`` (default) or
+    ``jax.numpy``, and the transforms may then be arrays.
+    """
+    # modulo 2 pi / m
+    estimates = {
+        key[1]: (transform - LEADING_ORDER_MODE_PHASES[key] - np.pi / 4.0) / key[1]
+        for key, transform in transforms.items()
+    }
+    phase = estimates[2]
+    odd = [m for m in estimates if m % 2]
+    if odd:
+        (m_odd,) = odd
+
+        def distance(candidate):
+            return xp.abs(xp.angle(xp.exp(1j * m_odd * (candidate - estimates[m_odd]))))
+
+        phase = xp.where(
+            distance(phase + np.pi) < distance(phase), phase + np.pi, phase
+        )
+    return xp.angle(xp.exp(1j * phase))
 
 
 @dataclass
@@ -648,9 +689,34 @@ def euler_angles(
         momega=solution["Momega"],
         alpha=solution["alpha"],
         beta=solution["beta"],
-        gamma=solution["gamma"],
+        gamma=backward_gamma(
+            solution["gamma"],
+            solution["Momega"],
+            np.hypot(solution["Lh"][:, 0], solution["Lh"][:, 1]),
+            np.pi * reference_frequency_22,
+        ),
         time=solution["t"],
     )
+
+
+def backward_gamma(gamma, momega, in_plane_l, reference_momega, xp=np):
+    r""":math:`\gamma`, continued through the reference point.
+
+    At the reference point :math:`\hat{L} = \hat{z}`, so the in-plane part of
+    :math:`\hat{L}` passes through zero there and changes direction:
+    :math:`\alpha = \arctan(L_y / L_x)` jumps by :math:`\pi`, while
+    :math:`\gamma`, integrated, does not. The rotation
+    :math:`R(\alpha + \pi, \beta, \gamma) = R(\alpha, -\beta, \gamma + \pi)`
+    then jumps by :math:`\pi` about :math:`\hat{L}`, flipping the sign of every
+    odd-:math:`m` co-precessing multipole below the reference frequency.
+    TEOBResumS' backward integration does the same, invisibly: its multipoles
+    start at the reference point. Adding :math:`\pi` to :math:`\gamma` where
+    :math:`\alpha` is flipped (below the reference, wherever
+    :math:`\hat{L} \neq \hat{z}`) makes the rotation continuous; with no
+    in-plane spin nothing changes.
+    """
+    flipped = (momega < reference_momega) & (in_plane_l > 0)
+    return gamma + xp.where(flipped, np.pi, 0.0)
 
 
 def twist_modes_frequency_domain(
@@ -658,6 +724,7 @@ def twist_modes_frequency_domain(
     frequencies: np.ndarray,
     angles: EulerAngles,
     mass_sum_seconds: float,
+    xp=np,
 ) -> Tuple[Dict[ModeKey, np.ndarray], Dict[ModeKey, np.ndarray]]:
     r"""Twist frequency-domain co-precessing multipoles into the inertial frame.
 
@@ -675,10 +742,16 @@ def twist_modes_frequency_domain(
     frequencies : np.ndarray
         The (positive) frequency grid, in Hz.
     angles : EulerAngles
-        Precession angles, tabulated against orbital frequency.
+        Precession angles, tabulated against orbital frequency: anything
+        with an ``at_momega`` method, such as
+        :class:`~mlgw_bns.batched_precession.TabulatedAngles`.
     mass_sum_seconds : float
         Total mass of the binary, in seconds, used to convert the
         frequencies to geometric units.
+    xp : module
+        Array namespace, ``numpy`` (default) or ``jax.numpy``; with the
+        latter, ``frequencies`` and ``mass_sum_seconds`` may carry a batch
+        axis, ``(N, k)`` and ``(N, 1)``.
 
     Returns
     -------
@@ -723,6 +796,7 @@ def twist_modes_frequency_domain(
                 lm_inertial=wanted,
                 include_positive_n=include_positive_n,
                 include_negative_n=not include_positive_n,
+                xp=xp,
             )
             for contribution in (twisted, twisted_negative_m, twisted_m0):
                 for key, value in contribution.items():
@@ -739,6 +813,7 @@ def polarizations_from_inertial_modes(
     modes_negative_f: Dict[ModeKey, np.ndarray],
     inclination: float,
     azimuth: float,
+    xp=np,
 ) -> Tuple[np.ndarray, np.ndarray]:
     r"""Project the inertial-frame multipoles onto the observer's sky.
 
@@ -765,6 +840,9 @@ def polarizations_from_inertial_modes(
         Polar angle :math:`\iota` of the line of sight, in radians.
     azimuth : float
         Azimuthal angle :math:`\varphi` of the line of sight, in radians.
+    xp : module
+        Array namespace, ``numpy`` (default) or ``jax.numpy``; the angles
+        may then be arrays broadcasting against the multipoles.
 
     Returns
     -------
@@ -772,9 +850,11 @@ def polarizations_from_inertial_modes(
         The complex polarizations ``(h_plus, h_cross)``, in the same
         convention as :meth:`~mlgw_bns.model.Model.predict`.
     """
-    def harmonic(key: ModeKey) -> complex:
-        real, imaginary = spinsphericalharm(-2, key[0], key[1], azimuth, inclination)
-        return complex(real, imaginary)
+    def harmonic(key: ModeKey):
+        real, imaginary = spinsphericalharm(
+            -2, key[0], key[1], azimuth, inclination, xp=xp
+        )
+        return real + 1j * imaginary
 
     harmonics = {
         key: harmonic(key) for key in set(modes_positive_f) | set(modes_negative_f)
@@ -784,7 +864,7 @@ def polarizations_from_inertial_modes(
         mode_array * harmonics[key] for key, mode_array in modes_positive_f.items()
     )
     h_plus_combination = sum(
-        np.conj(mode_array) * np.conj(harmonics[key])
+        xp.conj(mode_array) * xp.conj(harmonics[key])
         for key, mode_array in modes_negative_f.items()
     )
 
@@ -871,6 +951,29 @@ class PrecessingModel:
             omega_dot=omega_dot,
         )
 
+    def jax_predict(
+        self, modes: Optional[Sequence] = None, n_steps: Optional[int] = None
+    ) -> Callable:
+        r"""A pure JAX function computing :meth:`predict` for a batch of binaries.
+
+        See :func:`mlgw_bns.batched_precession.precessing_waveform` for its
+        signature. Wrap it in :func:`jax.jit`; every new input shape compiles
+        again. Requires the ``jax`` extra.
+
+        Parameters
+        ----------
+        modes : sequence of (l, m), optional
+            Co-precessing multipoles to twist; defaults to all of the model's.
+        n_steps : int, optional
+            Steps of each leg of the precession integration; defaults to
+            :data:`mlgw_bns.batched_precession.N_STEPS`.
+        """
+        from .batched_precession import N_STEPS, precessing_waveform
+
+        return precessing_waveform(
+            self.model, modes, N_STEPS if n_steps is None else n_steps
+        )
+
     def reference_orbital_phase(
         self,
         params: PrecessingParametersWithExtrinsic,
@@ -901,10 +1004,7 @@ class PrecessingModel:
         """
         if params.reference_frequency_hz is None:
             raise ValueError("the parameters have no reference frequency")
-        keys = [(2, 2)] + [
-            key for key in ((2, 1), (3, 3)) if Mode(*key) in self.model.modes
-        ][:1]
-        keys.sort(key=lambda key: key[1])
+        keys = reference_phase_keys(self.model.modes)
         windows = [
             stationary_phase_window(key[1] / 2.0 * params.reference_frequency_hz)
             for key in keys
@@ -914,27 +1014,58 @@ class PrecessingModel:
         phases = self.model.coprecessing_amplitudes_and_phases(
             np.concatenate(windows), params.aligned(), source=source
         )
-        estimates = {}
+        transforms = {}
         start = 0
         for key, window in zip(keys, windows):
-            m = key[1]
-            transform = stationary_phase_transform(
+            transforms[key] = stationary_phase_transform(
                 window,
                 phases[key][1][start : start + window.size],
-                m / 2.0 * params.reference_frequency_hz,
+                key[1] / 2.0 * params.reference_frequency_hz,
             )
             start += window.size
-            # modulo 2 pi / m
-            estimates[m] = (transform - LEADING_ORDER_MODE_PHASES[key] - np.pi / 4.0) / m
-        phase = estimates[2]
-        if len(keys) > 1:
-            (m_odd,) = (m for m in estimates if m % 2)
-            candidates = np.array([phase, phase + np.pi])
-            distance = np.abs(
-                np.angle(np.exp(1j * m_odd * (candidates - estimates[m_odd])))
-            )
-            phase = candidates[np.argmin(distance)]
-        return float(np.angle(np.exp(1j * phase)))
+        return float(orbital_phase_from_transforms(transforms))
+
+    def coprecessing_amplitudes_and_phases(
+        self,
+        frequencies: np.ndarray,
+        params: PrecessingParametersWithExtrinsic,
+        source: str = "surrogate",
+    ) -> Dict[ModeKey, Tuple[np.ndarray, np.ndarray]]:
+        r"""The co-precessing multipoles, before the twist.
+
+        Those of :meth:`~mlgw_bns.model.Model.coprecessing_amplitudes_and_phases`
+        for ``params.aligned()``, with the orbital phase at the reference
+        frequency set to ``params.reference_phase`` if
+        ``params.reference_frequency_hz`` is given (see the module
+        docstring). :meth:`predict_modes_dict` twists these.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate the multipoles, in Hz.
+        params : PrecessingParametersWithExtrinsic
+            Source parameters.
+        source : str
+            Where the co-precessing multipoles come from; see
+            :meth:`predict_modes_dict`.
+
+        Returns
+        -------
+        dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]
+            Mapping ``(l, m) -> (amplitude, phase)``.
+        """
+        amplitudes_and_phases = self.model.coprecessing_amplitudes_and_phases(
+            frequencies, params.aligned(), source=source
+        )
+        if params.reference_frequency_hz is None:
+            return amplitudes_and_phases
+        rotation = params.reference_phase - self.reference_orbital_phase(
+            params, source=source
+        )
+        return {
+            (l, m): (amplitude, phase + m * rotation)
+            for (l, m), (amplitude, phase) in amplitudes_and_phases.items()
+        }
 
     def predict_modes_dict(
         self,
@@ -981,21 +1112,13 @@ class PrecessingModel:
         if angles is None:
             angles = self.euler_angles(params, float(frequencies[0]))
 
-        amplitudes_and_phases = self.model.coprecessing_amplitudes_and_phases(
-            frequencies, params.aligned(), source=source
+        amplitudes_and_phases = self.coprecessing_amplitudes_and_phases(
+            frequencies, params, source=source
         )
         coprecessing = {
             key: amplitude * np.exp(1j * phase)
             for key, (amplitude, phase) in amplitudes_and_phases.items()
         }
-        if params.reference_frequency_hz is not None:
-            rotation = params.reference_phase - self.reference_orbital_phase(
-                params, source=source
-            )
-            coprecessing = {
-                (l, m): value * np.exp(1j * m * rotation)
-                for (l, m), value in coprecessing.items()
-            }
 
         if reanchor and (2, 2) in coprecessing:
             angles = angles.reanchored(

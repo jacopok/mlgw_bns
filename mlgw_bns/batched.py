@@ -110,6 +110,7 @@ from scipy.interpolate import CubicSpline  # type: ignore
 
 from .dataset_generation import AMP_SI_BASE
 from .pn_modes import H_21, H_22, H_31, H_32, H_33, H_43, H_44, Mode
+from .special_func import wigner_d_function
 from .taylorf2 import _make_taylorf2_psi
 
 if TYPE_CHECKING:
@@ -262,26 +263,6 @@ def _post_newtonian(xp, psi, x, requests: list) -> list:
 # ====================================================================== #
 
 
-def _wigner_d(xp, ell, emm, s, iota):
-    r"""Wigner :math:`d^\ell_{m s}(\iota)`, eq. (II.8) of arXiv:0709.0093,
-    as :func:`mlgw_bns.special_func.wigner_d_function`."""
-    cos_h = xp.cos(iota * 0.5)
-    sin_h = xp.sin(iota * 0.5)
-    fact = math.factorial
-    norm = math.sqrt(fact(ell + emm) * fact(ell - emm) * fact(ell + s) * fact(ell - s))
-    out = 0.0
-    for k in range(max(0, emm - s), min(ell + emm, ell - s) + 1):
-        div = 1.0 / (
-            fact(k) * fact(ell + emm - k) * fact(ell - s - k) * fact(s - emm + k)
-        )
-        out = out + div * (
-            (-1) ** k
-            * cos_h ** (2 * ell + emm - s - 2 * k)
-            * sin_h ** (2 * k + s - emm)
-        )
-    return norm * out
-
-
 def spin_weighted_spherical_harmonic(ell, emm, inclination, azimuth, xp=np):
     r""":math:`{}_{-2}Y_{\ell m}(\iota, \varphi)`, as a complex array.
 
@@ -289,8 +270,8 @@ def spin_weighted_spherical_harmonic(ell, emm, inclination, azimuth, xp=np):
     (with spin weight :math:`s = -2`). ``inclination`` and ``azimuth``
     broadcast against each other.
     """
-    d = math.sqrt((2 * ell + 1) / (4 * math.pi)) * _wigner_d(
-        xp, ell, emm, 2, inclination
+    d = math.sqrt((2 * ell + 1) / (4 * math.pi)) * wigner_d_function(
+        ell, emm, 2, inclination, xp=xp
     )
     return d * xp.exp(1j * emm * xp.asarray(azimuth))
 
@@ -328,8 +309,8 @@ def mode_polarizations(amp, phase, modes, inclination, azimuth=0.0, xp=np):
         ell, emm = int(ell), int(emm)
         sign = -1.0 if ell % 2 else 1.0
         c = math.sqrt((2 * ell + 1) / (4 * math.pi))
-        d_pos = _wigner_d(xp, ell, emm, 2, inclination)
-        d_neg = _wigner_d(xp, ell, -emm, 2, inclination)
+        d_pos = wigner_d_function(ell, emm, 2, inclination, xp=xp)
+        d_neg = wigner_d_function(ell, -emm, 2, inclination, xp=xp)
         # Y_lm = c d_{m,2} e^{i m phi};  Y*_{l,-m} = c d_{-m,2} e^{i m phi}
         rotation = xp.exp(1j * emm * azimuth)
         y_sum.append(c * (d_pos + sign * d_neg) * rotation)

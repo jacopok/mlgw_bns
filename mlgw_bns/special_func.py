@@ -9,7 +9,8 @@ them for the :math:`s=-2` specialisation, and
 matrices of the precessing twist. They mirror ``wigner_d_function()``
 and ``spinsphericalharm()`` in TEOBResumS' ``C/src/SpecialFuns.c``.
 
-Both accept either a scalar angle or a numpy array of angles.
+Both accept either a scalar angle or a numpy array of angles, and run on
+:mod:`jax.numpy` arrays as well when passed ``xp=jax.numpy``.
 """
 
 import math
@@ -54,7 +55,7 @@ def factorial(n: int) -> int:
     return math.factorial(n)
 
 
-def wigner_d_function(l: int, m: int, s: int, i: AngleLike) -> AngleLike:
+def wigner_d_function(l: int, m: int, s: int, i: AngleLike, xp=np) -> AngleLike:
     r"""Wigner :math:`d`-function :math:`d^{\ell}_{m,s}(\iota)`.
 
     As given in Eq. (II.8) of `arXiv:0709.0093
@@ -71,6 +72,8 @@ def wigner_d_function(l: int, m: int, s: int, i: AngleLike) -> AngleLike:
     i : float or np.ndarray
         Argument of the Wigner :math:`d`-function, in radians. May be an
         array, in which case an array of the same shape is returned.
+    xp : module
+        Array namespace, ``numpy`` (default) or ``jax.numpy``.
 
     Returns
     -------
@@ -78,9 +81,9 @@ def wigner_d_function(l: int, m: int, s: int, i: AngleLike) -> AngleLike:
         The value of :math:`d^{\ell}_{m,s}(\iota)`.
     """
 
-    angle = np.asarray(i, dtype=float)
-    costheta = np.cos(angle * 0.5)
-    sintheta = np.sin(angle * 0.5)
+    angle = xp.asarray(i, dtype=float)
+    costheta = xp.cos(angle * 0.5)
+    sintheta = xp.sin(angle * 0.5)
 
     norm = math.sqrt(
         factorial(l + m) * factorial(l - m) * factorial(l + s) * factorial(l - s)
@@ -90,7 +93,7 @@ def wigner_d_function(l: int, m: int, s: int, i: AngleLike) -> AngleLike:
     ki = max(0, m - s)
     kf = min(l + m, l - s)
 
-    d_wigner = np.zeros_like(costheta)
+    d_wigner = xp.zeros_like(costheta)
     for k in range(ki, kf + 1):
         div = 1.0 / (
             factorial(k) * factorial(l + m - k) * factorial(l - s - k) * factorial(s - m + k)
@@ -102,11 +105,11 @@ def wigner_d_function(l: int, m: int, s: int, i: AngleLike) -> AngleLike:
         )
 
     result = norm * d_wigner
-    return result if result.ndim else float(result)
+    return result if result.ndim or xp is not np else float(result)
 
 
 def spinsphericalharm(
-    s: int, l: int, m: int, phi: AngleLike, i: AngleLike
+    s: int, l: int, m: int, phi: AngleLike, i: AngleLike, xp=np
 ) -> Tuple[AngleLike, AngleLike]:
     r"""Spin-weighted spherical harmonic :math:`{}_{s}Y_{\ell m}(\varphi, \iota)`.
 
@@ -125,6 +128,8 @@ def spinsphericalharm(
         Azimuthal angle, in radians.
     i : float or np.ndarray
         Polar angle, in radians.
+    xp : module
+        Array namespace, ``numpy`` (default) or ``jax.numpy``.
 
     Returns
     -------
@@ -142,9 +147,9 @@ def spinsphericalharm(
         raise ValueError("Invalid (l,m) values in spinsphericalharm")
 
     c = (-1.0) ** (-s) * math.sqrt((2.0 * l + 1.0) / (4.0 * math.pi))
-    d_wigner = c * wigner_d_function(l, m, -s, i)
+    d_wigner = c * wigner_d_function(l, m, -s, i, xp=xp)
 
-    return np.cos(m * np.asarray(phi)) * d_wigner, np.sin(m * np.asarray(phi)) * d_wigner
+    return xp.cos(m * xp.asarray(phi)) * d_wigner, xp.sin(m * xp.asarray(phi)) * d_wigner
 
 
 def unwrap_euler(p):
