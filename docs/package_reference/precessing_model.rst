@@ -38,6 +38,8 @@ Batched, in JAX
 
 .. autofunction:: mlgw_bns.batched_precession.precessing_mode_components
 
+.. autofunction:: mlgw_bns.batched_precession.precession_angles
+
 .. autofunction:: mlgw_bns.batched_precession.batch_arguments
 
 .. autofunction:: mlgw_bns.batched_precession.integrate_angles

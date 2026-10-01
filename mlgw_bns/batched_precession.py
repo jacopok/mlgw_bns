@@ -47,7 +47,7 @@ the interpolated :math:`\hat{L}` (:class:`TabulatedAngles`).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
 import numpy as np
@@ -355,6 +355,52 @@ def _reference_rotation(
     return reference_phase - orbital_phase_from_transforms(transforms, xp=jnp)
 
 
+def precession_angles(model: "Model", n_steps: int = N_STEPS) -> Callable:
+    r"""A JAX function integrating the precession of a batch of binaries,
+    for :func:`precessing_mode_components` (its ``angles`` argument).
+
+    Returns ``angles(intrinsic, total_mass, reference_frequency_hz,
+    start_frequency_hz) -> tuple``, with ``intrinsic`` of shape ``(N, 9)``
+    as for :func:`precessing_waveform` and the rest scalars or of shape
+    ``(N,)``: the fields of each binary's :class:`TabulatedAngles`, stacked
+    along a first axis of length ``N``, integrated from the lowest frequency
+    any multipole of ``model`` needs at ``start_frequency_hz``. The angles
+    do not depend on the frequencies the waveform is then evaluated at, so
+    a long frequency array can be evaluated in pieces with one integration.
+
+    Parameters
+    ----------
+    model : Model
+        The aligned-spin surrogate.
+    n_steps : int
+        Steps of each leg of the integration (:func:`integrate_angles`).
+    """
+    jax, jnp = _jnp()
+    largest_m = max(m for _, m in model.modes)
+
+    def one_binary(row, mass_seconds, reference_frequency, start_frequency):
+        angles = integrate_angles(
+            row[0], row[1], row[2], row[3:6], row[6:9],
+            reference_frequency * mass_seconds,
+            2.0 * start_frequency * mass_seconds / largest_m,
+            n_steps,
+        )
+        return tuple(getattr(angles, field.name) for field in fields(TabulatedAngles))
+
+    def angles(intrinsic, total_mass, reference_frequency_hz, start_frequency_hz):
+        intrinsic = jnp.atleast_2d(jnp.asarray(intrinsic, jnp.float64))
+        total_mass, reference_frequency_hz, start_frequency_hz = (
+            jnp.broadcast_to(jnp.asarray(value, jnp.float64), (intrinsic.shape[0],))
+            for value in (total_mass, reference_frequency_hz, start_frequency_hz)
+        )
+        return jax.vmap(one_binary)(
+            intrinsic, total_mass * SUN_MASS_SECONDS, reference_frequency_hz,
+            start_frequency_hz,
+        )
+
+    return angles
+
+
 def precessing_mode_components(
     model: "Model", modes: Optional[Sequence] = None, n_steps: int = N_STEPS
 ) -> Callable:
@@ -375,9 +421,12 @@ def precessing_mode_components(
     binning needs (Leslie, Dai and Pratten, `arXiv:2109.09872
     <https://arxiv.org/abs/2109.09872>`_, eqs. 1--4).
 
-    Returns ``predict(...) -> (coprecessing, c_plus, c_cross)``, with the
-    arguments of :func:`precessing_waveform` and three complex arrays of
-    shape ``(N, n_modes, k)``, the modes in the order of ``modes``.
+    Returns ``predict(..., angles=None) -> (coprecessing, c_plus,
+    c_cross)``, with the arguments of :func:`precessing_waveform` and three
+    complex arrays of shape ``(N, n_modes, k)``, the modes in the order of
+    ``modes``. ``angles``, from :func:`precession_angles`, are the
+    precession angles to use; by default they are integrated from the
+    lowest frequency of each row.
     ``coprecessing`` already has its orbital phase set at the reference
     frequency and the merger-time shift; :func:`precessing_waveform` is
     ``(sum(c_plus * coprecessing), sum(c_cross * coprecessing))`` over the
@@ -395,22 +444,17 @@ def precessing_mode_components(
     """
     jax, jnp = _jnp()
     modes = [tuple(int(i) for i in lm) for lm in (model.modes if modes is None else modes)]
-    largest_m = max(m for _, m in model.modes)
+    integrate = precession_angles(model, n_steps)
     predict_modes = model.jax_modes_amp_phase(modes)
     # from the model's multipoles, as the numpy path, whichever are twisted:
     # the odd-m one picks the branch of the orbital phase
     keys = reference_phase_keys(model.modes)
     predict_reference = model.jax_modes_amp_phase(keys, return_tf=True)
 
-    def one_binary(row, frequencies, mass_seconds, inclination, azimuth, reference_frequency):
-        angles = integrate_angles(
-            row[0], row[1], row[2], row[3:6], row[6:9],
-            reference_frequency * mass_seconds,
-            2.0 * frequencies[0] * mass_seconds / largest_m,
-            n_steps,
-        )
+    def one_binary(angles, frequencies, mass_seconds, inclination, azimuth):
         coefficients = twist_coefficients(
-            modes, frequencies, angles, mass_seconds, inclination, azimuth, xp=jnp
+            modes, frequencies, TabulatedAngles(*angles), mass_seconds, inclination,
+            azimuth, xp=jnp,
         )
         return (
             jnp.stack([coefficients[key][0] for key in modes]),
@@ -427,6 +471,7 @@ def precessing_mode_components(
         reference_phase,
         reference_frequency_hz,
         merger_time=0.0,
+        angles=None,
     ):
         intrinsic = jnp.atleast_2d(jnp.asarray(intrinsic, jnp.float64))
         n_rows = intrinsic.shape[0]
@@ -458,9 +503,12 @@ def precessing_mode_components(
             + emms[None, :, None] * rotation[:, None, None]
             - 2 * np.pi * frequencies[:, None, :] * merger_time[:, None, None]
         )
+        if angles is None:
+            angles = integrate(
+                intrinsic, total_mass, reference_frequency_hz, frequencies[:, 0]
+            )
         c_plus, c_cross = jax.vmap(one_binary)(
-            intrinsic, frequencies, total_mass * SUN_MASS_SECONDS,
-            inclination, azimuth, reference_frequency_hz,
+            angles, frequencies, total_mass * SUN_MASS_SECONDS, inclination, azimuth,
         )
         return amp * jnp.exp(1j * phase), c_plus, c_cross
 
