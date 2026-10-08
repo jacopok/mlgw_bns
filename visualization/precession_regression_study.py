@@ -14,9 +14,12 @@ this script builds one and measures it against the integration::
     # cost of the angles and of the whole waveform, single and batched
     python visualization/precession_regression_study.py benchmark --regressor regressor.joblib
 
-``generate`` takes ~0.15 s a binary on four cores (the integration and two
-least-squares fits), ``train`` a few minutes for 4096 binaries, each
-``--refine`` iteration ~10 minutes more.
+``generate`` takes ~0.1 s a binary on four cores (the integration and the
+least-squares fits); ``train`` takes ~2.5 minutes for 4096 binaries and ~15
+for 16384 (kernel ridge, cubic in their number; several ``--data`` files
+are concatenated), each ``--refine`` iteration ~10 minutes more for 4096.
+``--mass-ratio-exponent`` above 1 puts more binaries near equal masses; it
+did not pay with 16384.
 """
 
 from __future__ import annotations
@@ -43,9 +46,11 @@ from mlgw_bns.precession_regression import (
 
 def generate(args) -> None:
     grid = AngleGrid()
-    intrinsic, omega_reference = TrainingRanges().sample(args.n, args.seed)
+    intrinsic, omega_reference = TrainingRanges(
+        mass_ratio_exponent=args.mass_ratio_exponent
+    ).sample(args.n, args.seed)
     start = time.perf_counter()
-    x, zeta, g = training_data(grid, intrinsic, omega_reference)
+    x, zeta, g, switch = training_data(grid, intrinsic, omega_reference)
     coefficients, residuals = fit_all_envelopes(grid, intrinsic, omega_reference, x, zeta, g)
     print(
         f"{args.n} binaries in {time.perf_counter() - start:.0f} s; largest fit "
@@ -53,28 +58,40 @@ def generate(args) -> None:
     )
     np.savez(
         args.out, intrinsic=intrinsic, omega_reference=omega_reference,
-        coefficients=coefficients, x=x, zeta=zeta, g=g,
+        coefficients=coefficients, switch=switch, x=x, zeta=zeta, g=g,
     )
 
 
+def load(filenames):
+    """The training data of one or more ``generate`` files, concatenated."""
+    files = [np.load(name) for name in filenames]
+    return {key: np.concatenate([f[key] for f in files]) for key in files[0].files}
+
+
 def train(args) -> None:
-    data = np.load(args.data)
+    data = load(args.data)
     kwargs = dict(n_components=tuple(args.components), kernel_gamma=args.gamma)
     coefficients = data["coefficients"]
     if args.refine:
         coefficients, _ = refine_envelopes(
             AngleGrid(), data["intrinsic"], data["omega_reference"], data["x"],
-            data["zeta"], data["g"], coefficients, iterations=args.refine, **kwargs,
+            data["zeta"], data["g"], coefficients, data["switch"],
+            iterations=args.refine, **kwargs,
         )
+        if args.save_refined:
+            np.save(args.save_refined, coefficients)
+    start = time.perf_counter()
     PrecessionRegressor.train(
-        data["intrinsic"], data["omega_reference"], coefficients, **kwargs
+        data["intrinsic"], data["omega_reference"], coefficients, data["switch"], **kwargs
     ).save(args.out)
+    print(f"trained on {len(coefficients)} binaries in {time.perf_counter() - start:.0f} s")
 
 
 def function_errors(regressor: PrecessionRegressor, data, n: int) -> np.ndarray:
     r"""Largest errors of :math:`\zeta` and :math:`G` of the first ``n``
-    binaries of ``data``, below and above :math:`x = -4.5` (a (2, 2)
-    frequency of ~250 Hz for a total mass of 2.8): ``(n, 4)``."""
+    binaries of ``data``, below and above :math:`x = -10` (a (2, 2)
+    frequency of ~25 Hz for a total mass of 2.8), up to the switch to the
+    integration: ``(n, 4)``."""
     grid = regressor.grid
     predicted = regressor.predict_coefficients(data["intrinsic"][:n], data["omega_reference"][:n])
     errors = []
@@ -85,7 +102,7 @@ def function_errors(regressor: PrecessionRegressor, data, n: int) -> np.ndarray:
             np, grid, predicted[i], _carriers(np, grid, *carrier_table(np, grid, frame), x), x
         )
         d_zeta, d_g = np.abs(zeta - data["zeta"][i]), np.abs(g - data["g"][i])
-        high = x > -4.5
+        high = x > -10.0
         errors.append((d_zeta[~high].max(), d_zeta[high].max(), d_g[~high].max(), d_g[high].max()))
     return np.array(errors)
 
@@ -145,7 +162,7 @@ def validate(args) -> None:
     regressor = PrecessionRegressor.load(args.regressor)
     data = np.load(args.data)
     errors = function_errors(regressor, data, args.n)
-    for j, name in enumerate(("zeta, x < -4.5", "zeta, x > -4.5", "G, x < -4.5", "G, x > -4.5")):
+    for j, name in enumerate(("zeta, x < -10", "zeta, x > -10", "G, x < -10", "G, x > -10")):
         print(f"{name:>15}: median {np.median(errors[:, j]):.1e}, 90% {np.percentile(errors[:, j], 90):.1e}, max {errors[:, j].max():.1e}")
     mismatches, params = waveform_mismatches(regressor, data, args.n)
     print(
@@ -211,9 +228,11 @@ def main() -> None:
     command.add_argument("--n", type=int, required=True)
     command.add_argument("--seed", type=int, default=1)
     command.add_argument("--out", required=True)
+    command.add_argument("--mass-ratio-exponent", type=float, default=1.0)
     command.set_defaults(run=generate)
     command = commands.add_parser("train")
-    command.add_argument("--data", required=True)
+    command.add_argument("--data", required=True, nargs="+")
+    command.add_argument("--save-refined")
     command.add_argument("--out", required=True)
     command.add_argument("--components", type=int, nargs=2, default=[64, 64])
     command.add_argument("--gamma", type=float, default=0.02)
