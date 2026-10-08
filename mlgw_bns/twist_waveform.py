@@ -177,7 +177,7 @@ def nu_to_X1(nu, xp=np):
     """Mass fraction M1/M from the symmetric mass ratio nu. Mirrors
     nu_to_X1() in C/src/TEOBResumSUtils.c. ``xp`` is the array namespace,
     ``numpy`` (default) or ``jax.numpy``, as for the functions below."""
-    if xp is np and (nu < 0.0 or nu > 0.25):
+    if xp is np and np.any((np.asarray(nu) < 0.0) | (np.asarray(nu) > 0.25)):
         raise ValueError("symmetric mass ratio must be 0 <= nu <= 1/4")
     return 0.5 * (1.0 + xp.sqrt(1.0 - 4.0 * nu))
 
@@ -231,6 +231,134 @@ def tidal_flux_coefficient(nu, lambda_1, lambda_2, xp=np):
             + 6.0 * MB ** 4 * (12.0 - 11.0 * MB) * lambda_2)
 
 
+def _spin_orbit_coefficients(nu, q, xp=np):
+    """
+    Coefficients of :math:`v^5`, :math:`v^7`, :math:`v^9` in the
+    frequencies at which the two spins precess about Lhat (the N4LO
+    spin-orbit part of Eq. (4) of arXiv:2005.05338), as ``(v5_cA, v5_cB,
+    v7_cA, v7_cB, v9_cA, v9_cB)``; ``q = MA / MB >= 1``. The frequency of
+    spin A is ``v5 v5_cA - 1.5 v6 (SA / q + SB).Lh + v7 v7_cA + v9 v9_cA``,
+    plus the spin-spin ``0.5 v6 SB``; see :func:`_pn_precession_derivatives`.
+    """
+    nu2, nu3 = nu * nu, nu ** 3
+    MA = nu_to_X1(nu, xp)
+    dm = MA - (1.0 - MA)
+    v5_cA = nu * (2.0 + 1.5 / q)
+    v5_cB = nu * (2.0 + 1.5 * q)
+    v7_cA = 0.5625 + 1.25 * nu - 0.041666666666666664 * nu2 + dm * (-0.5625 + 0.625 * nu)
+    v7_cB = 0.5625 + 1.25 * nu - 0.041666666666666664 * nu2 - dm * (-0.5625 + 0.625 * nu)
+    v9_cA = (0.84375 + 0.1875 * nu - 3.28125 * nu2 - 0.02083333333333 * nu3
+             + dm * (-0.84375 + 4.875 * nu - 0.15625 * nu2))
+    v9_cB = (0.84375 + 0.1875 * nu - 3.28125 * nu2 - 0.02083333333333 * nu3
+             - dm * (-0.84375 + 4.875 * nu - 0.15625 * nu2))
+    return v5_cA, v5_cB, v7_cA, v7_cB, v9_cA, v9_cB
+
+
+def orbital_angular_momentum(nu, omg):
+    r"""
+    The 2PN orbital angular momentum :math:`|L| / M^2` at the orbital
+    frequency ``omg`` :math:`= M \Omega`: :math:`\nu / v` times the
+    ``L2PN`` factor that Eq. (4c) of arXiv:2005.05338 divides by.
+    """
+    v = omg ** (1.0 / 3.0)
+    return nu / v * _orbital_angular_momentum_factor(nu, v)
+
+
+def _orbital_angular_momentum_factor(nu, v):
+    """L2PN: the 2PN orbital angular momentum in units of the Newtonian nu / v."""
+    v2 = v * v
+    v4 = v2 * v2
+    return (1.0 + v2 * (1.5 + 0.1666666666666667 * nu)
+            + v4 * (3.375 - 2.375 * nu + 0.041666666666666664 * nu * nu))
+
+
+def _orbital_frequency_rate(nu, omg, SAdotLh, SBdotLh, SAdotSB, SA2, SB2,
+                            a10_tidal=0.0, xp=np):
+    """
+    The PN energy-balance dOmega/dt of the spin dynamics, and its 2PN
+    truncation: ``(domg, domg_leading)`` of :func:`_pn_precession_derivatives`,
+    from the scalar products of the spins and Lhat. ``omg`` may be an array.
+    """
+    nu2, nu3 = nu * nu, nu ** 3
+    Pi = math.pi
+    Pi2 = Pi * Pi
+    oothree = 1.0 / 3.0
+    eleven_o_three = 11.0 / 3.0
+
+    MA = nu_to_X1(nu, xp)
+    MB = 1.0 - MA
+    ma_o_mb = MA / MB
+    mb_o_ma = MB / MA
+    lnomg = xp.log(omg)
+
+    # --- Eq. (A1) of arXiv:1307.4418: PN energy-balance domega/dt (3.5PN) ---
+    sigma4_SASB      =  247.0 / (48.0 * nu)
+    sigma4_SALh_SBLh = -721.0 / (48.0 * nu)
+    sigma4_SA2       =  233.0 / (96.0 * MA ** 2)
+    sigma4_SALh2     = -719.0 / (96.0 * MA ** 2)
+    sigma4_SB2       =  233.0 / (96.0 * MB ** 2)
+    sigma4_SBLh2     = -719.0 / (96.0 * MB ** 2)
+
+    beta3A = 113.0 / 12 + 25.0 / 4 * mb_o_ma
+    beta3B = 113.0 / 12 + 25.0 / 4 * ma_o_mb
+    beta5A = (31319.0 / 1008 - 1159.0 / 24 * nu) + mb_o_ma * (809.0 / 84 - 281.0 / 8 * nu)
+    beta5B = (31319.0 / 1008 - 1159.0 / 24 * nu) + ma_o_mb * (809.0 / 84 - 281.0 / 8 * nu)
+    beta6A = Pi * (75.0 / 2 + 151.0 / 6 * mb_o_ma)
+    beta6B = Pi * (75.0 / 2 + 151.0 / 6 * ma_o_mb)
+    beta7A = ((130325.0 / 756 - 796069.0 / 2016 * nu + 100019.0 / 864 * nu2)
+              + mb_o_ma * (1195759.0 / 18144 - 257023.0 / 1008 * nu + 2903.0 / 32 * nu2))
+    beta7B = ((130325.0 / 756 - 796069.0 / 2016 * nu + 100019.0 / 864 * nu2)
+              + ma_o_mb * (1195759.0 / 18144 - 257023.0 / 1008 * nu + 2903.0 / 32 * nu2))
+
+    b6 = -1712.0 / 315
+
+    a0 = 96.0 / 5 * nu
+    a2 = -743.0 / 336 - 11.0 / 4 * nu
+    a4_nosigma = 34103.0 / 18144 + 13661.0 / 2016 * nu + 59.0 / 18 * nu2
+    a5_nobeta  = -4159.0 / 672 * Pi - 189.0 / 8 * Pi * nu
+    a6_nobeta  = (16447322263.0 / 139708800 + 16.0 / 3 * Pi2 - 856.0 / 105 * math.log(16.0)
+                  - 1712.0 / 105 * _EULER_GAMMA
+                  + nu * (451.0 / 48 * Pi2 - 56198689.0 / 217728) + nu2 * 541.0 / 896 - nu3 * 5605.0 / 2592)
+    a7_nobeta  = -4415.0 / 4032 * Pi + 358675.0 / 6048 * Pi * nu + 91495.0 / 1512 * Pi * nu2
+
+    sigma4 = (sigma4_SASB * SAdotSB + sigma4_SALh_SBLh * SAdotLh * SBdotLh
+              + sigma4_SA2 * SA2 + sigma4_SALh2 * SAdotLh ** 2
+              + sigma4_SB2 * SB2 + sigma4_SBLh2 * SBdotLh ** 2)
+
+    beta3 = beta3A * SAdotLh + beta3B * SBdotLh
+    beta5 = beta5A * SAdotLh + beta5B * SBdotLh
+    beta6 = beta6A * SAdotLh + beta6B * SBdotLh
+    beta7 = beta7A * SAdotLh + beta7B * SBdotLh
+
+    a = [0.0] * 8
+    b = [0.0] * 8
+    a[0], a[2] = a0, a2
+    a[3] = 4.0 * Pi - beta3
+    a[4] = a4_nosigma - sigma4
+    a[5] = a5_nobeta - beta5
+    a[6] = a6_nobeta - beta6
+    a[7] = a7_nobeta - beta7
+    b[6] = b6
+
+    domg = 0.0
+    for i in range(2, 8):
+        domg += (a[i] + b[i] * lnomg) * omg ** (i * oothree)
+    domg += 1.0
+    domg += a10_tidal * omg ** (10.0 * oothree)
+    domg *= a[0] * omg ** eleven_o_three
+
+    # Same sum truncated at 2PN (i = 2, 3, 4): Newtonian + 1PN + 1.5PN
+    # spin-orbit + 2PN spin-spin flux. See the docstring for why the
+    # frequency-domain integration divides by this rather than by domg.
+    domg_leading = 0.0
+    for i in (2, 3, 4):
+        domg_leading += (a[i] + b[i] * lnomg) * omg ** (i * oothree)
+    domg_leading += 1.0
+    domg_leading *= a[0] * omg ** eleven_o_three
+
+    return domg, domg_leading
+
+
 def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0, xp=np):
     """
     Core of the PN spin-precession ODE system, EOBPars->spin_flx ==
@@ -273,25 +401,17 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0, xp=np):
         2.5-3.5PN behaviour -- the thing that makes alpha(t) -> alpha(f)
         drift in the late inspiral -- back into alpha(Omega).
     """
-    nu2, nu3 = nu * nu, nu ** 3
-    Pi = math.pi
-    Pi2 = Pi * Pi
     oothree = 1.0 / 3.0
-    eleven_o_three = 11.0 / 3.0
 
     MA = nu_to_X1(nu, xp)
     MB = 1.0 - MA
-    dm = MA - MB
-    ma_o_mb = MA / MB
-    mb_o_ma = MB / MA
 
     SA = xp.asarray(SA, dtype=float)
     SB = xp.asarray(SB, dtype=float)
     Lh = xp.asarray(Lh, dtype=float)
 
-    lnomg = xp.log(omg)
     v = omg ** oothree
-    v2, v3 = v * v, v ** 3
+    v3 = v ** 3
     v5, v6, v7, v9 = v ** 5, v ** 6, v ** 7, v ** 9
 
     qSAB = SA / q + SB
@@ -299,23 +419,12 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0, xp=np):
     qSABLh = xp.dot(qSAB, Lh)
     SABqLh = xp.dot(SABq, Lh)
 
-    v5_cA = nu * (2.0 + 1.5 / q)
-    v5_cB = nu * (2.0 + 1.5 * q)
-    v7_cA = 0.5625 + 1.25 * nu - 0.041666666666666664 * nu2 + dm * (-0.5625 + 0.625 * nu)
-    v7_cB = 0.5625 + 1.25 * nu - 0.041666666666666664 * nu2 - dm * (-0.5625 + 0.625 * nu)
-    v9_cA = (0.84375 + 0.1875 * nu - 3.28125 * nu2 - 0.02083333333333 * nu3
-             + dm * (-0.84375 + 4.875 * nu - 0.15625 * nu2))
-    v9_cB = (0.84375 + 0.1875 * nu - 3.28125 * nu2 - 0.02083333333333 * nu3
-             - dm * (-0.84375 + 4.875 * nu - 0.15625 * nu2))
+    v5_cA, v5_cB, v7_cA, v7_cB, v9_cA, v9_cB = _spin_orbit_coefficients(nu, q, xp)
 
     csA = -0.25 * (3.0 + 1.0 / MA)
     csB = -0.25 * (3.0 + 1.0 / MB)
     csAL = -0.08333333333333333 * (1.0 + 27.0 / MA)
     csBL = -0.08333333333333333 * (1.0 + 27.0 / MB)
-
-    L2PN_v2 = 1.5 + 0.1666666666666667 * nu
-    L2PN_v4 = 3.375 - 2.375 * nu + 0.041666666666666664 * nu2
-    v4 = v2 * v2
 
     OmgANLO  = (v5 * v5_cA - 1.5 * v6 * qSABLh) * Lh + 0.5 * v6 * SB
     OmgBNLO  = (v5 * v5_cB - 1.5 * v6 * SABqLh) * Lh + 0.5 * v6 * SA
@@ -334,7 +443,7 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0, xp=np):
     dSA = SdotAN4LO
     dSB = SdotBN4LO
 
-    L2PN = 1.0 + v2 * L2PN_v2 + v4 * L2PN_v4
+    L2PN = _orbital_angular_momentum_factor(nu, v)
     v_o_nu = v / nu
 
     SALh = xp.dot(SA, Lh)
@@ -370,75 +479,12 @@ def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0, xp=np):
             Lh[2] * (Lh[0] * dLh[1] - Lh[1] * dLh[0]) / xp.where(on_axis, 1.0, div),
         )
 
-    # --- Eq. (A1) of arXiv:1307.4418: PN energy-balance domega/dt (3.5PN) ---
-    sigma4_SASB      =  247.0 / (48.0 * nu)
-    sigma4_SALh_SBLh = -721.0 / (48.0 * nu)
-    sigma4_SA2       =  233.0 / (96.0 * MA ** 2)
-    sigma4_SALh2     = -719.0 / (96.0 * MA ** 2)
-    sigma4_SB2       =  233.0 / (96.0 * MB ** 2)
-    sigma4_SBLh2     = -719.0 / (96.0 * MB ** 2)
-
-    beta3A = 113.0 / 12 + 25.0 / 4 * mb_o_ma
-    beta3B = 113.0 / 12 + 25.0 / 4 * ma_o_mb
-    beta5A = (31319.0 / 1008 - 1159.0 / 24 * nu) + mb_o_ma * (809.0 / 84 - 281.0 / 8 * nu)
-    beta5B = (31319.0 / 1008 - 1159.0 / 24 * nu) + ma_o_mb * (809.0 / 84 - 281.0 / 8 * nu)
-    beta6A = Pi * (75.0 / 2 + 151.0 / 6 * mb_o_ma)
-    beta6B = Pi * (75.0 / 2 + 151.0 / 6 * ma_o_mb)
-    beta7A = ((130325.0 / 756 - 796069.0 / 2016 * nu + 100019.0 / 864 * nu2)
-              + mb_o_ma * (1195759.0 / 18144 - 257023.0 / 1008 * nu + 2903.0 / 32 * nu2))
-    beta7B = ((130325.0 / 756 - 796069.0 / 2016 * nu + 100019.0 / 864 * nu2)
-              + ma_o_mb * (1195759.0 / 18144 - 257023.0 / 1008 * nu + 2903.0 / 32 * nu2))
-
-    b6 = -1712.0 / 315
-
-    a0 = 96.0 / 5 * nu
-    a2 = -743.0 / 336 - 11.0 / 4 * nu
-    a4_nosigma = 34103.0 / 18144 + 13661.0 / 2016 * nu + 59.0 / 18 * nu2
-    a5_nobeta  = -4159.0 / 672 * Pi - 189.0 / 8 * Pi * nu
-    a6_nobeta  = (16447322263.0 / 139708800 + 16.0 / 3 * Pi2 - 856.0 / 105 * math.log(16.0)
-                  - 1712.0 / 105 * _EULER_GAMMA
-                  + nu * (451.0 / 48 * Pi2 - 56198689.0 / 217728) + nu2 * 541.0 / 896 - nu3 * 5605.0 / 2592)
-    a7_nobeta  = -4415.0 / 4032 * Pi + 358675.0 / 6048 * Pi * nu + 91495.0 / 1512 * Pi * nu2
-
-    SAdotLh, SBdotLh = SALh, SBLh
     SAdotSB = xp.dot(SA, SB)
     SA2 = xp.dot(SA, SA)
     SB2 = xp.dot(SB, SB)
-
-    sigma4 = (sigma4_SASB * SAdotSB + sigma4_SALh_SBLh * SAdotLh * SBdotLh
-              + sigma4_SA2 * SA2 + sigma4_SALh2 * SAdotLh ** 2
-              + sigma4_SB2 * SB2 + sigma4_SBLh2 * SBdotLh ** 2)
-
-    beta3 = beta3A * SAdotLh + beta3B * SBdotLh
-    beta5 = beta5A * SAdotLh + beta5B * SBdotLh
-    beta6 = beta6A * SAdotLh + beta6B * SBdotLh
-    beta7 = beta7A * SAdotLh + beta7B * SBdotLh
-
-    a = [0.0] * 8
-    b = [0.0] * 8
-    a[0], a[2] = a0, a2
-    a[3] = 4.0 * Pi - beta3
-    a[4] = a4_nosigma - sigma4
-    a[5] = a5_nobeta - beta5
-    a[6] = a6_nobeta - beta6
-    a[7] = a7_nobeta - beta7
-    b[6] = b6
-
-    domg = 0.0
-    for i in range(2, 8):
-        domg += (a[i] + b[i] * lnomg) * omg ** (i * oothree)
-    domg += 1.0
-    domg += a10_tidal * omg ** (10.0 * oothree)
-    domg *= a[0] * omg ** eleven_o_three
-
-    # Same sum truncated at 2PN (i = 2, 3, 4): Newtonian + 1PN + 1.5PN
-    # spin-orbit + 2PN spin-spin flux. See the docstring for why the
-    # frequency-domain integration divides by this rather than by domg.
-    domg_leading = 0.0
-    for i in (2, 3, 4):
-        domg_leading += (a[i] + b[i] * lnomg) * omg ** (i * oothree)
-    domg_leading += 1.0
-    domg_leading *= a[0] * omg ** eleven_o_three
+    domg, domg_leading = _orbital_frequency_rate(
+        nu, omg, SALh, SBLh, SAdotSB, SA2, SB2, a10_tidal, xp=xp
+    )
 
     return dSA, dSB, dLh, dgamma, domg, domg_leading
 
