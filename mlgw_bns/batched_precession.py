@@ -253,7 +253,8 @@ def integrate_angles(
     initial_frequency_22,
     n_steps: int = N_STEPS,
     final_frequency_22=None,
-) -> TabulatedAngles:
+    full_state: bool = False,
+):
     r"""The PN spin-precession dynamics of one binary, on a fixed grid.
 
     What :func:`~mlgw_bns.precessing_model.euler_angles` integrates (the
@@ -275,10 +276,15 @@ def integrate_angles(
     final_frequency_22 : scalar, optional
         :math:`(2, 2)` frequency, geometric units, to integrate up to instead
         of TEOBResumS' stopping frequency.
+    full_state : bool
+        Also return the whole state :math:`[\vec{S}_A, \vec{S}_B, \hat{L},
+        \alpha - \gamma, \Omega]` and its derivative at the nodes.
 
     Returns
     -------
     TabulatedAngles
+        Or ``(angles, state, derivative)`` with ``full_state``, the last two
+        of shape ``(2 n_steps + 1, 11)``.
     """
     _, jnp = _jnp()
     nu = mass_ratio / (1.0 + mass_ratio) ** 2
@@ -315,17 +321,20 @@ def integrate_angles(
     x = jnp.concatenate([
         (x_reference + back_step * steps)[:0:-1], x_reference + forward_step * steps
     ])
-    state = jnp.concatenate([back[:0:-1], forward])[:, 6:10]
-    derivative = jnp.concatenate([back_derivative[:0:-1], forward_derivative])[:, 6:10]
-    return TabulatedAngles(
+    state = jnp.concatenate([back[:0:-1], forward])
+    derivative = jnp.concatenate([back_derivative[:0:-1], forward_derivative])
+    angles = TabulatedAngles(
         x=x,
-        state=state,
-        derivative=derivative,
+        state=state[:, 6:10],
+        derivative=derivative[:, 6:10],
         kappa_omega=binary.kappa_omega,
         omega_lo=omega_lo,
         omega_hi=omega_hi,
         alpha_reference=alpha_reference,
     )
+    if full_state:
+        return angles, state, derivative
+    return angles
 
 
 def batch_arguments(

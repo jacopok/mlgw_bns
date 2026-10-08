@@ -21,10 +21,10 @@ from mlgw_bns.precession_regression import (  # noqa: E402
     PrecessionRegressor,
     RegressedAngles,
     TrainingRanges,
+    _tail,
     carrier_table,
     fit_all_envelopes,
     fit_envelopes,
-    j_frame_angles,
     reference_frame,
     training_data,
 )
@@ -72,42 +72,45 @@ def grid():
     return AngleGrid()
 
 
-@pytest.mark.parametrize("continuation, tolerance", [(None, 1e-5), (-5.0, 1e-3)])
-def test_envelopes_reproduce_the_integrated_rotation(grid, continuation, tolerance):
-    """With envelopes fitted to a binary's own angles (no regression), the
-    representation gives back the integrated rotation, on both sides of the
-    reference frequency; less closely with the continuation prior, which
-    trades some of the fit near the merger for envelopes smooth in the
-    parameters."""
+def test_envelopes_reproduce_the_integrated_rotation(grid):
+    """With envelopes and switch state fitted to a binary's own angles (no
+    regression), the representation gives back the integrated rotation on
+    both sides of the reference frequency, and the integration from the
+    switch carries it to the merger."""
     integrate = jax.jit(lambda row, omega: astuple(integrate_angles(
         row[0], row[1], row[2], row[3:6], row[6:9], omega / np.pi,
         grid.omega_min / np.pi, N_STEPS, grid.omega_max / np.pi,
     )))
     momega = np.geomspace(grid.omega_min, grid.omega_max, 3000)
-    for row, omega_reference in zip(ROWS, OMEGA_REFERENCE):
-        exact = TabulatedAngles(*(np.asarray(a) for a in integrate(row, omega_reference)))
+    below = grid.x_of(momega) <= grid.x_switch
+    x, zeta, g, switch = training_data(grid, ROWS, OMEGA_REFERENCE, n_jobs=1)
+    for i, (row, omega_reference) in enumerate(zip(ROWS, OMEGA_REFERENCE)):
         frame = reference_frame(np, grid, row, omega_reference)
-        zeta, g = j_frame_angles(frame, exact.x, exact.state, exact.derivative, N_STEPS)
-        coefficients, residuals = fit_envelopes(
-            grid, frame, exact.x, zeta, g, continuation=continuation
-        )
-        assert max(residuals) < tolerance
+        coefficients, residuals = fit_envelopes(grid, frame, x[i], zeta[i], g[i])
+        assert max(residuals) < 1e-5
+        phases, rates = carrier_table(np, grid, frame)
+        tail = _tail(grid, frame, *(jax.numpy.asarray(a) for a in (coefficients, phases, rates, switch[i])))
         angles = RegressedAngles(
-            coefficients, *carrier_table(np, grid, frame), frame.rotation,
-            frame.g_reference, grid,
+            coefficients, phases, rates, frame.rotation, frame.g_reference,
+            *(np.asarray(a) for a in tail), grid,
         )
+        exact = TabulatedAngles(*(np.asarray(a) for a in integrate(row, omega_reference)))
         expected = [np.asarray(a) for a in exact.at_momega(jax.numpy.asarray(momega))]
-        assert np.max(rotation_difference(expected, angles.at_momega(momega))) < tolerance
+        difference = rotation_difference(expected, angles.at_momega(momega))
+        assert np.max(difference[below]) < 1e-5
+        assert np.max(difference[~below]) < 2e-4
 
 
 @pytest.fixture(scope="module")
 def regressor(grid):
     """A small regressor: enough to exercise the machinery, not to be accurate."""
     intrinsic, omega_reference = TrainingRanges().sample(48, seed=3)
-    x, zeta, g = training_data(grid, intrinsic, omega_reference, n_steps=512, batch=16)
+    x, zeta, g, switch = training_data(
+        grid, intrinsic, omega_reference, n_steps=512, batch=16, n_jobs=1
+    )
     coefficients, _ = fit_all_envelopes(grid, intrinsic, omega_reference, x, zeta, g, n_jobs=1)
     return PrecessionRegressor.train(
-        intrinsic, omega_reference, coefficients, n_components=(8, 8), grid=grid
+        intrinsic, omega_reference, coefficients, switch, n_components=(8, 8), grid=grid
     )
 
 

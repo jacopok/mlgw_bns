@@ -68,33 +68,45 @@ rotation taking :math:`\hat{z}` to :math:`\hat{n}`: this is
 Euler angles in the reference frame are what :class:`RegressedAngles`
 returns, as :class:`~mlgw_bns.batched_precession.TabulatedAngles` does.
 
-Where the envelopes are not determined
---------------------------------------
-Above :data:`CONTINUATION_X` (~150 Hz for a binary neutron star) the
-carriers turn too slowly to tell the three envelopes of :math:`\zeta` apart,
-and a free least-squares fit picks a split that depends on the carriers'
-phases there, which wind with the parameters. :func:`fit_envelopes` pulls it
-towards the envelopes' continuation from below (the modes' amplitudes
-growing as :math:`1 / L`); :func:`refine_envelopes` further pulls each
+The last cycles: integration
+----------------------------
+Above :attr:`AngleGrid.x_switch` (~165 Hz for a binary neutron star) the
+carriers turn too slowly to tell the envelopes apart: a least-squares fit
+there picks a split that depends on the carriers' phases, which wind with
+the parameters, and the regression cannot follow it. There are only a few
+precession cycles left, though, and the PN equations are integrated over
+them (:func:`_tail`, :data:`N_TAIL_STEPS` fixed DOP853 steps, ~2% of what
+the whole band takes), from the state the regressor gives at the switch:
+:math:`\hat{L}` and :math:`\alpha - \gamma` from the envelopes, and the two
+spins, whose in-plane components in the frame of :math:`\vec{J}` are fitted
+on the carriers as :math:`\zeta` is and whose envelopes there are regressed
+alongside (:func:`fit_switch_spins`).
+
+Where two carriers nearly coincide (:math:`q \simeq 1`) the split between
+their envelopes is again not determined; :func:`refine_envelopes` pulls each
 binary towards what a regressor trained on the others predicts for it.
 
 Status
 ------
-A prototype. With 4096 training binaries (:class:`TrainingRanges`), 64 + 64
-principal components and kernel ridge, against the integration
-(``visualization/precession_regression_study.py``, 128 held-out binaries,
-total masses 2.4--3.2, random lines of sight, 20--2048 Hz, ET noise, nothing
-optimized): waveform mismatches of 1.1e-4 median, 2.6e-3 at the 90th
-percentile, 8e-2 at worst (48% below 1e-4, 85% below 1e-3), the worst at
-:math:`q < 1.4` and edge-on. That is far above the surrogate's own error.
-The representation is not what limits it --- the fitted envelopes give back
-the integrated rotation to ~1e-6 rad without the continuation, 1e-4 with it
---- the regression is: the envelopes come out of it with 2--4% errors (G,
-which shifts the phase of every multipole, ~5e-3 rad below ~250 Hz,
-~0.1 rad near the merger). On four CPU cores the angles take 0.6 ms for one
-binary and 0.06 ms each in a batch of 128, against 141 ms and 29 ms for the
-integration; the whole precessing waveform 16 ms and 6.8 ms, against 150 ms
-and 34 ms.
+A prototype. Trained on 16384 binaries (uniform in :class:`TrainingRanges`;
+~25 minutes to integrate and fit on four CPU cores, ~15 to train), against
+the integration (``visualization/precession_regression_study.py``, 256
+held-out binaries, total masses 2.4--3.2, random lines of sight, 20--2048
+Hz, ET noise, nothing optimized): waveform mismatches of 5.8e-5 median,
+1.8e-3 at the 90th percentile, 6e-2 at worst. The error falls with the
+training set roughly as :math:`N^{-0.6}` (1.1e-4 median with 4096, 7.9e-5
+with 8192), but only for :math:`q \gtrsim 1.5` (median 3e-5 for
+:math:`q > 2`). Near equal masses (:math:`q < 1.5`: median 2--7e-4, 90th
+percentile ~1e-2) it does not, nor with twice as many binaries there: the
+beat of the two spins is a nonlinear function of them that the carriers get
+wrong by up to ~20% (the linearized model is good to ~1% for :math:`q >
+1.5`), and the envelopes wind across the parameter space with the error.
+The representation itself gives back the integrated rotation to ~1e-6 rad
+below the switch and ~1e-4 rad above it. On four CPU cores the angles take
+10 ms for one binary and 0.8 ms each in a batch of 128, against 155 ms and
+29 ms for the integration (mostly the 48 sequential steps above the
+switch); the whole precessing waveform 25 ms and 7.5 ms, against 155 ms and
+34 ms.
 """
 
 from __future__ import annotations
@@ -150,21 +162,37 @@ SPLITTING_FLOOR = 1e-3
 SMOOTHING_PENALTY = 1e-6
 RIDGE_PENALTY = 1e-9
 
-#: Above this ``x`` (a (2, 2) frequency of ~150 Hz for a total mass of 2.8)
-#: the carriers turn too slowly to tell the envelopes apart: there the fit is
-#: pulled towards their continuation from here (:func:`fit_envelopes`).
-CONTINUATION_X = -5.0
+#: Where the regression hands over to the integration, in ``x``: an orbital
+#: frequency of 7.2e-3, a (2, 2) frequency of ~165 Hz for a total mass of
+#: 2.8. Above it the carriers turn too slowly to tell the envelopes apart,
+#: and the last few precession cycles are cheap to integrate.
+X_SWITCH = -5.5
 
-#: Penalty pulling the envelopes towards a prior, where they are not
-#: determined by the data: in the last cycles before the merger, where the
-#: carriers barely turn, and between the two carriers where they nearly
-#: coincide (:func:`fit_envelopes`, :func:`refine_envelopes`).
+#: Fixed DOP853 steps from :data:`X_SWITCH` to :data:`OMEGA_MAX`. The angles
+#: are within ~1e-4 rad of the 2048-step integration's: the error of the
+#: cubic Hermite interpolation between the steps, which falls as their
+#: number to the fourth power.
+N_TAIL_STEPS = 48
+
+#: The integration from the switch steps uniformly in :math:`\ln \Omega -
+#: \kappa \Omega_{\rm switch} / \Omega`, with this :math:`\kappa`,
+#: closer to uniform in the precession phase, which turns fastest at the
+#: switch: 48 such steps are as accurate as ~100 uniform in :math:`\ln
+#: \Omega`.
+TAIL_KAPPA = 16.0
+
+#: Penalty pulling the envelopes towards a prior where they are not
+#: determined by the data, between the two carriers where they nearly
+#: coincide (:func:`refine_envelopes`).
 PRIOR_PENALTY = 1e-4
 
 
 @dataclass(frozen=True)
 class AngleGrid:
     """The orbital frequencies the angles are represented on.
+
+    The angles are regressed from ``omega_min`` up to ``x_switch``
+    (:attr:`x_range`), and integrated from there to ``omega_max``.
 
     Parameters
     ----------
@@ -174,12 +202,19 @@ class AngleGrid:
         Cubic B-spline cells of the envelopes, uniform in ``x``.
     n_quadrature : int
         Nodes of the carrier quadrature, uniform in ``x``.
+    x_switch : float
+        Where the integration takes over.
+    n_tail_steps : int
+        Its fixed DOP853 steps.
     """
 
     omega_min: float = OMEGA_MIN
     omega_max: float = OMEGA_MAX
     n_cells: int = N_CELLS
     n_quadrature: int = N_QUADRATURE
+    x_switch: float = X_SWITCH
+    n_tail_steps: int = N_TAIL_STEPS
+    tail_kappa: float = TAIL_KAPPA
 
     @property
     def kappa_omega(self) -> float:
@@ -193,7 +228,29 @@ class AngleGrid:
 
     @property
     def x_range(self) -> Tuple[float, float]:
-        return float(self.x_of(self.omega_min)), float(self.x_of(self.omega_max))
+        """The range of ``x`` the angles are regressed on."""
+        return float(self.x_of(self.omega_min)), float(self.x_switch)
+
+    @property
+    def x_end(self) -> float:
+        """``x`` at ``omega_max``, where the integration stops."""
+        return float(self.x_of(self.omega_max))
+
+    @property
+    def omega_switch(self) -> float:
+        return float(self.omega_of(self.x_switch))
+
+    @property
+    def tail_kappa_omega(self) -> float:
+        return self.tail_kappa * self.omega_switch
+
+    def tail_x_of(self, omega, xp=np):
+        """The variable the integration from the switch steps uniformly in."""
+        return xp.log(omega) - self.tail_kappa_omega / omega
+
+    @property
+    def tail_x_range(self) -> Tuple[float, float]:
+        return float(self.tail_x_of(self.omega_switch)), float(self.tail_x_of(self.omega_max))
 
     @property
     def n_coefficients(self) -> int:
@@ -220,7 +277,7 @@ class AngleGrid:
         """``(x, omega, d omega / dx)`` at the carrier quadrature nodes."""
         x = np.linspace(*self.x_range, self.n_quadrature)
         omega = self.omega_of(x)
-        omega[0], omega[-1] = self.omega_min, self.omega_max
+        omega[0] = self.omega_min
         return x, omega, omega**2 / (omega + self.kappa_omega)
 
 
@@ -469,8 +526,8 @@ def g_baseline(xp, grid: AngleGrid, frame: ReferenceFrame, rates, nodes=None):
     :math:`s_{A, B}` in the frame of :math:`\vec{J}`, carried by the slow and
     the fast carrier, :math:`\mathrm{d}G / \mathrm{d}x = (|s_A|^2
     \lambda_{\rm slow} + |s_B|^2 \lambda_{\rm fast}) / (L^2 (1 + \cos
-    \beta_J))`, zero at the reference; this is ~90% of :math:`g_0` below
-    :data:`CONTINUATION_X`. The coefficients are the values at
+    \beta_J))`, zero at the reference; this is ~90% of :math:`g_0` below ~250 Hz.
+    The coefficients are the values at
     :attr:`AngleGrid.coefficient_x`, so the baseline is not quite this
     function; it is the same in training and prediction.
     """
@@ -530,6 +587,9 @@ class RegressedAngles:
     rates: Any  # (2, n_quadrature)
     rotation: Any  # (3, 3)
     g_reference: Any
+    #: [L_x, L_y, L_z, alpha - gamma] above x_switch, (n_tail_steps + 1, 4)
+    tail_state: Any
+    tail_derivative: Any
     grid: AngleGrid = field(default_factory=AngleGrid)
 
     def _xp(self):
@@ -541,12 +601,25 @@ class RegressedAngles:
         r""":math:`(\alpha, \beta, \gamma)` at the orbital frequencies
         ``momega``, held at the ends of :attr:`grid`."""
         xp = self._xp()
-        omega = xp.clip(momega, self.grid.omega_min, self.grid.omega_max)
-        x = self.grid.x_of(omega, xp)
-        carriers = _carriers(xp, self.grid, self.phases, self.rates, x)
-        zeta, g = _evaluate(xp, self.grid, self.coefficients, carriers, x)
-        rotation = _rotation_from(xp, self.rotation, zeta, g + self.g_reference)
-        return euler_angles_of(xp, rotation)
+        grid = self.grid
+        omega = xp.clip(momega, grid.omega_min, grid.omega_max)
+        x = grid.x_of(omega, xp)
+        below = xp.minimum(x, grid.x_switch)
+        carriers = _carriers(xp, grid, self.phases, self.rates, below)
+        zeta, g = _evaluate(xp, grid, self.coefficients, carriers, below)
+        regressed = euler_angles_of(
+            xp, _rotation_from(xp, self.rotation, zeta, g + self.g_reference)
+        )
+        l_x, l_y, l_z, alpha_minus_gamma = _hermite(
+            xp, *grid.tail_x_range, self.tail_state.T, self.tail_derivative.T,
+            xp.clip(grid.tail_x_of(omega, xp), *grid.tail_x_range),
+        )
+        alpha = xp.arctan2(l_y, l_x)
+        integrated = (
+            alpha, xp.arctan2(xp.hypot(l_x, l_y), l_z), alpha - alpha_minus_gamma
+        )
+        above = x > grid.x_switch
+        return tuple(xp.where(above, b, a) for a, b in zip(regressed, integrated))
 
 
 def _register_pytree():
@@ -629,39 +702,13 @@ def _penalized_least_squares(cell, weights, factors, data, n_coefficients, prior
     return solution.reshape(n_blocks, n_coefficients)
 
 
-def _continuation(grid: AngleGrid, frame: ReferenceFrame, coefficients, x_start: float):
-    r"""The prior of :func:`fit_envelopes`: ``coefficients`` below
-    ``x_start``; above it, the envelopes of the two modes continued as
-    :math:`|\zeta| = |s_\perp| / L`, growing as :math:`1 / L` with a constant
-    phase, and the others held at their values at ``x_start`` (except
-    :math:`g_0`, the secular part of :math:`G`, which the data determine)."""
-    centres = grid.coefficient_x
-    above = centres > x_start
-    cell, weights = _bspline(np, grid, np.array([x_start]))
-    at_start = sum(coefficients[:, cell[0] + r] * weights[0, r] for r in range(4))
-    growth = orbital_angular_momentum(frame.nu, grid.omega_of(x_start)) / orbital_angular_momentum(
-        frame.nu, grid.omega_of(centres[above])
-    )
-    prior = coefficients.copy()
-    prior[:, above] = at_start[:, None]
-    prior[1:3, above] *= growth
-    prior[3] = coefficients[3]
-    return prior
-
-
-def fit_envelopes(
-    grid: AngleGrid, frame: ReferenceFrame, x, zeta, g, prior=None,
-    continuation: Optional[float] = CONTINUATION_X,
-):
+def fit_envelopes(grid: AngleGrid, frame: ReferenceFrame, x, zeta, g, prior=None):
     """The ``(7, n_coefficients)`` envelope coefficients fitting ``zeta``
-    and ``g`` at ``x`` (numpy), and the largest residuals of the two fits.
-
-    Without a ``prior``, the envelopes are fitted twice: the second time
-    pulled towards their :func:`_continuation` above ``continuation``.
-    """
-    if prior is None and continuation is not None:
-        first, _ = fit_envelopes(grid, frame, x, zeta, g, None, None)
-        prior = _continuation(grid, frame, first, continuation)
+    and ``g`` at the ``x`` within :attr:`AngleGrid.x_range` (numpy), and the
+    largest residuals of the two fits; ``prior``, see
+    :func:`refine_envelopes`."""
+    inside = x <= grid.x_range[1]
+    x, zeta, g = x[inside], zeta[inside], g[inside]
     phases, rates = carrier_table(np, grid, frame)
     e_1, e_2 = _carriers(np, grid, phases, rates, x)
     cell, weights = _bspline(np, grid, x)
@@ -688,6 +735,79 @@ def fit_envelopes(
     return coefficients, (np.max(np.abs(zeta_model - zeta)), np.max(np.abs(g_model - g)))
 
 
+#: The state at :attr:`AngleGrid.x_switch` the regressor gives besides the
+#: envelopes: for each spin, the values there of the three envelopes of its
+#: in-plane components in the frame of :math:`\vec{J}` (real and imaginary
+#: parts), then the two spins' components along :math:`\vec{J}`.
+N_SWITCH = 14
+
+
+def fit_switch_spins(grid: AngleGrid, frame: ReferenceFrame, x, spin_a, spin_b) -> np.ndarray:
+    r"""The :data:`N_SWITCH` regression targets of the spins at
+    :attr:`AngleGrid.x_switch`, from their components in the frame of
+    :math:`\vec{J}` at ``x``, ``(n, 3)`` each (numpy).
+
+    The in-plane components are fitted on the carriers as :math:`\zeta` is
+    (:func:`fit_envelopes`): they wind with the precession, their envelopes
+    do not.
+    """
+    inside = x <= grid.x_range[1]
+    phases, rates = carrier_table(np, grid, frame)
+    e_1, e_2 = _carriers(np, grid, phases, rates, x[inside])
+    cell, weights = _bspline(np, grid, x[inside])
+    at_switch_cell, at_switch_weights = _bspline(np, grid, np.array([grid.x_switch]))
+    factors = np.stack([np.ones_like(e_1), e_1, e_2], axis=1)
+    targets = []
+    for spin in (spin_a, spin_b):
+        envelopes = _penalized_least_squares(
+            cell, weights, factors, spin[inside, 0] + 1j * spin[inside, 1],
+            grid.n_coefficients,
+        )
+        values = sum(
+            envelopes[:, at_switch_cell[0] + r] * at_switch_weights[0, r] for r in range(4)
+        )
+        targets += [part for value in values for part in (value.real, value.imag)]
+    targets += [np.interp(grid.x_switch, x, spin[:, 2]) for spin in (spin_a, spin_b)]
+    return np.array(targets)
+
+
+def _tail(grid: AngleGrid, frame: ReferenceFrame, coefficients, phases, rates, switch):
+    r"""Integrate the precession from :attr:`AngleGrid.x_switch` to
+    ``omega_max``, from the regressed state there: :math:`\hat{L}` and
+    :math:`\alpha - \gamma` of the envelopes, the spins of ``switch`` (their
+    magnitudes restored). Returns ``[L_x, L_y, L_z, \alpha - \gamma]`` and
+    their ``x`` derivatives at the ``n_tail_steps + 1`` nodes (JAX)."""
+    from .batched_precession import _leg
+
+    _, jnp = _jnp()
+    x_switch = jnp.asarray(grid.x_switch)
+    e_1, e_2 = _carriers(jnp, grid, phases, rates, x_switch)
+    zeta, g = _evaluate(jnp, grid, coefficients, (e_1, e_2), x_switch)
+    rotation = _rotation_from(jnp, frame.rotation, zeta, g + frame.g_reference)
+    alpha, _, gamma = euler_angles_of(jnp, rotation)
+    spins = []
+    for i, spin in enumerate((frame.spin_a, frame.spin_b)):
+        values = switch[6 * i:6 * i + 6:2] + 1j * switch[6 * i + 1:6 * i + 6:2]
+        in_plane = values[0] + values[1] * e_1 + values[2] * e_2
+        vector = jnp.stack([in_plane.real, in_plane.imag, switch[12 + i]])
+        norm = jnp.sqrt(jnp.sum(vector**2))
+        scale = jnp.where(norm > 0, jnp.sqrt(jnp.sum(spin**2)) / jnp.where(norm > 0, norm, 1.0), 0.0)
+        spins.append(frame.rotation @ (vector * scale))
+    y0 = jnp.concatenate([
+        spins[0], spins[1], rotation[:, 2],
+        jnp.stack([alpha - gamma, jnp.asarray(grid.omega_switch)]),
+    ])
+    binary = _Binary(
+        nu=frame.nu, q=frame.mass_ratio, a10_tidal=frame.a10_tidal,
+        kappa_omega=grid.tail_kappa_omega,
+    )
+    states, derivatives = _leg(
+        binary, y0, (grid.tail_x_range[1] - grid.tail_x_range[0]) / grid.n_tail_steps,
+        grid.n_tail_steps,
+    )
+    return states[:, 6:10], derivatives[:, 6:10]
+
+
 # ---------------------------------------------------------------------------
 # The regressor
 # ---------------------------------------------------------------------------
@@ -700,7 +820,11 @@ class TrainingRanges:
     Uniform in each of these, and in the direction of each in-plane spin;
     log-uniform in the reference orbital frequency :math:`M \\Omega_{\\rm
     ref} = \\pi M f_{\\rm ref}` (the default covers 20 Hz for total masses
-    of 1.3--10).
+    of 1.3--10). The mass ratio is :math:`q_{\\min} + (q_{\\max} -
+    q_{\\min}) u^p` with :math:`u` uniform and :math:`p` =
+    ``mass_ratio_exponent``: :math:`p > 1` puts more of the binaries near
+    equal masses, where the two spins precess at comparable rates and the
+    envelopes are hardest to regress.
     """
 
     mass_ratio: Tuple[float, float] = (1.0, 3.0)
@@ -708,6 +832,7 @@ class TrainingRanges:
     chi_z: Tuple[float, float] = (-0.5, 0.5)
     chi_in_plane: Tuple[float, float] = (0.0, 0.4)
     omega_reference: Tuple[float, float] = (4e-4, 3e-3)
+    mass_ratio_exponent: float = 1.0
 
     def sample(self, n: int, seed: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
         """``n`` binaries: the ``(n, 9)`` intrinsic rows of
@@ -715,7 +840,8 @@ class TrainingRanges:
         ``(n,)`` reference orbital frequencies."""
         rng = np.random.default_rng(seed)
         intrinsic = np.empty((n, 9))
-        intrinsic[:, 0] = rng.uniform(*self.mass_ratio, n)
+        low, high = self.mass_ratio
+        intrinsic[:, 0] = low + (high - low) * rng.uniform(0.0, 1.0, n) ** self.mass_ratio_exponent
         intrinsic[:, 1:3] = rng.uniform(*self.lambda_, (n, 2))
         for start in (3, 6):
             magnitude = rng.uniform(*self.chi_in_plane, n)
@@ -764,6 +890,18 @@ def _unpack(xp, zeta_real, g_real, n: int):
     return xp.stack(zeta + g, axis=1)
 
 
+def _training_binary(grid: AngleGrid, row, omega_reference, x, state, derivative, stride):
+    frame = reference_frame(np, grid, row, omega_reference)
+    zeta, g = j_frame_angles(
+        frame, x, state[:, 6:10], derivative[:, 6:10], (x.size - 1) // 2
+    )
+    rotation = np.asarray(frame.rotation)
+    switch = fit_switch_spins(
+        grid, frame, x, state[:, 0:3] @ rotation, state[:, 3:6] @ rotation
+    )
+    return x[::stride], zeta[::stride], g[::stride], switch
+
+
 def training_data(
     grid: AngleGrid,
     intrinsic: np.ndarray,
@@ -771,39 +909,46 @@ def training_data(
     n_steps: int = N_STEPS,
     batch: int = 64,
     stride: int = 2,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    r"""Integrate the precession of each binary over the whole of ``grid``.
+    n_jobs: int = -1,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    r"""Integrate the precession of each binary over :attr:`AngleGrid.x_range`.
 
     Returns ``x``, :math:`\zeta` and :math:`G - G_{\rm ref}`
     (:func:`j_frame_angles`) on every ``stride``-th integration node,
-    ``(N, 2 n_steps / stride + 1)`` each; the reference is the middle node.
+    ``(N, 2 n_steps / stride + 1)`` each (the reference is the middle node),
+    and the ``(N, N_SWITCH)`` targets of :func:`fit_switch_spins`.
     """
-    from dataclasses import astuple
+    from joblib import Parallel, delayed
 
     jax, jnp = _jnp()
 
     def one(row, omega):
-        return astuple(integrate_angles(
+        angles, state, derivative = integrate_angles(
             row[0], row[1], row[2], row[3:6], row[6:9], omega / np.pi,
-            grid.omega_min / np.pi, n_steps, grid.omega_max / np.pi,
-        ))[:3]
+            grid.omega_min / np.pi, n_steps, grid.omega_switch / np.pi,
+            full_state=True,
+        )
+        return angles.x, state, derivative
 
     integrate = jax.jit(jax.vmap(one))
-    xs, zetas, gs = [], [], []
-    for start in range(0, len(intrinsic), batch):
-        rows = intrinsic[start:start + batch]
-        omegas = omega_reference[start:start + batch]
-        x, state, derivative = (
-            np.asarray(a) for a in integrate(jnp.asarray(rows), jnp.asarray(omegas))
-        )
-        for i in range(len(rows)):
-            frame = reference_frame(np, grid, rows[i], omegas[i])
-            zeta, g = j_frame_angles(frame, x[i], state[i], derivative[i], n_steps)
-            xs.append(x[i, ::stride])
-            zetas.append(zeta[::stride])
-            gs.append(g[::stride])
-        logging.info("precession regression: integrated %i/%i", start + len(rows), len(intrinsic))
-    return np.array(xs), np.array(zetas), np.array(gs)
+    results = []
+    with Parallel(n_jobs=n_jobs) as parallel:
+        for start in range(0, len(intrinsic), batch):
+            rows = intrinsic[start:start + batch]
+            omegas = omega_reference[start:start + batch]
+            x, state, derivative = (
+                np.asarray(a) for a in integrate(jnp.asarray(rows), jnp.asarray(omegas))
+            )
+            results += parallel(
+                delayed(_training_binary)(
+                    grid, rows[i], omegas[i], x[i], state[i], derivative[i], stride
+                )
+                for i in range(len(rows))
+            )
+            logging.info(
+                "precession regression: integrated %i/%i", start + len(rows), len(intrinsic)
+            )
+    return tuple(np.array([r[k] for r in results]) for k in range(4))
 
 
 def _fit_one(grid, row, omega_reference, x, zeta, g, prior):
@@ -831,7 +976,7 @@ def fit_all_envelopes(
 
 def refine_envelopes(
     grid: AngleGrid,
-    intrinsic, omega_reference, x, zeta, g, coefficients,
+    intrinsic, omega_reference, x, zeta, g, coefficients, switch,
     iterations: int = 3,
     folds: int = 4,
     n_jobs: int = -1,
@@ -840,10 +985,10 @@ def refine_envelopes(
     r"""Make the envelopes predictable from the parameters, where the data
     leave them free.
 
-    In the last cycles before the merger the carriers barely turn, and the
-    split of :math:`\zeta` between the three envelopes is not determined by
-    one binary's angles: the least-squares fit picks one depending on the
-    carriers' phases there, which wind with the parameters. Each iteration
+    Where the two carriers nearly coincide, the split of :math:`\zeta`
+    between their envelopes is not determined by one binary's angles: the
+    least-squares fit picks one depending on the carriers' relative phase,
+    which winds with the parameters. Each iteration
     refits every binary with :data:`PRIOR_PENALTY` pulling it towards the
     prediction of a :class:`PrecessionRegressor` trained on the other
     ``folds - 1`` folds, so that the undetermined part follows what the
@@ -858,7 +1003,7 @@ def refine_envelopes(
             train = fold_of != fold
             regressor = PrecessionRegressor.train(
                 intrinsic[train], omega_reference[train], coefficients[train],
-                grid=grid, **train_kwargs,
+                switch[train], grid=grid, **train_kwargs,
             )
             priors[~train] = regressor.predict_coefficients(
                 intrinsic[~train], omega_reference[~train]
@@ -871,6 +1016,30 @@ def refine_envelopes(
             iteration + 1, residuals[:, 0].max(), residuals[:, 1].max(),
         )
     return coefficients, residuals
+
+
+def spin_projections(xp, intrinsic, omega_reference):
+    r"""The spins' projections on :math:`\vec{J}` at the reference, ``(N,
+    2)``: the regressor learns those at the switch relative to them."""
+    q = intrinsic[:, 0]
+    nu = q / (1.0 + q) ** 2
+    mass_a = nu_to_X1(nu, xp)
+    spin_a = intrinsic[:, 3:6] * mass_a[:, None] ** 2
+    spin_b = intrinsic[:, 6:9] * (1.0 - mass_a)[:, None] ** 2
+    l_reference = orbital_angular_momentum(nu, omega_reference)
+    j = spin_a + spin_b + xp.stack([0.0 * q, 0.0 * q, l_reference], axis=1)
+    j_hat = j / xp.sqrt(xp.sum(j * j, axis=1))[:, None]
+    return xp.stack(
+        [xp.sum(spin_a * j_hat, axis=1), xp.sum(spin_b * j_hat, axis=1)], axis=1
+    )
+
+
+def _switch_targets(xp, intrinsic, omega_reference, switch, inverse: bool):
+    """The switch targets with the projections on J taken relative to those
+    at the reference (or, ``inverse``, back)."""
+    projections = spin_projections(xp, intrinsic, omega_reference)
+    sign = 1.0 if inverse else -1.0
+    return xp.concatenate([switch[:, :12], switch[:, 12:] + sign * projections], axis=1)
 
 
 def _g_baselines(grid: AngleGrid, intrinsic, omega_reference) -> np.ndarray:
@@ -886,7 +1055,8 @@ def _g_baselines(grid: AngleGrid, intrinsic, omega_reference) -> np.ndarray:
 @dataclass
 class PrecessionRegressor:
     """Precession angles from the parameters, by PCA and kernel ridge on the
-    envelopes of :func:`fit_envelopes`; see the module docstring.
+    envelopes of :func:`fit_envelopes` (and kernel ridge on the spins at the
+    switch, :func:`fit_switch_spins`); see the module docstring.
 
     Build one with :meth:`train`; :meth:`angles` gives the
     :class:`RegressedAngles` of a binary in numpy, :meth:`jax_angles` a
@@ -906,13 +1076,15 @@ class PrecessionRegressor:
         intrinsic: np.ndarray,
         omega_reference: np.ndarray,
         coefficients: np.ndarray,
+        switch: np.ndarray,
         n_components: Tuple[int, int] = (64, 64),
         kernel_gamma: float = 0.02,
         grid: AngleGrid = AngleGrid(),
         ranges: TrainingRanges = TrainingRanges(),
     ) -> "PrecessionRegressor":
         """Fit the PCAs and the regressor to the envelope ``coefficients``
-        of :func:`fit_all_envelopes` (or :func:`refine_envelopes`).
+        of :func:`fit_all_envelopes` (or :func:`refine_envelopes`) and the
+        ``switch`` targets of :func:`training_data`.
 
         Parameters
         ----------
@@ -928,12 +1100,14 @@ class PrecessionRegressor:
 
         coefficients = coefficients.copy()
         coefficients[:, 3] -= _g_baselines(grid, intrinsic, omega_reference)
+        switch = _switch_targets(np, intrinsic, omega_reference, switch, inverse=False)
         zeta_real, g_real = _pack(coefficients)
         pca_zeta = PrincipalComponentAnalysisModel(n_components[0]).fit(zeta_real)
         pca_g = PrincipalComponentAnalysisModel(n_components[1]).fit(g_real)
         reduced = np.concatenate([
             PrincipalComponentAnalysisModel.reduce_data(zeta_real, pca_zeta),
             PrincipalComponentAnalysisModel.reduce_data(g_real, pca_g),
+            switch,
         ], axis=1)
         network = KernelRidgeNetwork(
             Hyperparameters.default_kernel_ridge(len(intrinsic), kernel_gamma=kernel_gamma)
@@ -941,37 +1115,59 @@ class PrecessionRegressor:
         network.fit(regression_features(np, intrinsic, omega_reference), reduced)
         return cls(grid=grid, ranges=ranges, pca_zeta=pca_zeta, pca_g=pca_g, network=network)
 
-    def predict_coefficients(self, intrinsic: np.ndarray, omega_reference: np.ndarray) -> np.ndarray:
-        """The ``(N, 7, n_coefficients)`` envelope coefficients (numpy)."""
+    @property
+    def _split(self) -> Tuple[int, int]:
+        """Where the outputs of :attr:`network` change from the zeta to the G
+        principal components, and from those to the switch targets."""
+        k = self.pca_zeta.eigenvalues.size
+        return k, k + self.pca_g.eigenvalues.size
+
+    def predict(self, intrinsic: np.ndarray, omega_reference: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """The ``(N, 7, n_coefficients)`` envelope coefficients and the
+        ``(N, N_SWITCH)`` switch targets (numpy)."""
         from .principal_component_analysis import PrincipalComponentAnalysisModel
 
         reduced = self.network.predict(regression_features(np, intrinsic, omega_reference))
-        k = self.pca_zeta.eigenvalues.size
+        k, kk = self._split
         coefficients = _unpack(
             np,
             PrincipalComponentAnalysisModel.reconstruct_data(reduced[:, :k], self.pca_zeta),
-            PrincipalComponentAnalysisModel.reconstruct_data(reduced[:, k:], self.pca_g),
+            PrincipalComponentAnalysisModel.reconstruct_data(reduced[:, k:kk], self.pca_g),
             self.grid.n_coefficients,
         )
         coefficients[:, 3] += _g_baselines(self.grid, intrinsic, omega_reference)
-        return coefficients
+        return coefficients, _switch_targets(
+            np, intrinsic, omega_reference, reduced[:, kk:], inverse=True
+        )
+
+    def predict_coefficients(self, intrinsic: np.ndarray, omega_reference: np.ndarray) -> np.ndarray:
+        """The ``(N, 7, n_coefficients)`` envelope coefficients (numpy)."""
+        return self.predict(intrinsic, omega_reference)[0]
 
     def angles(self, intrinsic, omega_reference) -> RegressedAngles:
-        """The :class:`RegressedAngles` of one binary, in numpy: ``intrinsic``
-        :math:`= [q, \\Lambda_1, \\Lambda_2, \\vec{\\chi}_1, \\vec{\\chi}_2]`,
-        the spins given at the orbital frequency ``omega_reference``."""
+        """The :class:`RegressedAngles` of one binary, in numpy (but for the
+        integration above the switch, in JAX): ``intrinsic`` :math:`= [q,
+        \\Lambda_1, \\Lambda_2, \\vec{\\chi}_1, \\vec{\\chi}_2]`, the spins given
+        at the orbital frequency ``omega_reference``."""
+        _, jnp = _jnp()
         intrinsic = np.asarray(intrinsic, dtype=float)
-        coefficients = self.predict_coefficients(intrinsic[None], np.array([omega_reference]))[0]
+        coefficients, switch = self.predict(intrinsic[None], np.array([omega_reference]))
         frame = reference_frame(np, self.grid, intrinsic, float(omega_reference))
         phases, rates = carrier_table(np, self.grid, frame)
+        tail = _tail(
+            self.grid, frame, jnp.asarray(coefficients[0]), jnp.asarray(phases),
+            jnp.asarray(rates), jnp.asarray(switch[0]),
+        )
         return RegressedAngles(
-            coefficients, phases, rates, np.asarray(frame.rotation), float(frame.g_reference), self.grid
+            coefficients[0], phases, rates, np.asarray(frame.rotation),
+            float(frame.g_reference), *(np.asarray(a) for a in tail), self.grid,
         )
 
     def jax_coefficients(self) -> Callable:
-        """A JAX function ``(intrinsic, omega_reference) -> (N, 7,
-        n_coefficients)``: the regressed envelope coefficients, without the
-        :func:`g_baseline` of :math:`g_0`."""
+        """A JAX function ``(intrinsic, omega_reference) -> (coefficients,
+        switch)``: the regressed ``(N, 7, n_coefficients)`` envelope
+        coefficients, without the :func:`g_baseline` of :math:`g_0`, and the
+        ``(N, N_SWITCH)`` switch targets."""
         from .batched import _freeze_kernel_ridge, _kernel_ridge
 
         _, jnp = _jnp()
@@ -983,7 +1179,7 @@ class PrecessionRegressor:
         param_scale = jnp.asarray(self.network.param_scaler.scale_)
         target_mean = jnp.asarray(self.network.target_scaler.mean_)
         target_scale = jnp.asarray(self.network.target_scaler.scale_)
-        k = self.pca_zeta.eigenvalues.size
+        k, kk = self._split
         blocks = []
         for pca in (self.pca_zeta, self.pca_g):
             # reduced -> data: (reduced * scaling) @ eigenvectors.T + mean
@@ -998,8 +1194,10 @@ class PrecessionRegressor:
             (reduced,) = _kernel_ridge(jnp, (features - param_mean) / param_scale, [kernel])
             reduced = reduced * target_scale + target_mean
             zeta_real = reduced[:, :k] @ blocks[0][0] + blocks[0][1]
-            g_real = reduced[:, k:] @ blocks[1][0] + blocks[1][1]
-            return _unpack(jnp, zeta_real, g_real, n)
+            g_real = reduced[:, k:kk] @ blocks[1][0] + blocks[1][1]
+            return _unpack(jnp, zeta_real, g_real, n), _switch_targets(
+                jnp, intrinsic, omega_reference, reduced[:, kk:], inverse=True
+            )
 
         return coefficients
 
@@ -1020,11 +1218,14 @@ class PrecessionRegressor:
         grid = self.grid
         nodes = tuple(jnp.asarray(a) for a in grid.quadrature_nodes())
 
-        def one_binary(row, omega_reference, coefficients_row):
+        def one_binary(row, omega_reference, coefficients_row, switch_row):
             frame = reference_frame(jnp, grid, row, omega_reference)
             phases, rates = carrier_table(jnp, grid, frame, nodes)
             coefficients_row = coefficients_row.at[3].add(g_baseline(jnp, grid, frame, rates, nodes))
-            return RegressedAngles(coefficients_row, phases, rates, frame.rotation, frame.g_reference, grid)
+            tail = _tail(grid, frame, coefficients_row, phases, rates, switch_row)
+            return RegressedAngles(
+                coefficients_row, phases, rates, frame.rotation, frame.g_reference, *tail, grid
+            )
 
         def angles(intrinsic, total_mass, reference_frequency_hz, start_frequency_hz=None):
             intrinsic = jnp.atleast_2d(jnp.asarray(intrinsic, jnp.float64))
@@ -1034,7 +1235,9 @@ class PrecessionRegressor:
                 for value in (total_mass, reference_frequency_hz)
             )
             omega_reference = np.pi * reference_frequency_hz * total_mass * SUN_MASS_SECONDS
-            return jax.vmap(one_binary)(intrinsic, omega_reference, coefficients(intrinsic, omega_reference))
+            return jax.vmap(one_binary)(
+                intrinsic, omega_reference, *coefficients(intrinsic, omega_reference)
+            )
 
         return angles
 

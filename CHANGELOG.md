@@ -221,31 +221,37 @@ loaded, and the waveforms are referenced differently in time and phase.
     `PrecessingModel.jax_predict(precession_regressor=...)` (and
     `jax_predict_modes`, `batched_precession.precessing_mode_components(...,
     precession=...)`) take the Euler angles from a regressor instead of
-    integrating the PN precession equations, which was ~95% of the cost of a
-    JAX precessing waveform. The Euler angles themselves cannot be regressed:
-    in the reference frame `alpha` swings by ~pi each time `Lhat` passes near
-    `z`, and in the frame of `J` its winding number jumps where the two
-    in-plane spins are comparable. Instead, in the frame of `J`, the in-plane
-    part of `Lhat` is written as smooth envelopes times two carriers
-    `exp(i Phi_k)`, whose derivatives --- the normal-mode frequencies of the
-    linearized two-spin precession, with `|J| / L` evolving and each mode
-    carried round by the other --- are known in closed form and integrated by
-    a quadrature; `alpha_J - gamma_J`, from the minimal-rotation condition,
-    the same way, with an analytic baseline for its secular growth. The
-    envelopes (cubic B-splines, fitted by penalized least squares to the
-    integrated angles) are compressed by PCA and regressed by
-    `KernelRidgeNetwork`. Against the integration (4096 training binaries,
-    128 held out, `visualization/precession_regression_study.py`): waveform
-    mismatches of 1.1e-4 median, 2.6e-3 at the 90th percentile, 8e-2 at
-    worst, the regression of the envelopes (2--4% errors) being the limit;
-    the angles take 0.6 ms for one binary and 0.06 ms each in a batch of
-    128, against 141 ms and 29 ms, and the whole waveform 16 ms and 6.8 ms
-    against 150 ms and 34 ms (four CPU cores). `twist_waveform`'s PN
-    coefficients, 2PN orbital angular momentum and `dOmega/dt` are now
-    helpers (`_spin_orbit_coefficients`, `orbital_angular_momentum`,
-    `_orbital_frequency_rate`), unchanged to the last bit;
-    `batched_precession.integrate_angles(final_frequency_22=...)` integrates
-    up to a given frequency.
+    integrating the PN precession equations over the whole band, which was
+    ~95% of the cost of a JAX precessing waveform. The Euler angles
+    themselves cannot be regressed: in the reference frame `alpha` swings by
+    ~pi each time `Lhat` passes near `z`, and in the frame of `J` its winding
+    number jumps where the two in-plane spins are comparable. Instead, in the
+    frame of `J`, the in-plane part of `Lhat` is written as smooth envelopes
+    times two carriers `exp(i Phi_k)`, whose derivatives --- the normal-mode
+    frequencies of the linearized two-spin precession, with `|J| / L`
+    evolving and each mode carried round by the other --- are known in
+    closed form and integrated by a quadrature; `alpha_J - gamma_J`, from
+    the minimal-rotation condition, the same way, with an analytic baseline
+    for its secular growth. The envelopes (cubic B-splines, fitted by
+    penalized least squares to the integrated angles) are compressed by PCA
+    and regressed by `KernelRidgeNetwork`, up to ~165 Hz (for a total mass of
+    2.8); above, where the carriers turn too slowly to tell the envelopes
+    apart, the last few precession cycles are integrated (48 DOP853 steps)
+    from the state the regressor gives there, the spins included. Trained
+    on 16384 binaries, against the integration
+    (`visualization/precession_regression_study.py`, 256 held out): waveform
+    mismatches of 5.8e-5 median, 1.8e-3 at the 90th percentile, 6e-2 at
+    worst, falling as ~N^-0.6 with the training set (1.1e-4 with 4096) for
+    `q > 1.5` but not below, where the carriers get the two spins' beat
+    wrong by up to ~20%. The angles take 10 ms for one binary and 0.8 ms
+    each in a batch of 128, against 155 ms and 29 ms, and the whole waveform
+    25 ms and 7.5 ms against 155 ms and 34 ms (four CPU cores).
+    `twist_waveform`'s PN coefficients, 2PN orbital angular momentum and
+    `dOmega/dt` are now helpers (`_spin_orbit_coefficients`,
+    `orbital_angular_momentum`, `_orbital_frequency_rate`), unchanged to the
+    last bit; `batched_precession.integrate_angles(final_frequency_22=...,
+    full_state=...)` integrates up to a given frequency and returns the
+    spins too.
 - A docs page on precession (`docs/explanation/precession.md`): the twist,
     the conventions of the Euler angles and of the orbital phase at the
     reference frequency, and how to reproduce TEOBResumS' precessing waveforms
