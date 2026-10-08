@@ -935,7 +935,10 @@ class PrecessingModel:
         )
 
     def jax_predict(
-        self, modes: Optional[Sequence] = None, n_steps: Optional[int] = None
+        self,
+        modes: Optional[Sequence] = None,
+        n_steps: Optional[int] = None,
+        precession_regressor=None,
     ) -> Callable:
         r"""A pure JAX function computing :meth:`predict` for a batch of binaries.
 
@@ -950,15 +953,23 @@ class PrecessingModel:
         n_steps : int, optional
             Steps of each leg of the precession integration; defaults to
             :data:`mlgw_bns.batched_precession.N_STEPS`.
+        precession_regressor : PrecessionRegressor, optional
+            Take the precession angles from this regressor
+            (:mod:`mlgw_bns.precession_regression`, a prototype) instead of
+            integrating them.
         """
         from .batched_precession import N_STEPS, precessing_waveform
 
         return precessing_waveform(
-            self.model, modes, N_STEPS if n_steps is None else n_steps
+            self.model, modes, N_STEPS if n_steps is None else n_steps,
+            None if precession_regressor is None else precession_regressor.jax_angles(),
         )
 
     def jax_predict_modes(
-        self, modes: Optional[Sequence] = None, n_steps: Optional[int] = None
+        self,
+        modes: Optional[Sequence] = None,
+        n_steps: Optional[int] = None,
+        precession_regressor=None,
     ) -> Callable:
         r"""A pure JAX function giving each co-precessing multipole and its
         twist, for a batch of binaries.
@@ -969,7 +980,8 @@ class PrecessingModel:
         from .batched_precession import N_STEPS, precessing_mode_components
 
         return precessing_mode_components(
-            self.model, modes, N_STEPS if n_steps is None else n_steps
+            self.model, modes, N_STEPS if n_steps is None else n_steps,
+            None if precession_regressor is None else precession_regressor.jax_angles(),
         )
 
     def mode_components(

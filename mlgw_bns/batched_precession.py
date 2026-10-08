@@ -214,6 +214,35 @@ class TabulatedAngles:
         return alpha, beta, alpha - alpha_minus_gamma
 
 
+def _reference_state(binary: _Binary, chi_1, chi_2, reference_frequency_22):
+    r"""The state ``y`` at the reference point, where :math:`\hat{L} = \hat{z}`,
+    and :math:`\alpha` there.
+
+    :math:`\gamma` starts at TEOBResumS' NLO initial condition
+    (:func:`~mlgw_bns.twist_waveform.alpha_initial_condition`), :math:`\alpha`
+    at the direction :math:`\hat{L}` leaves :math:`\hat{z}` in, the limit
+    from above (as the numpy path, which takes the next sample's).
+    """
+    _, jnp = _jnp()
+    mass_a = nu_to_X1(binary.nu, jnp)
+    mass_b = 1.0 - mass_a
+    gamma_0 = alpha_initial_condition(
+        mass_a / mass_b, *(chi_1[i] for i in range(3)), *(chi_2[i] for i in range(3)),
+        reference_frequency_22, xp=jnp,
+    )
+    y0 = jnp.concatenate([
+        chi_1 * mass_a**2,
+        chi_2 * mass_b**2,
+        jnp.array([0.0, 0.0, 1.0]),
+        jnp.stack([0.0 * gamma_0, np.pi * reference_frequency_22]),
+    ])
+    d_l = _rhs(jnp, binary, y0)[6:8]
+    alpha_reference = jnp.where(
+        jnp.hypot(*d_l) > 0, jnp.arctan2(d_l[1], d_l[0]), 0.0
+    )
+    return y0.at[9].set(alpha_reference - gamma_0), alpha_reference
+
+
 def integrate_angles(
     mass_ratio,
     lambda_1,
@@ -223,6 +252,7 @@ def integrate_angles(
     reference_frequency_22,
     initial_frequency_22,
     n_steps: int = N_STEPS,
+    final_frequency_22=None,
 ) -> TabulatedAngles:
     r"""The PN spin-precession dynamics of one binary, on a fixed grid.
 
@@ -242,6 +272,9 @@ def integrate_angles(
         the spins are given, and the lowest needed.
     n_steps : int
         Steps of each of the two legs.
+    final_frequency_22 : scalar, optional
+        :math:`(2, 2)` frequency, geometric units, to integrate up to instead
+        of TEOBResumS' stopping frequency.
 
     Returns
     -------
@@ -253,7 +286,11 @@ def integrate_angles(
     mass_b = 1.0 - mass_a
     omega_reference = np.pi * reference_frequency_22
     omega_lo = jnp.minimum(np.pi * initial_frequency_22, omega_reference)
-    omega_hi = 1.1 * eob_mrg_momg(nu, mass_a, mass_b, chi_1[2], chi_2[2], xp=jnp)
+    omega_hi = (
+        1.1 * eob_mrg_momg(nu, mass_a, mass_b, chi_1[2], chi_2[2], xp=jnp)
+        if final_frequency_22 is None
+        else np.pi * final_frequency_22
+    )
     binary = _Binary(
         nu=nu,
         q=mass_a / mass_b,
@@ -264,23 +301,7 @@ def integrate_angles(
     def x_of(omega):
         return jnp.log(omega) - binary.kappa_omega / omega
 
-    gamma_0 = alpha_initial_condition(
-        mass_a / mass_b, *(chi_1[i] for i in range(3)), *(chi_2[i] for i in range(3)),
-        reference_frequency_22, xp=jnp,
-    )
-    y0 = jnp.concatenate([
-        chi_1 * mass_a**2,
-        chi_2 * mass_b**2,
-        jnp.array([0.0, 0.0, 1.0]),
-        jnp.stack([0.0 * gamma_0, omega_reference]),
-    ])
-    # alpha where L = z, the limit from above (as the numpy path, which takes
-    # the next sample's)
-    d_l = _rhs(jnp, binary, y0)[6:8]
-    alpha_reference = jnp.where(
-        jnp.hypot(*d_l) > 0, jnp.arctan2(d_l[1], d_l[0]), 0.0
-    )
-    y0 = y0.at[9].set(alpha_reference - gamma_0)
+    y0, alpha_reference = _reference_state(binary, chi_1, chi_2, reference_frequency_22)
     x_reference = x_of(omega_reference)
     back_step = (x_of(omega_lo) - x_reference) / n_steps
     forward_step = (x_of(omega_hi) - x_reference) / n_steps
@@ -402,7 +423,10 @@ def precession_angles(model: "Model", n_steps: int = N_STEPS) -> Callable:
 
 
 def precessing_mode_components(
-    model: "Model", modes: Optional[Sequence] = None, n_steps: int = N_STEPS
+    model: "Model",
+    modes: Optional[Sequence] = None,
+    n_steps: int = N_STEPS,
+    precession: Optional[Callable] = None,
 ) -> Callable:
     r"""A JAX function giving each co-precessing multipole and its twist,
     batched.
@@ -441,10 +465,17 @@ def precessing_mode_components(
     n_steps : int
         Steps of each leg of the precession integration
         (:func:`integrate_angles`).
+    precession : callable, optional
+        What gives the angles in place of :func:`precession_angles` (and so
+        what ``angles`` must come from): a function with its arguments,
+        returning an object with an ``at_momega`` method that ``jax.vmap``
+        can map over, such as
+        :meth:`PrecessionRegressor.jax_angles
+        <mlgw_bns.precession_regression.PrecessionRegressor.jax_angles>`.
     """
     jax, jnp = _jnp()
     modes = [tuple(int(i) for i in lm) for lm in (model.modes if modes is None else modes)]
-    integrate = precession_angles(model, n_steps)
+    integrate = precession_angles(model, n_steps) if precession is None else precession
     predict_modes = model.jax_modes_amp_phase(modes)
     # from the model's multipoles, as the numpy path, whichever are twisted:
     # the odd-m one picks the branch of the orbital phase
@@ -452,9 +483,10 @@ def precessing_mode_components(
     predict_reference = model.jax_modes_amp_phase(keys, return_tf=True)
 
     def one_binary(angles, frequencies, mass_seconds, inclination, azimuth):
+        if not hasattr(angles, "at_momega"):
+            angles = TabulatedAngles(*angles)
         coefficients = twist_coefficients(
-            modes, frequencies, TabulatedAngles(*angles), mass_seconds, inclination,
-            azimuth, xp=jnp,
+            modes, frequencies, angles, mass_seconds, inclination, azimuth, xp=jnp,
         )
         return (
             jnp.stack([coefficients[key][0] for key in modes]),
@@ -516,7 +548,10 @@ def precessing_mode_components(
 
 
 def precessing_waveform(
-    model: "Model", modes: Optional[Sequence] = None, n_steps: int = N_STEPS
+    model: "Model",
+    modes: Optional[Sequence] = None,
+    n_steps: int = N_STEPS,
+    precession: Optional[Callable] = None,
 ) -> Callable:
     r"""A JAX function reproducing :meth:`PrecessingModel.predict
     <mlgw_bns.precessing_model.PrecessingModel.predict>`, batched.
@@ -542,9 +577,11 @@ def precessing_waveform(
     n_steps : int
         Steps of each leg of the precession integration
         (:func:`integrate_angles`).
+    precession : callable, optional
+        What gives the angles; see :func:`precessing_mode_components`.
     """
     _, jnp = _jnp()
-    components = precessing_mode_components(model, modes, n_steps)
+    components = precessing_mode_components(model, modes, n_steps, precession)
 
     def predict(*args, **kwargs):
         coprecessing, c_plus, c_cross = components(*args, **kwargs)
