@@ -11,6 +11,8 @@ this script builds one and measures it against the integration::
     python visualization/precession_regression_study.py train --data train.npz --out regressor.joblib --refine 2
     # errors of zeta and G, and mismatches of the waveforms, against the integration
     python visualization/precession_regression_study.py validate --regressor regressor.joblib --data validation.npz
+    # plots of the worst binaries, ranked by the first regressor
+    python visualization/precession_regression_study.py worst --regressor a.joblib b.joblib --data validation.npz --out worst
     # cost of the angles and of the whole waveform, single and batched
     python visualization/precession_regression_study.py benchmark --regressor regressor.joblib
 
@@ -96,22 +98,25 @@ def train(args) -> None:
     print(f"trained on {len(coefficients)} binaries in {time.perf_counter() - start:.0f} s")
 
 
+def reconstruct(grid: AngleGrid, coefficients, data, i: int):
+    r""":math:`(\zeta, G)` of binary ``i`` of ``data`` from the envelope
+    ``coefficients``, on its ``x`` up to the switch to the integration."""
+    frame = reference_frame(np, grid, data["intrinsic"][i], data["omega_reference"][i])
+    x = data["x"][i]
+    return _evaluate(np, grid, coefficients, _carriers(np, grid, *carrier_table(np, grid, frame), x), x)
+
+
 def function_errors(regressor: PrecessionRegressor, data, n: int) -> np.ndarray:
     r"""Largest errors of :math:`\zeta` and :math:`G` of the first ``n``
     binaries of ``data``, below and above :math:`x = -10` (a (2, 2)
     frequency of ~25 Hz for a total mass of 2.8), up to the switch to the
     integration: ``(n, 4)``."""
-    grid = regressor.grid
     predicted = regressor.predict_coefficients(data["intrinsic"][:n], data["omega_reference"][:n])
     errors = []
     for i in range(n):
-        frame = reference_frame(np, grid, data["intrinsic"][i], data["omega_reference"][i])
-        x = data["x"][i]
-        zeta, g = _evaluate(
-            np, grid, predicted[i], _carriers(np, grid, *carrier_table(np, grid, frame), x), x
-        )
+        zeta, g = reconstruct(regressor.grid, predicted[i], data, i)
         d_zeta, d_g = np.abs(zeta - data["zeta"][i]), np.abs(g - data["g"][i])
-        high = x > -10.0
+        high = data["x"][i] > -10.0
         errors.append((d_zeta[~high].max(), d_zeta[high].max(), d_g[~high].max(), d_g[high].max()))
     return np.array(errors)
 
@@ -120,8 +125,9 @@ def waveform_mismatches(regressor: PrecessionRegressor, data, n: int, seed: int 
     """Mismatches, with nothing optimized, of the JAX precessing waveforms
     with the regressed angles against those with the integrated ones, for the
     first ``n`` binaries of ``data`` at random total masses and orientations
-    (ET PSD, 20--2048 Hz): the larger of the two polarizations', and the
-    parameters."""
+    (ET PSD, 20--2048 Hz): the larger of the two polarizations', the
+    parameters, and ``(frequencies, psd, exact, regressed)``, the last two
+    the polarizations ``(2, n, n_frequencies)``."""
     import jax
 
     from mlgw_bns.batched_precession import batch_arguments
@@ -157,14 +163,15 @@ def waveform_mismatches(regressor: PrecessionRegressor, data, n: int, seed: int 
     def product(a, b):
         return np.trapezoid(np.conj(a) * b / psd, frequencies)
 
+    exact, regressed = np.asarray(exact), np.asarray(regressed)
     mismatches = np.array([
         max(
             1 - np.real(product(a[i], b[i])) / np.sqrt(np.real(product(a[i], a[i]) * product(b[i], b[i])))
-            for a, b in ((np.asarray(e), np.asarray(r)) for e, r in zip(exact, regressed))
+            for a, b in zip(exact, regressed)
         )
         for i in range(n)
     ])
-    return mismatches, params
+    return mismatches, params, (frequencies, psd, exact, regressed)
 
 
 def validate(args) -> None:
@@ -173,7 +180,7 @@ def validate(args) -> None:
     errors = function_errors(regressor, data, args.n)
     for j, name in enumerate(("zeta, x < -10", "zeta, x > -10", "G, x < -10", "G, x > -10")):
         print(f"{name:>15}: median {np.median(errors[:, j]):.1e}, 90% {np.percentile(errors[:, j], 90):.1e}, max {errors[:, j].max():.1e}")
-    mismatches, params = waveform_mismatches(regressor, data, args.n)
+    mismatches, params, _ = waveform_mismatches(regressor, data, args.n)
     print(
         f"waveform mismatch: median {np.median(mismatches):.1e}, 90% "
         f"{np.percentile(mismatches, 90):.1e}, max {mismatches.max():.1e}"
@@ -183,6 +190,94 @@ def validate(args) -> None:
         print(f"  {mismatches[i]:.1e}: q {p.mass_ratio:.2f}, chi_1 {np.round(p.chi_1, 2)}, "
               f"chi_2 {np.round(p.chi_2, 2)}, M {p.total_mass:.2f}, f_ref {p.reference_frequency_hz:.1f} Hz, "
               f"inclination {p.inclination:.2f}")
+
+
+def chi_p(intrinsic) -> np.ndarray:
+    r"""The effective precession spin of the rows ``[q, \Lambda_1,
+    \Lambda_2, \vec{\chi}_1, \vec{\chi}_2]``, :math:`q \geq 1`."""
+    inverse = 1.0 / intrinsic[:, 0]
+    in_plane_1 = np.hypot(intrinsic[:, 3], intrinsic[:, 4])
+    in_plane_2 = np.hypot(intrinsic[:, 6], intrinsic[:, 7])
+    return np.maximum(in_plane_1, inverse * (4 * inverse + 3) / (4 + 3 * inverse) * in_plane_2)
+
+
+def worst(args) -> None:
+    """Plot the binaries with the largest waveform mismatches with the first
+    regressor: the errors of zeta and G of each regressor and of the
+    envelopes fitted to the integration (the floor of the representation),
+    and where in frequency the mismatches accumulate."""
+    import matplotlib.pyplot as plt
+
+    from mlgw_bns.taylorf2 import SUN_MASS_SECONDS
+
+    data = load([args.data])
+    n = args.n
+    names = [name.rsplit("/", 1)[-1].removesuffix(".joblib") for name in args.regressor]
+    regressors = [PrecessionRegressor.load(name) for name in args.regressor]
+    runs = [waveform_mismatches(regressor, data, n) for regressor in regressors]
+    params = runs[0][1]
+    frequencies, psd, exact, _ = runs[0][2]
+    order = np.argsort(runs[0][0])[::-1][: args.worst]
+    colors = [f"C{j}" for j in range(len(regressors))]
+
+    figure, axes = plt.subplots(1, len(regressors), figsize=(5 * len(regressors), 4), sharey=True, squeeze=False)
+    spin = chi_p(data["intrinsic"][:n])
+    for ax, name, (mismatches, *_) in zip(axes[0], names, runs):
+        points = ax.scatter(data["intrinsic"][:n, 0], mismatches, c=spin, s=10, cmap="viridis")
+        ax.scatter(data["intrinsic"][order, 0], mismatches[order], s=80, facecolors="none", edgecolors="r")
+        for rank, i in enumerate(order):
+            ax.annotate(str(rank), (data["intrinsic"][i, 0], mismatches[i]), fontsize=8,
+                        xytext=(4, 4), textcoords="offset points", color="r")
+        ax.set(xlabel="$q$", yscale="log", title=f"{name}: median {np.median(mismatches):.1e}")
+    axes[0, 0].set_ylabel("waveform mismatch")
+    figure.colorbar(points, ax=axes[0], label=r"$\chi_p$")
+    figure.savefig(f"{args.out}_overview.png", dpi=150, bbox_inches="tight")
+
+    predicted = [regressor.predict_coefficients(data["intrinsic"][order], data["omega_reference"][order])
+                 for regressor in regressors]
+    figure, axes = plt.subplots(len(order), 4, figsize=(20, 3.2 * len(order)), squeeze=False)
+    for row, i in zip(axes, order):
+        p = params[i]
+        to_hz = 1.0 / (np.pi * p.total_mass * SUN_MASS_SECONDS)
+        f = data["grid"].omega_of(data["x"][i]) * to_hz
+        zeta, g = data["zeta"][i], data["g"][i]
+        floor = reconstruct(data["grid"], data["coefficients"][i], data, i)
+        row[0].plot(f, zeta.real, "k", lw=1.5, label="integrated")
+        row[1].plot(f, np.abs(floor[0] - zeta), color="0.6", label="envelope fit")
+        row[2].plot(f, np.abs(floor[1] - g), color="0.6", label="envelope fit")
+        for j, (regressor, name, color) in enumerate(zip(regressors, names, colors)):
+            r_zeta, r_g = reconstruct(regressor.grid, predicted[j][list(order).index(i)], data, i)
+            row[0].plot(f, r_zeta.real, color=color, lw=0.8, label=name)
+            row[1].plot(f, np.abs(r_zeta - zeta), color=color, lw=0.8, label=name)
+            row[2].plot(f, np.abs(r_g - g), color=color, lw=0.8, label=name)
+            # where the mismatch of the worse polarization accumulates:
+            # 1 - Re<a, b> = <a - b, a - b> / 2 for normalized a, b
+            regressed = runs[j][2][3]
+            worse = []
+            for a, b in zip(exact[:, i], regressed[:, i]):
+                a = a / np.sqrt(np.trapezoid(np.abs(a) ** 2 / psd, frequencies))
+                b = b / np.sqrt(np.trapezoid(np.abs(b) ** 2 / psd, frequencies))
+                integrand = np.abs(a - b) ** 2 / psd / 2
+                worse.append(np.concatenate([[0.0], np.cumsum(np.diff(frequencies) * (integrand[1:] + integrand[:-1]) / 2)]))
+            row[3].plot(frequencies, max(worse, key=lambda c: c[-1]), color=color, label=f"{name}: {runs[j][0][i]:.1e}")
+        for ax in row[:3]:
+            ax.axvspan(f[0], 20.0, color="0.92", zorder=0)
+            ax.set_xscale("log")
+        row[0].set(ylabel=r"Re $\zeta$")
+        row[1].set(ylabel=r"$|\Delta \zeta|$", yscale="log")
+        row[2].set(ylabel=r"$|\Delta G|$", yscale="log")
+        row[3].set(ylabel="cumulative mismatch", xscale="log", yscale="log", ylim=(1e-7, None))
+        row[0].set_title(
+            f"q {p.mass_ratio:.2f}, $\\chi_1$ {np.round(p.chi_1, 2)}, $\\chi_2$ {np.round(p.chi_2, 2)}, "
+            f"M {p.total_mass:.2f}, $f_{{\\rm ref}}$ {p.reference_frequency_hz:.0f} Hz, "
+            f"$\\iota$ {p.inclination:.2f}", fontsize=9, loc="left",
+        )
+        row[1].legend(fontsize=7)
+        row[3].legend(fontsize=7)
+    for ax in axes[-1]:
+        ax.set_xlabel("(2, 2) frequency [Hz]")
+    figure.savefig(f"{args.out}_cases.png", dpi=110, bbox_inches="tight")
+    print(f"saved {args.out}_overview.png, {args.out}_cases.png")
 
 
 def benchmark(args) -> None:
@@ -257,6 +352,13 @@ def main() -> None:
     command.add_argument("--data", required=True)
     command.add_argument("--n", type=int, default=128)
     command.set_defaults(run=validate)
+    command = commands.add_parser("worst")
+    command.add_argument("--regressor", required=True, nargs="+", help="the first ranks the binaries")
+    command.add_argument("--data", required=True)
+    command.add_argument("--n", type=int, default=128)
+    command.add_argument("--worst", type=int, default=5)
+    command.add_argument("--out", required=True, help="prefix of the figures")
+    command.set_defaults(run=worst)
     command = commands.add_parser("benchmark")
     command.add_argument("--regressor", required=True)
     command.add_argument("--points", type=int, default=1500)
