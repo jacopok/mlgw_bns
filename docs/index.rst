@@ -23,6 +23,7 @@ Welcome to ``mlgw_bns``'s documentation!
 
    explanation/higher_order_modes.md
    explanation/precession.md
+   explanation/precession_regression.md
 
 .. toctree::
    :maxdepth: 2

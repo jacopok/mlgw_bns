@@ -174,11 +174,10 @@ class TabulatedAngles:
         _, jnp = _jnp()
         return jnp.log(omega) - self.kappa_omega / omega
 
-    def at_momega(self, momega):
-        r""":math:`(\alpha, \beta, \gamma)` at the orbital frequencies
-        ``momega``, held at the end values outside the integrated range, as
-        :meth:`EulerAngles.at_momega
-        <mlgw_bns.precessing_model.EulerAngles.at_momega>`."""
+    def state_at_momega(self, momega):
+        r"""The tabulated state (by default :math:`[\hat{L}, \alpha - \gamma]`)
+        at the orbital frequencies ``momega``, shape ``(..., n_columns)``, held
+        at the end values outside the integrated range."""
         _, jnp = _jnp()
         omega = jnp.clip(momega, self.omega_lo, self.omega_hi)
         x = self._x(omega)
@@ -197,12 +196,20 @@ class TabulatedAngles:
         t = ((x - self.x[index]) / width[..., 0])[..., None]
         # cubic Hermite basis
         t2, t3 = t * t, t * t * t
-        state = (
+        return (
             (2 * t3 - 3 * t2 + 1) * self.state[index]
             + (t3 - 2 * t2 + t) * width * self.derivative[index]
             + (-2 * t3 + 3 * t2) * self.state[index + 1]
             + (t3 - t2) * width * self.derivative[index + 1]
         )
+
+    def at_momega(self, momega):
+        r""":math:`(\alpha, \beta, \gamma)` at the orbital frequencies
+        ``momega``, held at the end values outside the integrated range, as
+        :meth:`EulerAngles.at_momega
+        <mlgw_bns.precessing_model.EulerAngles.at_momega>`."""
+        _, jnp = _jnp()
+        state = self.state_at_momega(momega)
         l_x, l_y, l_z, alpha_minus_gamma = (state[..., i] for i in range(4))
         in_plane = jnp.hypot(l_x, l_y)
         alpha = jnp.where(
