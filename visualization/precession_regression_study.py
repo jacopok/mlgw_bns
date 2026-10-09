@@ -45,9 +45,9 @@ from mlgw_bns.precession_regression import (
 
 
 def generate(args) -> None:
-    grid = AngleGrid()
+    grid = AngleGrid(elliptic_beat=not args.linear_beat)
     intrinsic, omega_reference = TrainingRanges(
-        mass_ratio_exponent=args.mass_ratio_exponent
+        mass_ratio=tuple(args.mass_ratio), mass_ratio_exponent=args.mass_ratio_exponent
     ).sample(args.n, args.seed)
     start = time.perf_counter()
     x, zeta, g, switch = training_data(grid, intrinsic, omega_reference)
@@ -59,13 +59,21 @@ def generate(args) -> None:
     np.savez(
         args.out, intrinsic=intrinsic, omega_reference=omega_reference,
         coefficients=coefficients, switch=switch, x=x, zeta=zeta, g=g,
+        elliptic_beat=grid.elliptic_beat,
     )
 
 
 def load(filenames):
     """The training data of one or more ``generate`` files, concatenated."""
     files = [np.load(name) for name in filenames]
-    return {key: np.concatenate([f[key] for f in files]) for key in files[0].files}
+    data = {key: np.concatenate([f[key] for f in files]) for key in files[0].files if key != "elliptic_beat"}
+    # the carriers the envelopes were fitted on; files from before the
+    # option have the linear beat
+    beats = {bool(f["elliptic_beat"]) if "elliptic_beat" in f.files else False for f in files}
+    if len(beats) > 1:
+        raise ValueError("these files were fitted on different carriers")
+    data["grid"] = AngleGrid(elliptic_beat=beats.pop())
+    return data
 
 
 def train(args) -> None:
@@ -74,7 +82,7 @@ def train(args) -> None:
     coefficients = data["coefficients"]
     if args.refine:
         coefficients, _ = refine_envelopes(
-            AngleGrid(), data["intrinsic"], data["omega_reference"], data["x"],
+            data["grid"], data["intrinsic"], data["omega_reference"], data["x"],
             data["zeta"], data["g"], coefficients, data["switch"],
             iterations=args.refine, **kwargs,
         )
@@ -82,7 +90,8 @@ def train(args) -> None:
             np.save(args.save_refined, coefficients)
     start = time.perf_counter()
     PrecessionRegressor.train(
-        data["intrinsic"], data["omega_reference"], coefficients, data["switch"], **kwargs
+        data["intrinsic"], data["omega_reference"], coefficients, data["switch"],
+        grid=data["grid"], **kwargs,
     ).save(args.out)
     print(f"trained on {len(coefficients)} binaries in {time.perf_counter() - start:.0f} s")
 
@@ -229,6 +238,11 @@ def main() -> None:
     command.add_argument("--seed", type=int, default=1)
     command.add_argument("--out", required=True)
     command.add_argument("--mass-ratio-exponent", type=float, default=1.0)
+    command.add_argument("--mass-ratio", type=float, nargs=2, default=list(TrainingRanges().mass_ratio))
+    command.add_argument(
+        "--linear-beat", action="store_true",
+        help="carriers beating at the linearized normal-mode splitting, as before the elliptic beat",
+    )
     command.set_defaults(run=generate)
     command = commands.add_parser("train")
     command.add_argument("--data", required=True, nargs="+")

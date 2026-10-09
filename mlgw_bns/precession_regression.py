@@ -82,6 +82,13 @@ spins, whose in-plane components in the frame of :math:`\vec{J}` are fitted
 on the carriers as :math:`\zeta` is and whose envelopes there are regressed
 alongside (:func:`fit_switch_spins`).
 
+The beat of the two carriers is the nutation frequency of the two spins,
+in the closed form of the multiple-scale analysis (:func:`nutation`,
+:func:`nutation_frequency`; ``docs/explanation/precession_regression.md``
+derives it for these precession equations): the linearized normal modes get
+it wrong by up to ~50% near equal masses, where the spin-spin coupling sets
+it. :attr:`AngleGrid.elliptic_beat` switches back to them.
+
 Where two carriers nearly coincide (:math:`q \simeq 1`) the split between
 their envelopes is again not determined; :func:`refine_envelopes` pulls each
 binary towards what a regressor trained on the others predicts for it.
@@ -101,6 +108,11 @@ percentile ~1e-2) it does not, nor with twice as many binaries there: the
 beat of the two spins is a nonlinear function of them that the carriers get
 wrong by up to ~20% (the linearized model is good to ~1% for :math:`q >
 1.5`), and the envelopes wind across the parameter space with the error.
+With the elliptic beat (trained and validated on :math:`q \leq 1.5` only,
+4096 and 256 binaries) the errors of :math:`\zeta` and the 90th percentile of
+the mismatches halve (median 4.9e-4, 90th percentile 7.9e-3, against 5.8e-4
+and 1.6e-2 with the linear beat); those of :math:`G` do not change, and are
+now the limit there.
 The representation itself gives back the integrated rotation to ~1e-6 rad
 below the switch and ~1e-4 rad above it. On four CPU cores the angles take
 10 ms for one binary and 0.8 ms each in a batch of 128, against 155 ms and
@@ -206,6 +218,10 @@ class AngleGrid:
         Where the integration takes over.
     n_tail_steps : int
         Its fixed DOP853 steps.
+    elliptic_beat : bool
+        Whether the beat of the two carriers is the nonlinear nutation
+        frequency (:func:`nutation_frequency`) or the splitting of the
+        linearized normal modes (:func:`carrier_rates`).
     """
 
     omega_min: float = OMEGA_MIN
@@ -215,6 +231,12 @@ class AngleGrid:
     x_switch: float = X_SWITCH
     n_tail_steps: int = N_TAIL_STEPS
     tail_kappa: float = TAIL_KAPPA
+    elliptic_beat: bool = True
+
+    def __setstate__(self, state):
+        # grids pickled before the elliptic beat used the linear one
+        state.setdefault("elliptic_beat", False)
+        self.__dict__.update(state)
 
     @property
     def kappa_omega(self) -> float:
@@ -353,6 +375,7 @@ class ReferenceFrame:
     #: :math:`G` at the reference
     g_reference: Any
     x_reference: Any
+    omega_reference: Any
 
 
 def reference_frame(xp, grid: AngleGrid, intrinsic, omega_reference) -> ReferenceFrame:
@@ -389,10 +412,231 @@ def reference_frame(xp, grid: AngleGrid, intrinsic, omega_reference) -> Referenc
         rotation=rotation,
         g_reference=g_reference,
         x_reference=grid.x_of(omega_reference, xp),
+        omega_reference=omega_reference,
     )
 
 
-def carrier_rates(xp, frame: ReferenceFrame, omega, domega_dx):
+#: Arithmetic-geometric-mean steps of the complete elliptic integrals:
+#: quadratic convergence, to double precision for :math:`m < 1 - 10^{-12}`.
+N_AGM = 8
+
+#: Bisection steps for the turning points of the nutation, which are
+#: bracketed in :math:`[-1, 1]` (in units of :math:`|S_A|`), and Newton
+#: steps after them.
+N_BISECTION = 20
+N_NEWTON = 3
+
+#: Picard iterations of the precession-averaged evolution of :math:`J`.
+N_PICARD = 6
+
+#: Orbital frequencies the nutation frequency is computed at, spread over
+#: those of the carrier quadrature; it is smooth, and interpolated (in
+#: :math:`\ln` of both) between them.
+N_NUTATION_NODES = 64
+
+# the cubic through its values at z = -1, -1/3, 1/3, 1: coefficients
+# (c_0, c_1, c_2, c_3) = _CUBIC_FIT @ values
+_CUBIC_NODES = np.array([-1.0, -1.0 / 3.0, 1.0 / 3.0, 1.0])
+_CUBIC_FIT = np.linalg.inv(np.vander(_CUBIC_NODES, 4, increasing=True))
+
+
+def _elliptic_integrals(xp, m):
+    r"""The complete elliptic integrals :math:`K(m)` and :math:`(K - E) / (m
+    K)`, the time average of :math:`\mathrm{sn}^2` over its period, by the
+    arithmetic-geometric mean, without cancellation at small :math:`m`."""
+    a, b = 1.0, xp.sqrt(1.0 - m)
+    # c_n^2 / m, from c_0^2 = m and c_{n+1} = c_n^2 / (4 a_{n+1})
+    c2_over_m = xp.ones_like(m)
+    average = 0.5 * c2_over_m
+    for n in range(1, N_AGM + 1):
+        a, b = (a + b) / 2.0, xp.sqrt(a * b)
+        c2_over_m = c2_over_m * c2_over_m * m / (16.0 * a * a)
+        average = average + 2.0 ** (n - 1) * c2_over_m
+    return np.pi / (2.0 * a), average
+
+
+def _bisect(xp, function, derivative, lo, hi):
+    """The root of ``function`` in ``[lo, hi]``, where it changes sign (or the
+    end nearer to one, where it does not): :data:`N_BISECTION` bisections,
+    then :data:`N_NEWTON` Newton steps kept in the final bracket."""
+    f_lo = function(lo)
+    for _ in range(N_BISECTION):
+        middle = (lo + hi) / 2.0
+        f_middle = function(middle)
+        same = xp.sign(f_middle) == xp.sign(f_lo)
+        lo, f_lo = xp.where(same, middle, lo), xp.where(same, f_middle, f_lo)
+        hi = xp.where(same, hi, middle)
+    root = (lo + hi) / 2.0
+    for _ in range(N_NEWTON):
+        slope = derivative(root)
+        step = function(root) / xp.where(slope == 0.0, 1.0, slope)
+        root = xp.clip(root - xp.where(slope == 0.0, 0.0, step), lo, hi)
+    return root
+
+
+def frozen_precession_constants(xp, nu, q, omega):
+    r"""The coefficients of the conservative spin precession at a fixed
+    orbital frequency ``omega``: :math:`(L, \alpha_A, \alpha_B, k)`.
+
+    With :math:`Y = (\vec{S}_A / q + \vec{S}_B) \cdot \hat{L}`, the right-hand
+    side of :func:`~mlgw_bns.twist_waveform._pn_precession_derivatives` is
+    :math:`\dot{\vec{S}}_A = (a_A \hat{L} + h \vec{S}_B) \times \vec{S}_A`,
+    :math:`a_A = w_A - 3 h Y`, and :math:`\dot{\vec{S}}_B = (a_B \hat{L} + h
+    \vec{S}_A) \times \vec{S}_B`, :math:`a_B = w_B - 3 h q Y`, with :math:`h
+    = v^6 / 2` and :math:`w_{A, B}` the spin-orbit frequencies, and to
+    leading order :math:`L \dot{\hat{L}} = - \dot{\vec{S}}_A -
+    \dot{\vec{S}}_B`. Then :math:`\alpha_{A, B} = w_{A, B} / L - h` and
+    :math:`k = 3 h q / (2 L)`; see :func:`nutation`.
+
+    The next order of :math:`\dot{\hat{L}}` (Eq. (4c) of arXiv:2005.05338)
+    multiplies :math:`\dot{\vec{S}}_X` by :math:`1 + \nu v^2 c_X`, with
+    :math:`c_X = -(3 + 1 / M_X) / 4`: for equal :math:`c_X` this is the
+    leading order with :math:`L / (1 + \nu v^2 c)` in place of :math:`L`,
+    which is what is returned as :math:`L`, at the mean of the two. This
+    takes the error of the nutation frequency from ~1% to ~0.1% near
+    :math:`q = 1`, where the two are equal; the remaining terms are
+    quadratic in the spins. :math:`\vec{J}` is then :math:`L \hat{L} +
+    \vec{S}_A + \vec{S}_B` with this :math:`L`.
+    """
+    v = omega ** (1.0 / 3.0)
+    v5_ca, v5_cb, v7_ca, v7_cb, v9_ca, v9_cb = _spin_orbit_coefficients(nu, q, xp)
+    w_a = v**5 * v5_ca + v**7 * v7_ca + v**9 * v9_ca
+    w_b = v**5 * v5_cb + v**7 * v7_cb + v**9 * v9_cb
+    h = 0.5 * v**6
+    mass_a = nu_to_X1(nu, xp)
+    mean_c = -(6.0 + 1.0 / mass_a + 1.0 / (1.0 - mass_a)) / 8.0
+    l_magnitude = orbital_angular_momentum(nu, omega) / (1.0 + nu * v**2 * mean_c)
+    return l_magnitude, w_a / l_magnitude - h, w_b / l_magnitude - h, 1.5 * h * q / l_magnitude
+
+
+def nutation(xp, q, sa2, sb2, l_magnitude, alpha_a, alpha_b, k, f, j2, y_star):
+    r"""The nutation of the two spins at a fixed orbital frequency: its
+    angular frequency (in time), the time average of :math:`u_A = \vec{S}_A
+    \cdot \hat{L}` over it, and the elliptic parameter.
+
+    The conservative precession (:func:`frozen_precession_constants`)
+    conserves :math:`\vec{J} = L \hat{L} + \vec{S}_A + \vec{S}_B`,
+    :math:`|\vec{S}_A|`, :math:`|\vec{S}_B|` and
+
+    .. math:: F = \alpha_A u_A + \alpha_B u_B - k Y^2 ,
+
+    (:math:`u_X = \vec{S}_X \cdot \hat{L}`; at leading PN order
+    :math:`\alpha_A = \alpha_B / q` and this is the effective spin), which
+    leave one degree of freedom, :math:`u_A`: with :math:`T = \hat{L} \cdot
+    (\vec{S}_A \times \vec{S}_B)`, :math:`\dot{u}_A = (\alpha_B - 2 k Y) T`,
+    and :math:`T^2` is the Gram determinant of :math:`\hat{L}, \vec{S}_A,
+    \vec{S}_B`, a cubic in :math:`u_A` once :math:`u_B` and :math:`\vec{S}_A
+    \cdot \vec{S}_B` are written with the constants (:math:`Y` linearized about
+    ``y_star``, which it differs from by :math:`O(\alpha_A - \alpha_B / q)`).
+    :math:`u_A` oscillates between the two roots :math:`u_\pm` of the cubic
+    that bracket its maximum as :math:`u_- + (u_+ - u_-)\, \mathrm{sn}^2`,
+    with period :math:`4 K(m) |S_A| / (|\tilde\alpha| \sqrt{g(u_-)})`, where
+    :math:`g` is the cubic's third, linear factor and :math:`m = 1 -
+    g(u_+) / g(u_-)`: the closed form of Kesden et al. (2015) and
+    Chatziioannou et al. (2017), regular at :math:`q = 1` as in Gerosa et al.
+    (2023), where :math:`g` is constant.
+
+    All arguments broadcast together. ``sa2``, ``sb2`` are :math:`|\vec{S}_{A,
+    B}|^2`, ``j2`` :math:`J^2`.
+    """
+    alpha_tilde = alpha_b - 2.0 * k * y_star
+    # Y = y_0 + y_1 u_A, linearized about y_star
+    y_0 = y_star - (alpha_b * y_star - k * y_star**2 - f) / alpha_tilde
+    y_1 = -(alpha_a - alpha_b / q) / alpha_tilde
+    sa = xp.sqrt(sa2)
+    s_free = (j2 - l_magnitude**2 - sa2 - sb2) / 2.0
+
+    def gram(z):
+        u_a = sa * z
+        u_b = y_0 + (y_1 - 1.0 / q) * u_a
+        s_ab = s_free - l_magnitude * (u_a + u_b)
+        return sa2 * sb2 - s_ab**2 - u_a**2 * sb2 + 2.0 * u_a * u_b * s_ab - u_b**2 * sa2
+
+    values = xp.stack([gram(z) for z in _CUBIC_NODES], axis=-1)
+    c_0, c_1, c_2, c_3 = (xp.sum(values * _CUBIC_FIT[i], axis=-1) for i in range(4))
+
+    def cubic(z):
+        return ((c_3 * z + c_2) * z + c_1) * z + c_0
+
+    def slope(z):
+        return (3.0 * c_3 * z + 2.0 * c_2) * z + c_1
+
+    # the maximum, between the two physical roots: the stationary point with
+    # negative curvature, written without cancellation as c_3 -> 0 (q -> 1)
+    discriminant = xp.maximum(c_2**2 - 3.0 * c_3 * c_1, 0.0)
+    z_max = xp.clip(c_1 / (xp.sqrt(discriminant) - c_2), -1.0, 1.0)
+    # the Gram determinant is -(...)^2 <= 0 at u_A = +-|S_A|
+    z_lo = _bisect(xp, cubic, slope, -xp.ones_like(z_max), z_max)
+    z_hi = _bisect(xp, cubic, slope, z_max, xp.ones_like(z_max))
+    # no room to nutate (a resonance, or aligned spins): both roots at the maximum
+    still = cubic(z_max) <= 0.0
+    z_lo, z_hi = xp.where(still, z_max, z_lo), xp.where(still, z_max, z_hi)
+    # cubic = (z - z_lo)(z_hi - z) g(z), g linear
+    g_lo = -c_3 * (2.0 * z_lo + z_hi) - c_2
+    g_hi = -c_3 * (z_lo + 2.0 * z_hi) - c_2
+    m = xp.clip(1.0 - g_hi / g_lo, 0.0, 1.0 - 1e-12)
+    quarter_period, mean_sn2 = _elliptic_integrals(xp, m)
+    # u_A = |S_A| z: the period is 4 K(m) |S_A| / (|alpha~| sqrt(g(z_lo)))
+    frequency = (
+        np.pi * xp.abs(alpha_tilde) * xp.sqrt(xp.maximum(g_lo, 0.0)) / (2.0 * quarter_period * sa)
+    )
+    mean_u_a = sa * (z_lo + (z_hi - z_lo) * mean_sn2)
+    return frequency, mean_u_a, m
+
+
+def nutation_frequency(xp, frame: ReferenceFrame, omega):
+    r"""The angular frequency, in time, of the nutation of the two spins (the
+    beat of the two carriers) at the orbital frequencies ``omega``, an
+    increasing array.
+
+    :func:`nutation` at each ``omega``, with the constants carried from the
+    reference along the inspiral: :math:`|\vec{S}_{A, B}|`; :math:`Y`, whose
+    rate :math:`-(\alpha_A - \alpha_B / q) T` averages to zero over a
+    nutation; :math:`F` at the reference values of :math:`Y` and :math:`u_A`;
+    and :math:`J`, which radiation reaction changes along :math:`\hat{L}`
+    only, :math:`\mathrm{d} J^2 / \mathrm{d} L = 2 L + 2 \langle u_A + u_B
+    \rangle`, averaged over the nutation (Gerosa et al. 2015), and
+    integrated in :math:`L` from its reference value by :data:`N_PICARD`
+    Picard iterations, ``omega`` serving as the quadrature nodes.
+    """
+    nu, q = frame.nu, frame.mass_ratio
+    spin_a, spin_b = frame.spin_a, frame.spin_b
+    sa2, sb2 = xp.sum(spin_a * spin_a), xp.sum(spin_b * spin_b)
+    u_a_ref, u_b_ref = spin_a[2], spin_b[2]
+    y_ref = u_a_ref / q + u_b_ref
+
+    l_ref, *_ = frozen_precession_constants(xp, nu, q, frame.omega_reference)
+    total = spin_a + spin_b
+    j2_ref = total[0] ** 2 + total[1] ** 2 + (l_ref + total[2]) ** 2
+
+    l_magnitude, alpha_a, alpha_b, k = frozen_precession_constants(xp, nu, q, omega)
+    f = alpha_a * u_a_ref + alpha_b * u_b_ref - k * y_ref**2
+
+    # L decreases along omega: integrate in -L, increasing
+    minus_l = -l_magnitude
+
+    def j2_of(projection_sum):
+        # J^2 - L^2 = J_ref^2 - L_ref^2 + 2 int_{L_ref}^{L} <u_A + u_B> dL
+        cumulative = xp.concatenate([
+            xp.zeros(1), xp.cumsum(0.5 * (projection_sum[1:] + projection_sum[:-1]) * xp.diff(minus_l))
+        ])
+        at_reference = xp.interp(-l_ref, minus_l, cumulative)
+        return j2_ref + l_magnitude**2 - l_ref**2 - 2.0 * (cumulative - at_reference)
+
+    projection_sum = xp.full_like(omega, u_a_ref + u_b_ref)
+    for _ in range(N_PICARD):
+        j2 = j2_of(projection_sum)
+        frequency, mean_u_a, _ = nutation(
+            xp, q, sa2, sb2, l_magnitude, alpha_a, alpha_b, k, f, j2, y_ref
+        )
+        # <u_B> = <Y> - <u_A> / q, with <Y> on the same linearization
+        alpha_tilde = alpha_b - 2.0 * k * y_ref
+        mean_y = y_ref - (alpha_b * y_ref - k * y_ref**2 - f + (alpha_a - alpha_b / q) * mean_u_a) / alpha_tilde
+        projection_sum = mean_u_a * (1.0 - 1.0 / q) + mean_y
+    return frequency
+
+
+def carrier_rates(xp, frame: ReferenceFrame, omega, domega_dx, elliptic_beat: bool = True):
     r"""The normal-mode frequencies :math:`\mathrm{d}\Phi_k / \mathrm{d}x` of
     the two spins' precession about :math:`\vec{J}`.
 
@@ -429,6 +673,14 @@ def carrier_rates(xp, frame: ReferenceFrame, omega, domega_dx):
     \hat{z}|`. Without this the lighter spin's carrier drifts from its
     mode by up to several radians over the band. Converted to ``x`` with the
     PN :math:`\dot\Omega` of the same spins.
+
+    With ``elliptic_beat`` the difference of the two rates, the beat, is
+    instead the nutation frequency of the nonlinear precession
+    (:func:`nutation_frequency`), about the same mean. The linearization
+    gets it wrong near equal masses, where the beat is set by the spin-spin
+    coupling and depends on the relative orientation of the in-plane spins:
+    by up to ~50% at :math:`q = 1` (see
+    ``docs/explanation/precession_regression.md``).
     """
     nu, q = frame.nu, frame.mass_ratio
     spin_a, spin_b = frame.spin_a, frame.spin_b
@@ -475,6 +727,26 @@ def carrier_rates(xp, frame: ReferenceFrame, omega, domega_dx):
     cross = 2.0 * fast * slow
     fast_shifted = slow + xp.sqrt((fast - slow) ** 2 + cross * tilt_a / (1 + xp.sqrt(1 - tilt_a)))
     slow_shifted = fast - xp.sqrt((fast - slow) ** 2 + cross * tilt_b / (1 + xp.sqrt(1 - tilt_b)))
+    if elliptic_beat:
+        # the beat from the nonlinear nutation, about the same mean
+        middle = (fast_shifted + slow_shifted) / 2.0
+        # computed at a subset of the frequencies, and interpolated linearly
+        # in ln omega (the cells are fixed by the shape: gathers, no search)
+        n = omega.shape[-1]
+        index = np.unique(np.linspace(0, n - 1, N_NUTATION_NODES).round().astype(int))
+        cell = np.clip(np.searchsorted(index, np.arange(n), side="right") - 1, 0, len(index) - 2)
+        log_omega = xp.log(omega)
+        log_lo, log_hi = log_omega[index[cell]], log_omega[index[cell + 1]]
+        # without in-plane spins (to 1e-6 of J) there is no precession, the
+        # roots of the closed form coincide and it is ill-conditioned, and the
+        # carriers multiply envelopes of zero: the linear splitting will do
+        elliptic = nutation_frequency(xp, frame, omega[index])
+        linear = (fast_shifted - slow_shifted)[index]
+        usable = xp.isfinite(elliptic) & (elliptic > 0.0) & ((tilt_a + tilt_b)[index] > 1e-12)
+        log_beat = xp.log(xp.where(usable, elliptic, linear))
+        weight = (log_omega - log_lo) / (log_hi - log_lo)
+        half_beat = xp.exp(log_beat[cell] + weight * (log_beat[cell + 1] - log_beat[cell])) / 2.0
+        fast_shifted, slow_shifted = middle + half_beat, middle - half_beat
     scale = domega_dx / omega_dot
     return xp.stack([fast_shifted * scale, slow_shifted * scale])
 
@@ -502,7 +774,9 @@ def carrier_table(xp, grid: AngleGrid, frame: ReferenceFrame, nodes=None):
     """The carrier phases and their rates at the quadrature nodes, ``(2,
     n_quadrature)`` each, with the phases zero at the reference."""
     x, omega, domega_dx = grid.quadrature_nodes() if nodes is None else nodes
-    rates = carrier_rates(xp, frame, xp.asarray(omega), xp.asarray(domega_dx))
+    rates = carrier_rates(
+        xp, frame, xp.asarray(omega), xp.asarray(domega_dx), grid.elliptic_beat
+    )
     width = (grid.x_range[1] - grid.x_range[0]) / (grid.n_quadrature - 1)
     zero = xp.zeros_like(rates[:, :1])
     phases = xp.concatenate(

@@ -25,9 +25,12 @@ from mlgw_bns.precession_regression import (  # noqa: E402
     carrier_table,
     fit_all_envelopes,
     fit_envelopes,
+    frozen_precession_constants,
+    nutation,
     reference_frame,
     training_data,
 )
+from mlgw_bns.twist_waveform import _pn_precession_derivatives  # noqa: E402
 from mlgw_bns.taylorf2 import SUN_MASS_SECONDS  # noqa: E402
 
 from .test_batched_precession import BINARIES, FREQUENCIES  # noqa: E402
@@ -99,6 +102,61 @@ def test_envelopes_reproduce_the_integrated_rotation(grid):
         difference = rotation_difference(expected, angles.at_momega(momega))
         assert np.max(difference[below]) < 1e-5
         assert np.max(difference[~below]) < 2e-4
+
+
+@pytest.mark.parametrize("q", [1.0, 1.02, 1.5])
+def test_nutation_matches_the_frozen_precession(grid, q):
+    """The closed-form nutation frequency is that of the full right-hand side
+    integrated at a fixed orbital frequency, from equal masses (where the
+    linearized beat is ~50% off) to unequal ones."""
+    from scipy.integrate import solve_ivp
+
+    row = ROWS[1].copy()
+    row[0] = q
+    omega = 1e-3
+    _, state, _ = integrate_angles(
+        row[0], row[1], row[2], row[3:6], row[6:9], OMEGA_REFERENCE[1] / np.pi,
+        omega / np.pi, 256, full_state=True,
+    )
+    s_a, s_b, l_hat = (np.asarray(state[0, i:i + 3]) for i in (0, 3, 6))
+    nu = q / (1 + q) ** 2
+    a10 = float(reference_frame(np, grid, row, omega).a10_tidal)
+
+    def rhs(_, y):
+        d_sa, d_sb, d_l, *_ = _pn_precession_derivatives(nu, q, omega, y[0:3], y[3:6], y[6:9], a10)
+        return np.concatenate([d_sa, d_sb, d_l])
+
+    def projection_rate(t, y):
+        d = rhs(t, y)
+        return d[0:3] @ y[6:9] + y[0:3] @ d[6:9]
+
+    l_magnitude, alpha_a, alpha_b, k = frozen_precession_constants(np, nu, q, omega)
+    u_a, u_b = s_a @ l_hat, s_b @ l_hat
+    y = u_a / q + u_b
+    j = l_magnitude * l_hat + s_a + s_b
+    frequency, _, _ = nutation(
+        np, q, s_a @ s_a, s_b @ s_b, l_magnitude, alpha_a, alpha_b, k,
+        alpha_a * u_a + alpha_b * u_b - k * y**2, j @ j, y,
+    )
+    solution = solve_ivp(
+        rhs, (0, 5 * 2 * np.pi / frequency), np.concatenate([s_a, s_b, l_hat]),
+        method="DOP853", rtol=1e-11, atol=1e-14, events=projection_rate,
+    )
+    extrema = solution.t_events[0]
+    assert len(extrema) >= 8
+    integrated = 2 * np.pi / np.mean(extrema[2:] - extrema[:-2])
+    assert abs(frequency / integrated - 1) < 5e-4
+
+
+def test_grids_pickled_before_the_elliptic_beat_keep_the_linear_one():
+    import pickle
+
+    state = dict(AngleGrid().__dict__)
+    del state["elliptic_beat"]
+    old = AngleGrid.__new__(AngleGrid)
+    old.__setstate__(state)
+    assert not old.elliptic_beat
+    assert pickle.loads(pickle.dumps(AngleGrid())).elliptic_beat
 
 
 @pytest.fixture(scope="module")
