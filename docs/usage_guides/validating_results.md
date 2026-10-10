@@ -22,4 +22,17 @@ mismatches = vm.validation_mismatches(100)
 
 This will compute 100 mismatches, generating the corresponding 
 parameters randomly. 
-For more advanced usage, see {class}`ValidateModel <mlgw_bns.model_validation.ValidateModel>`.
+For more advanced usage, see {class}`ValidateModel <mlgw_bns.model_validation.ValidateModel>`;
+for the mismatches of the full multi-mode waveform,
+{meth}`ValidateModel.full_waveform_mismatch <mlgw_bns.model_validation.ValidateModel.full_waveform_mismatch>`
+and `visualization/validate_model.py`, which validates every mode of a
+trained model and the full waveform, against TEOBResumS.
+
+Each of these makes a TEOBResumS waveform for every mismatch, about a second
+each. To validate many models on the same, large, validation set, the
+waveforms can be made once, and stored as the residuals the models are
+trained on ({class}`~mlgw_bns.modes_dataset.ShardedModesDataset`): then
+{func}`~mlgw_bns.model_validation.stored_waveform_mismatches` gives the
+mismatches of each mode and of the full waveform of a
+{class}`~mlgw_bns.model.Model` against them, a few tenths of a second a
+waveform (see [](cluster-training)).

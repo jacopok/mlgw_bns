@@ -8,3 +8,6 @@ Principal Component Analysis
 
 .. autoclass:: mlgw_bns.principal_component_analysis.PrincipalComponentAnalysisModel
     :members:
+
+.. autoclass:: mlgw_bns.principal_component_analysis.CovarianceAccumulator
+    :members:

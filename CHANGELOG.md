@@ -148,6 +148,12 @@ loaded, and the waveforms are referenced differently in time and phase.
     `higher_order_modes.wigner_d_function_spin_2`, the named harmonics in
     `mlgw_bns.spherical_harmonics` and `mlgw_bns.twist_waveform` all delegate to
     it instead of carrying their own copy.
+- `Model.generate`'s multi-mode TEOBResumS sweep is 2.6 times faster (1.06
+    to 0.40 s a waveform for seven modes from 5 Hz): the post-Newtonian
+    amplitude and phase the residuals are taken against are evaluated only
+    at the downsampling nodes of each mode (and for the (2,2) phase in the
+    window of the reference fit), not on all of the 5e5-point grid, which
+    took two thirds of the time. The residuals are the same to the bit.
 
 ### Removed
 
@@ -252,6 +258,49 @@ loaded, and the waveforms are referenced differently in time and phase.
     last bit; `batched_precession.integrate_angles(final_frequency_22=...,
     full_state=...)` integrates up to a given frequency and returns the
     spins too.
+- **Training at scale, on SLURM** (`docs/usage_guides/cluster.md`). Training
+    sets too large for one process are kept on disk in shards
+    (`mlgw_bns.sharding.ShardedStore`): each a function of the dataset's seed
+    and its index alone, claimed through lock files by any number of
+    processes on any number of machines, written atomically, made again
+    identically if lost; the first `N` items are a uniform sample for every
+    `N`, so the training sets of a learning curve are nested. Jobs stop
+    cleanly on `SIGUSR1`/`SIGTERM` (what SLURM sends before the walltime)
+    and requeue themselves. Two pipelines use it:
+    `mlgw_bns.modes_dataset.ShardedModesDataset`,
+    `visualization/modes_scale.py` and `slurm/modes/` for the co-precessing
+    modes `Model` (the seven modes of `hom7_big`: a learning curve of kernel
+    ridge and perceptrons up to 2^18 waveforms, each model validated on 2^14,
+    timed and sized); `mlgw_bns.precession_dataset.ShardedDataset`,
+    `visualization/precession_scale.py` and `slurm/precession/` for the
+    regressed precession angles, up to 2^20 binaries.
+- `mlgw_bns.neural_network.JaxMLPNetwork`, a perceptron trained with JAX
+    (`mlgw_bns.jax_mlp.JaxMLP`: Adam with a cosine schedule, the best epoch
+    on a held-out tenth kept, single precision, evaluated in double) as the
+    regressor of a `ModeModel` (`nn_kind=JaxMLPNetwork`, also in the batched
+    evaluation). Its stored size and evaluation time do not grow with the
+    training set, unlike kernel ridge's. Its training checkpoints its whole
+    optimizer state, every few minutes and on `SIGTERM`/`SIGUSR1`, and
+    resumes from it to the bit (`TrainingInterrupted`); its loss weighs the
+    principal components as they contribute to the residuals, and the
+    training waveforms by their power for odd-`m` modes, as kernel ridge
+    does. `ModeModel.fit_nn` fits a regressor on principal components
+    reduced elsewhere (a shard at a time), `Model.train_downsampling` is the
+    first step of `Model.generate` on its own.
+- `mlgw_bns.model_validation.stored_waveform_mismatches`: the mismatches of
+    every mode and of the full waveform of a `Model` against waveforms
+    stored as their residuals, without TEOBResumS, ~0.4 s a waveform: for
+    validation sets of thousands of waveforms.
+- The regressed precession angles: training targets the regressor can
+    learn, `AngleGrid.smoothing` and `refine_envelopes` (fold priors), worth
+    about four times the data; the perceptron as the regressor
+    (`PrecessionRegressor.train(mlp=...)`), 5.7e-5 median mismatch on 16384
+    binaries against 1.5e-4 for kernel ridge
+    (`docs/explanation/precession_regression.md`); training a shard at a time
+    (`PrecessionRegressor.train_on_chunks`, with
+    `principal_component_analysis.CovarianceAccumulator`); and the training
+    sets ~16 times faster to make, ~25 ms of a core a binary (banded
+    Cholesky fits, carrier tables batched in JAX).
 - A docs page on precession (`docs/explanation/precession.md`): the twist,
     the conventions of the Euler angles and of the orbital phase at the
     reference frequency, and how to reproduce TEOBResumS' precessing waveforms

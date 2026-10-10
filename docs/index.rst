@@ -35,6 +35,7 @@ Welcome to ``mlgw_bns``'s documentation!
    usage_guides/profiling.md
    usage_guides/validating_results.md
    usage_guides/optimization.md
+   usage_guides/cluster.md
 
 .. toctree::
    :maxdepth: 2
@@ -52,6 +53,8 @@ Welcome to ``mlgw_bns``'s documentation!
    package_reference/neural_network
    package_reference/hyperparameter_optimization
    package_reference/precessing_model
+   package_reference/precession_regression
+   package_reference/training_at_scale
    package_reference/model_validation
    package_reference/fixed_dataset_training
    
