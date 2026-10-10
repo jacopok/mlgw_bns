@@ -22,7 +22,7 @@
 # (after a failure, or with more sizes) redoes nothing that is there. Jobs
 # reaching their walltime checkpoint and are requeued (job.sh).
 #
-# Follow with
+# Follow with (from the repository: source slurm/precession/cluster.env sets DATA)
 #   squeue --me
 #   tail -f $DATA/logs/*.log
 #   .venv/bin/python visualization/precession_scale.py status $DATA/validation $DATA/train
@@ -38,8 +38,8 @@ cd "$ROOT"
 source slurm/precession/cluster.env
 source slurm/lib.sh
 [[ -x "$PYTHON" ]] || { echo "no $PYTHON: uv sync first" >&2; exit 1; }
+resolve_data
 S=visualization/precession_scale.py
-mkdir -p "$DATA/logs"
 STAGES=("$@")
 [[ ${#STAGES[@]} -gt 0 ]] || STAGES=(generate exact refine train)
 
@@ -107,3 +107,9 @@ for stage in "${STAGES[@]}"; do
         echo "unknown stage $stage: generate, exact, refine or train" >&2; exit 1 ;;
     esac
 done
+
+echo
+echo "logs in $DATA/logs; to follow, from $ROOT:"
+echo "  source slurm/precession/cluster.env   # sets DATA=$DATA"
+echo "  squeue --me; tail -f \$DATA/logs/*.log"
+echo "  .venv/bin/python visualization/precession_scale.py status $DATA/validation $DATA/train"

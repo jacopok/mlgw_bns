@@ -3,6 +3,16 @@
 
 PYTHON="${PYTHON:-.venv/bin/python}"
 
+# DATA made absolute (the jobs start elsewhere than where they were submitted)
+# and exported, with its logs directory made: SLURM silently drops the output
+# of a job whose --output directory does not exist
+resolve_data() {
+    [[ -n "${DATA:-}" ]] || { echo "DATA is not set: set it in cluster.env" >&2; exit 1; }
+    mkdir -p "$DATA/logs"
+    DATA="$(cd "$DATA" && pwd)"
+    export DATA
+}
+
 # after ID...: the dependency on those of the jobs submitted (empty ids ignored)
 after() {
     local ids=()
@@ -11,10 +21,13 @@ after() {
     return 0
 }
 
-# the options of every job: requeueable, warned SIGNAL_LEAD seconds before
-# the walltime, and the account, partition and extras of cluster.env
+# the options of every job: run from the repository, requeueable (appending
+# to its log, which keeps the output of every attempt), warned SIGNAL_LEAD
+# seconds before the walltime, and the account, partition and extras of
+# cluster.env
 sbatch_common() {
-    COMMON=(--parsable --nodes=1 --ntasks=1 --requeue --signal="B:USR1@${SIGNAL_LEAD:-300}")
+    COMMON=(--parsable --nodes=1 --ntasks=1 --chdir="$PWD" --requeue --open-mode=append
+            --signal="B:USR1@${SIGNAL_LEAD:-300}")
     [[ -n "${SLURM_ACCOUNT:-}" ]] && COMMON+=(--account="$SLURM_ACCOUNT")
     [[ -n "${SLURM_PARTITION:-}" ]] && COMMON+=(--partition="$SLURM_PARTITION")
     # shellcheck disable=SC2206
@@ -45,8 +58,10 @@ single_threaded() {
 
 # run_step COMMAND...: run it; inside SLURM, USR1 (the walltime near) is
 # forwarded to it, and if it exits with 75 (stopped, its work saved) the job
-# is requeued, at most MAX_REQUEUES times; TERM (scancel) stops it without
-# requeueing. Exits with its status.
+# is requeued, at most MAX_REQUEUES times, provided it was warned of the
+# walltime or ran for MIN_RUN_SECONDS (not to requeue in a loop something
+# stopping as it starts); TERM (scancel) stops it without requeueing. Exits
+# with its status.
 run_step() {
     echo "=== [$(date -Is)] $(hostname) ${SLURM_JOB_ID:+job $SLURM_JOB_ID${SLURM_ARRAY_TASK_ID:+ task $SLURM_ARRAY_TASK_ID} (requeue ${SLURM_RESTART_COUNT:-0}) }cpus=${CPUS:-?}"
     echo "$*"
@@ -66,7 +81,9 @@ run_step() {
     echo "=== [$(date -Is)] exited with $rc"
     # 75: stopped before finishing (the walltime, or --hours), with its work saved
     if [[ $rc == 75 && $terminated == 0 ]]; then
-        if (( ${SLURM_RESTART_COUNT:-0} < ${MAX_REQUEUES:-20} )); then
+        if [[ $walltime == 0 ]] && (( SECONDS < ${MIN_RUN_SECONDS:-600} )); then
+            echo "=== stopped after ${SECONDS} s without the walltime signal: not requeued" >&2
+        elif (( ${SLURM_RESTART_COUNT:-0} < ${MAX_REQUEUES:-20} )); then
             local job="${SLURM_ARRAY_JOB_ID:+${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
             job="${job:-$SLURM_JOB_ID}"
             echo "=== requeueing $job"
