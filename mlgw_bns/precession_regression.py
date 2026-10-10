@@ -21,8 +21,8 @@ beats at the difference: when the two in-plane spins are comparable,
 larger, so the winding number of :math:`\alpha_J` jumps across parameter
 space.
 
-The representation
-------------------
+Representation of the angles
+----------------------------
 In the frame of :math:`\vec{J}` at the reference frequency (reached from the
 reference frame by the minimal rotation :math:`R_0`), the in-plane part
 :math:`\zeta = L_x + i L_y` of :math:`\hat{L}` is, to first order in
@@ -96,7 +96,8 @@ binary towards what a regressor trained on the others predicts for it.
 Status
 ------
 A prototype. Trained on 16384 binaries (uniform in :class:`TrainingRanges`;
-~25 minutes to integrate and fit on four CPU cores, ~15 to train), against
+~5 minutes to integrate and fit on four CPU cores, ~15 to train; larger
+training sets are kept on disk by :mod:`~mlgw_bns.precession_dataset`), against
 the integration (``visualization/precession_regression_study.py``, 256
 held-out binaries, total masses 2.4--3.2, random lines of sight, 20--2048
 Hz, ET noise, nothing optimized): waveform mismatches of 5.8e-5 median,
@@ -124,7 +125,9 @@ switch); the whole precessing waveform 25 ms and 7.5 ms, against 155 ms and
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field, fields
+from functools import lru_cache
 from typing import Any, Callable, Optional, Tuple
 
 import numpy as np
@@ -222,6 +225,24 @@ class AngleGrid:
         Whether the beat of the two carriers is the nonlinear nutation
         frequency (:func:`nutation_frequency`) or the splitting of the
         linearized normal modes (:func:`carrier_rates`).
+    averaged_precession : bool
+        With :attr:`elliptic_beat`, whether one carrier turns at the rate
+        at which :math:`\\hat{L}` precesses about :math:`\\vec{J}` averaged
+        over the nutation (:func:`mean_precession_rate`), the other a beat
+        from it, instead of the two straddling the mean of the linear
+        normal modes. The frequencies in :math:`\\zeta` are that rate plus
+        multiples of the beat; near equal masses, where the linear beat is
+        wrong, the straddling carriers miss it and the envelopes wind.
+    smoothing : float
+        Penalty on the second differences of the envelopes' B-spline
+        coefficients (:func:`_penalized_least_squares`): what splits
+        :math:`\\zeta` between the envelopes of the two carriers where the
+        envelopes could follow the beat by themselves.
+    sidebands : int
+        Further harmonics of the nutation given their own envelopes
+        (:attr:`zeta_terms`, :attr:`g_terms`), on each side of the two
+        carriers; without them those harmonics, large where the nutation is
+        anharmonic, are left to the envelopes, which then wind at the beat.
     """
 
     omega_min: float = OMEGA_MIN
@@ -232,11 +253,45 @@ class AngleGrid:
     n_tail_steps: int = N_TAIL_STEPS
     tail_kappa: float = TAIL_KAPPA
     elliptic_beat: bool = True
+    sidebands: int = 0
+    smoothing: float = SMOOTHING_PENALTY
+    averaged_precession: bool = False
 
     def __setstate__(self, state):
         # grids pickled before the elliptic beat used the linear one
         state.setdefault("elliptic_beat", False)
+        state.setdefault("sidebands", 0)
+        state.setdefault("smoothing", SMOOTHING_PENALTY)
+        state.setdefault("averaged_precession", False)
         self.__dict__.update(state)
+
+    @property
+    def zeta_terms(self) -> Tuple[Tuple[int, int], ...]:
+        r"""The exponents :math:`(a, b)` of the carrier products :math:`e^{i
+        (a \Phi_1 + b \Phi_2)}` that each envelope of :math:`\zeta` multiplies:
+        the two carriers, a constant, and the :attr:`sidebands` harmonics of
+        the nutation beyond them, :math:`\Phi_1 + k (\Phi_1 - \Phi_2)` and
+        :math:`\Phi_2 - k (\Phi_1 - \Phi_2)`."""
+        terms = [(0, 0), (1, 0), (0, 1)]
+        for k in range(1, self.sidebands + 1):
+            terms += [(1 + k, -k), (-k, 1 + k)]
+        return tuple(terms)
+
+    @property
+    def g_terms(self) -> Tuple[Tuple[int, int], ...]:
+        """The exponents of the carrier products of the complex envelopes of
+        :math:`G`, after its real :math:`g_0`: the two carriers and the beat,
+        with :attr:`sidebands` more harmonics of the beat."""
+        return ((1, 0), (0, 1)) + tuple((k, -k) for k in range(1, self.sidebands + 2))
+
+    @property
+    def n_zeta(self) -> int:
+        """Envelopes of :math:`\\zeta`; :math:`g_0` is the next."""
+        return len(self.zeta_terms)
+
+    @property
+    def n_envelopes(self) -> int:
+        return self.n_zeta + 1 + len(self.g_terms)
 
     @property
     def kappa_omega(self) -> float:
@@ -509,7 +564,7 @@ def frozen_precession_constants(xp, nu, q, omega):
     return l_magnitude, w_a / l_magnitude - h, w_b / l_magnitude - h, 1.5 * h * q / l_magnitude
 
 
-def nutation(xp, q, sa2, sb2, l_magnitude, alpha_a, alpha_b, k, f, j2, y_star):
+def nutation(xp, q, sa2, sb2, l_magnitude, alpha_a, alpha_b, k, f, j2, y_star, return_roots=False):
     r"""The nutation of the two spins at a fixed orbital frequency: its
     angular frequency (in time), the time average of :math:`u_A = \vec{S}_A
     \cdot \hat{L}` over it, and the elliptic parameter.
@@ -581,10 +636,92 @@ def nutation(xp, q, sa2, sb2, l_magnitude, alpha_a, alpha_b, k, f, j2, y_star):
         np.pi * xp.abs(alpha_tilde) * xp.sqrt(xp.maximum(g_lo, 0.0)) / (2.0 * quarter_period * sa)
     )
     mean_u_a = sa * (z_lo + (z_hi - z_lo) * mean_sn2)
+    if return_roots:
+        return frequency, mean_u_a, m, z_lo, z_hi
     return frequency, mean_u_a, m
 
 
-def nutation_frequency(xp, frame: ReferenceFrame, omega):
+def _tanh_sinh(half_width: float = 3.0, step: float = 1.0 / 32.0) -> Tuple[np.ndarray, np.ndarray]:
+    """Nodes and weights of the tanh-sinh quadrature on ``(0, 1)``, which
+    clusters its nodes double-exponentially at the two ends."""
+    t = np.arange(-half_width, half_width + step / 2, step)
+    inner = 0.5 * np.pi * np.sinh(t)
+    nodes = 0.5 * (1.0 + np.tanh(inner))
+    weights = step * 0.25 * np.pi * np.cosh(t) / np.cosh(inner) ** 2
+    return nodes, weights
+
+
+#: The quadrature over half a nutation of :func:`mean_precession_rate`, in
+#: :math:`2 \theta / \pi`: the peak of :math:`\Omega_z` where :math:`\hat{L}`
+#: passes close to :math:`\vec{J}` is at a turning point of the nutation,
+#: an end of the interval, and is resolved down to closest approaches of
+#: ~1e-8 rad.
+NUTATION_NODES, NUTATION_WEIGHTS = _tanh_sinh()
+
+
+def mean_precession_rate(xp, q, sa2, sb2, l_magnitude, alpha_a, alpha_b, k, f, j2, y_star, z_lo, z_hi, m):
+    r"""The rate :math:`\langle\Omega_z\rangle` at which :math:`\hat{L}`
+    precesses about :math:`\vec{J}`, averaged over the nutation of
+    :func:`nutation` (same arguments, and the turning points ``z_lo``,
+    ``z_hi`` of :math:`u_A / |S_A|` and the elliptic parameter ``m`` it
+    gives).
+
+    With :math:`L \dot{\hat{L}} = -\hat{L} \times (a_A \vec{S}_A + a_B
+    \vec{S}_B)` (the spin-spin terms cancel), the precession rate about
+    :math:`\vec{J}` is
+
+    .. math::
+        \Omega_z = \frac{\hat{J} \cdot (\hat{L} \times \dot{\hat{L}})}{\sin^2\beta_J}
+        = \frac{J N}{L (J^2 - c^2)} , \quad
+        N = a_A (S_A^2 + \vec{S}_A \cdot \vec{S}_B - u_A c_S)
+          + a_B (S_B^2 + \vec{S}_A \cdot \vec{S}_B - u_B c_S) ,
+
+    with :math:`c_S = u_A + u_B`, :math:`c = L + c_S = \vec{J} \cdot
+    \hat{L}`: a function of :math:`u_A` alone (for one spin, :math:`a_A J /
+    L`, exactly). Over the nutation :math:`u_A = u_- + (u_+ - u_-)\,
+    \mathrm{sn}^2(\psi, m)` with :math:`\psi` uniform in time, and with
+    :math:`\mathrm{sn}\,\psi = \sin\theta` the time average is the
+    average over :math:`0 \leq \theta \leq \pi / 2` with weight :math:`(1 -
+    m \sin^2\theta)^{-1/2}`, by the tanh-sinh quadrature of
+    :data:`NUTATION_NODES`: :math:`\Omega_z` peaks sharply where
+    :math:`\hat{L}` passes close to :math:`\vec{J}`, which it does at a
+    turning point, and the quadrature clusters its nodes there. NaN where
+    there is no nutation to average over (the turning points coincide: the
+    linearized cubic has no room between its roots, and its maximum may not
+    be a configuration that exists) or where it is not one.
+    """
+    alpha_tilde = alpha_b - 2.0 * k * y_star
+    y_0 = y_star - (alpha_b * y_star - k * y_star**2 - f) / alpha_tilde
+    y_1 = -(alpha_a - alpha_b / q) / alpha_tilde
+    h = 2.0 * k * l_magnitude / (3.0 * q)
+    w_a, w_b = (alpha_a + h) * l_magnitude, (alpha_b + h) * l_magnitude
+    s_free = (j2 - l_magnitude**2 - sa2 - sb2) / 2.0
+    expand = lambda a: xp.asarray(a)[..., None]  # noqa: E731
+    # sin^2 and cos^2 of theta, each accurate where it is small
+    sin2 = np.sin(0.5 * np.pi * NUTATION_NODES) ** 2
+    cos2 = np.sin(0.5 * np.pi * (1.0 - NUTATION_NODES)) ** 2
+    near_hi = NUTATION_NODES > 0.5
+    z = xp.where(near_hi, expand(z_hi) - expand(z_hi - z_lo) * cos2, expand(z_lo) + expand(z_hi - z_lo) * sin2)
+    u_a = xp.sqrt(sa2) * z
+    y = expand(y_0) + expand(y_1) * u_a
+    u_b = y - u_a / q
+    projection = u_a + u_b
+    s_ab = expand(s_free) - expand(l_magnitude) * projection
+    a_a = expand(w_a) - 3.0 * expand(h) * y
+    a_b = expand(w_b) - 3.0 * expand(h) * q * y
+    numerator = a_a * (sa2 + s_ab - u_a * projection) + a_b * (sb2 + s_ab - u_b * projection)
+    j_l = expand(l_magnitude) + projection
+    tilt = expand(j2) - j_l**2
+    rate = xp.sqrt(expand(j2)) * numerator / (expand(l_magnitude) * xp.where(tilt > 0, tilt, 1.0))
+    weight = NUTATION_WEIGHTS / xp.sqrt(1.0 - expand(m) + expand(m) * cos2)
+    mean = xp.sum(weight * rate, axis=-1) / xp.sum(weight, axis=-1)
+    exists = xp.all(tilt > 0, axis=-1) & (z_hi > z_lo)
+    return xp.where(exists, mean, xp.nan)
+
+
+def nutation_frequency(
+    xp, frame: ReferenceFrame, omega, return_parameter: bool = False, return_precession: bool = False
+):
     r"""The angular frequency, in time, of the nutation of the two spins (the
     beat of the two carriers) at the orbital frequencies ``omega``, an
     increasing array.
@@ -597,7 +734,11 @@ def nutation_frequency(xp, frame: ReferenceFrame, omega):
     only, :math:`\mathrm{d} J^2 / \mathrm{d} L = 2 L + 2 \langle u_A + u_B
     \rangle`, averaged over the nutation (Gerosa et al. 2015), and
     integrated in :math:`L` from its reference value by :data:`N_PICARD`
-    Picard iterations, ``omega`` serving as the quadrature nodes.
+    Picard iterations, ``omega`` serving as the quadrature nodes. With
+    ``return_parameter``, also the elliptic parameter :math:`m` there: how
+    anharmonic the nutation is, close to one near a separatrix between
+    precession morphologies; with ``return_precession``, also the
+    precession-averaged rate of :func:`mean_precession_rate`, in time.
     """
     nu, q = frame.nu, frame.mass_ratio
     spin_a, spin_b = frame.spin_a, frame.spin_b
@@ -626,17 +767,27 @@ def nutation_frequency(xp, frame: ReferenceFrame, omega):
     projection_sum = xp.full_like(omega, u_a_ref + u_b_ref)
     for _ in range(N_PICARD):
         j2 = j2_of(projection_sum)
-        frequency, mean_u_a, _ = nutation(
-            xp, q, sa2, sb2, l_magnitude, alpha_a, alpha_b, k, f, j2, y_ref
+        frequency, mean_u_a, parameter, z_lo, z_hi = nutation(
+            xp, q, sa2, sb2, l_magnitude, alpha_a, alpha_b, k, f, j2, y_ref, return_roots=True
         )
         # <u_B> = <Y> - <u_A> / q, with <Y> on the same linearization
         alpha_tilde = alpha_b - 2.0 * k * y_ref
         mean_y = y_ref - (alpha_b * y_ref - k * y_ref**2 - f + (alpha_a - alpha_b / q) * mean_u_a) / alpha_tilde
         projection_sum = mean_u_a * (1.0 - 1.0 / q) + mean_y
-    return frequency
+    result = (frequency,)
+    if return_parameter:
+        result += (parameter,)
+    if return_precession:
+        result += (mean_precession_rate(
+            xp, q, sa2, sb2, l_magnitude, alpha_a, alpha_b, k, f, j2, y_ref, z_lo, z_hi, parameter
+        ),)
+    return result if len(result) > 1 else frequency
 
 
-def carrier_rates(xp, frame: ReferenceFrame, omega, domega_dx, elliptic_beat: bool = True):
+def carrier_rates(
+    xp, frame: ReferenceFrame, omega, domega_dx, elliptic_beat: bool = True,
+    averaged_precession: bool = False,
+):
     r"""The normal-mode frequencies :math:`\mathrm{d}\Phi_k / \mathrm{d}x` of
     the two spins' precession about :math:`\vec{J}`.
 
@@ -680,7 +831,10 @@ def carrier_rates(xp, frame: ReferenceFrame, omega, domega_dx, elliptic_beat: bo
     gets it wrong near equal masses, where the beat is set by the spin-spin
     coupling and depends on the relative orientation of the in-plane spins:
     by up to ~50% at :math:`q = 1` (see
-    ``docs/explanation/precession_regression.md``).
+    ``docs/explanation/precession_regression.md``). With
+    ``averaged_precession`` the carriers are placed not about the linear
+    mean but on the precession-averaged rate of :math:`\hat{L}` (see
+    :attr:`AngleGrid.averaged_precession`).
     """
     nu, q = frame.nu, frame.mass_ratio
     spin_a, spin_b = frame.spin_a, frame.spin_b
@@ -740,13 +894,31 @@ def carrier_rates(xp, frame: ReferenceFrame, omega, domega_dx, elliptic_beat: bo
         # without in-plane spins (to 1e-6 of J) there is no precession, the
         # roots of the closed form coincide and it is ill-conditioned, and the
         # carriers multiply envelopes of zero: the linear splitting will do
-        elliptic = nutation_frequency(xp, frame, omega[index])
+        if averaged_precession:
+            elliptic, precession = nutation_frequency(xp, frame, omega[index], return_precession=True)
+        else:
+            elliptic = nutation_frequency(xp, frame, omega[index])
         linear = (fast_shifted - slow_shifted)[index]
         usable = xp.isfinite(elliptic) & (elliptic > 0.0) & ((tilt_a + tilt_b)[index] > 1e-12)
         log_beat = xp.log(xp.where(usable, elliptic, linear))
         weight = (log_omega - log_lo) / (log_hi - log_lo)
         half_beat = xp.exp(log_beat[cell] + weight * (log_beat[cell + 1] - log_beat[cell])) / 2.0
-        fast_shifted, slow_shifted = middle + half_beat, middle - half_beat
+        if averaged_precession:
+            # one carrier on the averaged precession, the other a beat away,
+            # on the side of the linear pair (chosen at the reference)
+            precession = xp.where(usable & xp.isfinite(precession), precession, middle[index])
+            precession = precession[cell] + weight * (precession[cell + 1] - precession[cell])
+            at_reference = xp.argmin(xp.abs(log_omega - xp.log(frame.omega_reference)))
+            on_fast = (
+                xp.abs(precession - fast_shifted)[at_reference]
+                <= xp.abs(precession - slow_shifted)[at_reference]
+            )
+            fast_shifted, slow_shifted = (
+                xp.where(on_fast, precession, precession + 2.0 * half_beat),
+                xp.where(on_fast, precession - 2.0 * half_beat, precession),
+            )
+        else:
+            fast_shifted, slow_shifted = middle + half_beat, middle - half_beat
     scale = domega_dx / omega_dot
     return xp.stack([fast_shifted * scale, slow_shifted * scale])
 
@@ -775,7 +947,8 @@ def carrier_table(xp, grid: AngleGrid, frame: ReferenceFrame, nodes=None):
     n_quadrature)`` each, with the phases zero at the reference."""
     x, omega, domega_dx = grid.quadrature_nodes() if nodes is None else nodes
     rates = carrier_rates(
-        xp, frame, xp.asarray(omega), xp.asarray(domega_dx), grid.elliptic_beat
+        xp, frame, xp.asarray(omega), xp.asarray(domega_dx), grid.elliptic_beat,
+        grid.averaged_precession,
     )
     width = (grid.x_range[1] - grid.x_range[0]) / (grid.n_quadrature - 1)
     zero = xp.zeros_like(rates[:, :1])
@@ -821,20 +994,31 @@ def g_baseline(xp, grid: AngleGrid, frame: ReferenceFrame, rates, nodes=None):
     return _hermite(xp, lo, hi, g, rate, xp.clip(xp.asarray(grid.coefficient_x), lo, hi))
 
 
-#: The envelopes, in the order of the coefficient arrays: three of zeta, four
-#: of G (``g_0`` is real).
+#: The envelopes without :attr:`AngleGrid.sidebands`, in the order of the
+#: coefficient arrays: three of zeta, four of G (``g_0`` is real).
 ENVELOPES = ("c_0", "c_1", "c_2", "g_0", "g_1", "g_2", "g_12")
 
 
+def _term(xp, e_1, e_2, exponents):
+    r""":math:`e_1^a e_2^b` for ``exponents`` :math:`= (a, b)`, the carriers
+    being of unit modulus."""
+    result = 1.0
+    for carrier, power in zip((e_1, e_2), exponents):
+        if power:
+            result = result * (carrier if power > 0 else xp.conj(carrier)) ** abs(power)
+    return result
+
+
 def _evaluate(xp, grid: AngleGrid, coefficients, carriers, x):
-    r"""``(zeta, G - G_ref)`` at ``x`` from the ``(7, n_coefficients)``
-    complex envelope coefficients and the carriers there."""
+    r"""``(zeta, G - G_ref)`` at ``x`` from the ``(n_envelopes,
+    n_coefficients)`` complex envelope coefficients and the carriers there."""
     cell, weights = _bspline(xp, grid, x)
     envelopes = sum(coefficients[:, cell + r] * weights[..., r] for r in range(4))
     e_1, e_2 = carriers
-    zeta = envelopes[0] + envelopes[1] * e_1 + envelopes[2] * e_2
-    g = envelopes[3].real + (
-        envelopes[4] * e_1 + envelopes[5] * e_2 + envelopes[6] * e_1 * xp.conj(e_2)
+    n = grid.n_zeta
+    zeta = sum(envelopes[i] * _term(xp, e_1, e_2, t) for i, t in enumerate(grid.zeta_terms))
+    g = envelopes[n].real + sum(
+        envelopes[n + 1 + i] * _term(xp, e_1, e_2, t) for i, t in enumerate(grid.g_terms)
     ).real
     return zeta, g
 
@@ -856,7 +1040,7 @@ class RegressedAngles:
     for it in the twist. The arrays are numpy or JAX.
     """
 
-    coefficients: Any  # (7, n_coefficients), complex
+    coefficients: Any  # (n_envelopes, n_coefficients), complex
     phases: Any  # (2, n_quadrature)
     rates: Any  # (2, n_quadrature)
     rotation: Any  # (3, 3)
@@ -914,15 +1098,16 @@ def _register_pytree():
 # ---------------------------------------------------------------------------
 
 
-def j_frame_angles(frame: ReferenceFrame, x, state, derivative, reference_index):
-    r""":math:`\zeta` and :math:`G - G_{\rm ref}` in the frame of :math:`\vec{J}`,
-    from the integrated :math:`\hat{L}` (the ``state`` and ``derivative`` of
+def j_frame_angles(rotation, x, state, derivative, reference_index):
+    r""":math:`\zeta` and :math:`G - G_{\rm ref}` in the frame of :math:`\vec{J}`
+    (reached by the ``rotation`` :math:`R_0` of :class:`ReferenceFrame`), from
+    the integrated :math:`\hat{L}` (the ``state`` and ``derivative`` of
     :class:`~mlgw_bns.batched_precession.TabulatedAngles`, numpy).
 
     :math:`G` is the trapezoidal quadrature of :math:`\mathrm{Im}(\zeta^*
     \zeta') / (1 + \cos\beta_J)` on the integration nodes.
     """
-    rotation = np.asarray(frame.rotation)
+    rotation = np.asarray(rotation)
     l_j = state[:, :3] @ rotation
     dl_j = derivative[:, :3] @ rotation
     zeta = l_j[:, 0] + 1j * l_j[:, 1]
@@ -931,28 +1116,56 @@ def j_frame_angles(frame: ReferenceFrame, x, state, derivative, reference_index)
     return zeta, g - g[reference_index]
 
 
-def _penalized_least_squares(cell, weights, factors, data, n_coefficients, prior=None):
+def _penalized_least_squares(
+    cell, weights, factors, data, n_coefficients, prior=None, smoothing=SMOOTHING_PENALTY
+):
     """Coefficients of ``sum_b factors[:, b] * spline_b(x)`` fitting ``data``.
 
     ``factors`` ``(n, n_blocks)`` multiply one B-spline envelope each; complex
     factors and data give complex coefficients. The normal equations are
     assembled from the four nonzero B-splines of each point, with
-    :data:`SMOOTHING_PENALTY` and :data:`RIDGE_PENALTY`; with a ``prior``
+    ``smoothing`` and :data:`RIDGE_PENALTY`; with a ``prior``
     ``(n_blocks, n_coefficients)``, the ridge pulls towards it, with
-    :data:`PRIOR_PENALTY`, instead of towards zero.
+    :data:`PRIOR_PENALTY`, instead of towards zero. ``data`` ``(n, k)``
+    fits ``k`` right-hand sides at once, giving ``(k, n_blocks,
+    n_coefficients)``.
+
+    With the coefficients of the blocks interleaved (coefficient ``k`` of
+    block ``b`` at ``k n_blocks + b``) the normal matrix is banded, with
+    ``4 n_blocks - 1`` superdiagonals, and Hermitian positive definite: it
+    is assembled cell by cell (a batched matrix product over the points of
+    each cell) in banded storage and solved by a banded Cholesky
+    decomposition, some hundred times fewer operations than the dense solve.
     """
+    from scipy.linalg import solveh_banded
+
     n_points, n_blocks = factors.shape
-    # (n, n_blocks * 4) columns and values of the design matrix
-    columns = (
-        np.arange(n_blocks)[None, :, None] * n_coefficients
-        + cell[:, None, None]
-        + np.arange(4)[None, None, :]
-    ).reshape(n_points, -1)
-    values = (factors[:, :, None] * weights[:, None, :]).reshape(n_points, -1)
     size = n_blocks * n_coefficients
-    flat = (columns[:, :, None] * size + columns[:, None, :]).ravel()
-    products = (np.conj(values)[:, :, None] * values[:, None, :]).ravel()
-    complex_data = np.iscomplexobj(factors) or np.iscomplexobj(data)
+    width = 4 * n_blocks
+    upper = width - 1
+    columns_of_data = data.reshape(n_points, -1)
+    # (n, 4 n_blocks) values of the design matrix, local column r n_blocks + b
+    values = (weights[:, :, None] * factors[:, None, :]).reshape(n_points, width)
+    order = np.argsort(cell, kind="stable")
+    cell, values, columns_of_data = cell[order], values[order], columns_of_data[order]
+    starts = np.flatnonzero(np.diff(cell, prepend=-1))
+    cells = cell[starts]
+    counts = np.diff(np.append(starts, n_points))
+    # the points of each cell, zero-padded to the most any cell has
+    which = (np.repeat(np.arange(len(starts)), counts), np.arange(n_points) - np.repeat(starts, counts))
+    padded = np.zeros((len(starts), counts.max(), width), values.dtype)
+    padded[which] = values
+    padded_data = np.zeros((len(starts), counts.max(), columns_of_data.shape[1]), columns_of_data.dtype)
+    padded_data[which] = columns_of_data
+    adjoint = np.conj(np.swapaxes(padded, 1, 2))
+    gram = adjoint @ padded
+    rhs_cells = adjoint @ padded_data
+    rows, columns = np.triu_indices(width)
+    # entry (i, j), i <= j, of the upper band is at ab[upper + i - j, j]
+    band_index = (
+        (upper + rows - columns)[None, :] * size + cells[:, None] * n_blocks + columns[None, :]
+    ).ravel()
+    complex_data = np.iscomplexobj(values) or np.iscomplexobj(data)
 
     def accumulate(index, weight, length):
         total = np.bincount(index, weights=weight.real, minlength=length)
@@ -960,46 +1173,56 @@ def _penalized_least_squares(cell, weights, factors, data, n_coefficients, prior
             total = total + 1j * np.bincount(index, weights=weight.imag, minlength=length)
         return total
 
-    gram = accumulate(flat, products, size * size).reshape(size, size)
-    rhs = accumulate(columns.ravel(), (np.conj(values) * data[:, None]).ravel(), size)
-    scale = np.trace(gram).real / size
-    second_difference = np.diff(np.eye(n_coefficients), 2, axis=0)
-    penalty = np.kron(
-        np.eye(n_blocks),
-        SMOOTHING_PENALTY * second_difference.T @ second_difference
-        + RIDGE_PENALTY * np.eye(n_coefficients),
+    band = accumulate(band_index, gram[:, rows, columns].ravel(), (upper + 1) * size)
+    band = band.reshape(upper + 1, size)
+    rhs_index = (cells[:, None] * n_blocks + np.arange(width)[None, :]).ravel()
+    rhs = np.stack(
+        [accumulate(rhs_index, rhs_cells[:, :, j].ravel(), size) for j in range(rhs_cells.shape[2])],
+        axis=1,
     )
+    scale = np.sum(band[upper].real) / size
+    # smoothing D^T D + ridge, pentadiagonal, the same for each block
+    second_difference = np.diff(np.eye(n_coefficients), 2, axis=0)
+    penalty = smoothing * second_difference.T @ second_difference + RIDGE_PENALTY * np.eye(n_coefficients)
     if prior is not None:
-        penalty = penalty + PRIOR_PENALTY * np.eye(size)
-        rhs = rhs + scale * PRIOR_PENALTY * np.ravel(prior)
-    solution = np.linalg.solve(gram + scale * penalty, rhs)
-    return solution.reshape(n_blocks, n_coefficients)
+        penalty += PRIOR_PENALTY * np.eye(n_coefficients)
+        rhs = rhs + scale * PRIOR_PENALTY * np.ravel(np.swapaxes(prior, 0, 1))[:, None]
+    for offset in range(3):
+        diagonal = np.diagonal(penalty, offset)
+        band[upper - offset * n_blocks, offset * n_blocks:] += scale * np.repeat(diagonal, n_blocks)
+    solution = solveh_banded(band, rhs, lower=False, check_finite=False)
+    solution = np.moveaxis(solution.reshape(n_coefficients, n_blocks, -1), 2, 0).swapaxes(1, 2)
+    return solution if data.ndim > 1 else solution[0]
 
 
-def fit_envelopes(grid: AngleGrid, frame: ReferenceFrame, x, zeta, g, prior=None):
-    """The ``(7, n_coefficients)`` envelope coefficients fitting ``zeta``
-    and ``g`` at the ``x`` within :attr:`AngleGrid.x_range` (numpy), and the
-    largest residuals of the two fits; ``prior``, see
-    :func:`refine_envelopes`."""
+def fit_envelopes(grid: AngleGrid, frame: ReferenceFrame, x, zeta, g, prior=None, table=None):
+    """The ``(n_envelopes, n_coefficients)`` envelope coefficients fitting
+    ``zeta`` and ``g`` at the ``x`` within :attr:`AngleGrid.x_range` (numpy),
+    and the largest residuals of the two fits; ``prior``, see
+    :func:`refine_envelopes`. ``table``, the :func:`carrier_table` of the
+    binary if already known (then ``frame`` is not needed)."""
     inside = x <= grid.x_range[1]
     x, zeta, g = x[inside], zeta[inside], g[inside]
-    phases, rates = carrier_table(np, grid, frame)
+    phases, rates = carrier_table(np, grid, frame) if table is None else table
     e_1, e_2 = _carriers(np, grid, phases, rates, x)
     cell, weights = _bspline(np, grid, x)
     n = grid.n_coefficients
-    zeta_fit = _penalized_least_squares(
-        cell, weights, np.stack([np.ones_like(e_1), e_1, e_2], axis=1), zeta, n,
-        None if prior is None else prior[:3],
+    k = grid.n_zeta
+    zeta_factors = np.stack(
+        [_term(np, e_1, e_2, t) * np.ones_like(e_1) for t in grid.zeta_terms], axis=1
     )
-    e_12 = e_1 * np.conj(e_2)
+    zeta_fit = _penalized_least_squares(
+        cell, weights, zeta_factors, zeta, n, None if prior is None else prior[:k], grid.smoothing,
+    )
     g_factors = np.stack(
-        [np.ones_like(x)] + [part for e in (e_1, e_2, e_12) for part in (e.real, -e.imag)],
+        [np.ones_like(x)]
+        + [part for t in grid.g_terms for part in (_term(np, e_1, e_2, t).real, -_term(np, e_1, e_2, t).imag)],
         axis=1,
     )
     g_prior = None if prior is None else np.stack(
-        [prior[3].real] + [part for c in prior[4:] for part in (c.real, c.imag)]
+        [prior[k].real] + [part for c in prior[k + 1:] for part in (c.real, c.imag)]
     )
-    g_fit = _penalized_least_squares(cell, weights, g_factors, g, n, g_prior)
+    g_fit = _penalized_least_squares(cell, weights, g_factors, g, n, g_prior, grid.smoothing)
     coefficients = np.concatenate([
         zeta_fit,
         g_fit[:1].astype(complex),
@@ -1016,27 +1239,25 @@ def fit_envelopes(grid: AngleGrid, frame: ReferenceFrame, x, zeta, g, prior=None
 N_SWITCH = 14
 
 
-def fit_switch_spins(grid: AngleGrid, frame: ReferenceFrame, x, spin_a, spin_b) -> np.ndarray:
+def fit_switch_spins(grid: AngleGrid, frame: ReferenceFrame, x, spin_a, spin_b, table=None) -> np.ndarray:
     r"""The :data:`N_SWITCH` regression targets of the spins at
     :attr:`AngleGrid.x_switch`, from their components in the frame of
-    :math:`\vec{J}` at ``x``, ``(n, 3)`` each (numpy).
+    :math:`\vec{J}` at ``x``, ``(n, 3)`` each (numpy); ``table`` as for
+    :func:`fit_envelopes`.
 
     The in-plane components are fitted on the carriers as :math:`\zeta` is
     (:func:`fit_envelopes`): they wind with the precession, their envelopes
     do not.
     """
     inside = x <= grid.x_range[1]
-    phases, rates = carrier_table(np, grid, frame)
+    phases, rates = carrier_table(np, grid, frame) if table is None else table
     e_1, e_2 = _carriers(np, grid, phases, rates, x[inside])
     cell, weights = _bspline(np, grid, x[inside])
     at_switch_cell, at_switch_weights = _bspline(np, grid, np.array([grid.x_switch]))
     factors = np.stack([np.ones_like(e_1), e_1, e_2], axis=1)
+    in_plane = np.stack([spin[inside, 0] + 1j * spin[inside, 1] for spin in (spin_a, spin_b)], axis=1)
     targets = []
-    for spin in (spin_a, spin_b):
-        envelopes = _penalized_least_squares(
-            cell, weights, factors, spin[inside, 0] + 1j * spin[inside, 1],
-            grid.n_coefficients,
-        )
+    for envelopes in _penalized_least_squares(cell, weights, factors, in_plane, grid.n_coefficients):
         values = sum(
             envelopes[:, at_switch_cell[0] + r] * at_switch_weights[0, r] for r in range(4)
         )
@@ -1141,39 +1362,198 @@ def regression_features(xp, intrinsic, omega_reference):
     )
 
 
-def _pack(coefficients: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """``(N, 7, n)`` complex coefficients to the real ``zeta`` and ``G``
-    blocks the two PCAs see, ``(N, 6 n)`` and ``(N, 7 n)``."""
-    zeta = coefficients[:, :3]
-    g = coefficients[:, 3:]
-    zeta_real = np.concatenate([part for c in range(3) for part in (zeta[:, c].real, zeta[:, c].imag)], axis=1)
+def _pack(coefficients: np.ndarray, n_zeta: int) -> Tuple[np.ndarray, np.ndarray]:
+    """``(N, n_envelopes, n)`` complex coefficients to the real ``zeta`` and
+    ``G`` blocks the two PCAs see, ``(N, 2 n_zeta n)`` and ``(N, (2
+    n_envelopes - 2 n_zeta - 1) n)``."""
+    zeta = coefficients[:, :n_zeta]
+    g = coefficients[:, n_zeta:]
+    zeta_real = np.concatenate(
+        [part for c in range(n_zeta) for part in (zeta[:, c].real, zeta[:, c].imag)], axis=1
+    )
     g_real = np.concatenate(
-        [g[:, 0].real] + [part for c in range(1, 4) for part in (g[:, c].real, g[:, c].imag)], axis=1
+        [g[:, 0].real] + [part for c in range(1, g.shape[1]) for part in (g[:, c].real, g[:, c].imag)],
+        axis=1,
     )
     return zeta_real, g_real
 
 
 def _unpack(xp, zeta_real, g_real, n: int):
     """Inverse of :func:`_pack`."""
+    n_zeta = zeta_real.shape[1] // (2 * n)
+    n_g = (g_real.shape[1] // n + 1) // 2
     zeta = [zeta_real[:, 2 * c * n:(2 * c + 1) * n] + 1j * zeta_real[:, (2 * c + 1) * n:(2 * c + 2) * n]
-            for c in range(3)]
+            for c in range(n_zeta)]
     g = [g_real[:, :n] + 0j] + [
         g_real[:, (2 * c - 1) * n:2 * c * n] + 1j * g_real[:, 2 * c * n:(2 * c + 1) * n]
-        for c in range(1, 4)
+        for c in range(1, n_g)
     ]
     return xp.stack(zeta + g, axis=1)
 
 
-def _training_binary(grid: AngleGrid, row, omega_reference, x, state, derivative, stride):
-    frame = reference_frame(np, grid, row, omega_reference)
-    zeta, g = j_frame_angles(
-        frame, x, state[:, 6:10], derivative[:, 6:10], (x.size - 1) // 2
+def _batched_call(function, size: int, *arrays, keep=None):
+    """``function`` of the rows of ``arrays``, in batches of ``size`` (the
+    last padded with copies of its first row, so that a jitted function
+    compiles once), its outputs as numpy arrays concatenated along the first
+    axis; only the outputs of index in ``keep``, if given."""
+    parts = []
+    for start in range(0, len(arrays[0]), size):
+        batch = [np.asarray(a[start:start + size]) for a in arrays]
+        rows = len(batch[0])
+        if rows < size:
+            batch = [np.concatenate([b, np.repeat(b[:1], size - rows, axis=0)]) for b in batch]
+        outputs = function(*batch)
+        parts.append([np.asarray(outputs[k])[:rows] for k in (range(len(outputs)) if keep is None else keep)])
+    return [np.concatenate(columns) for columns in zip(*parts)]
+
+
+def _batch_size(n: int, largest: int) -> int:
+    """The batch for ``n`` rows: ``largest``, or the power of two above ``n``
+    if smaller (one compilation per power of two)."""
+    return min(largest, 1 << max(n - 1, 0).bit_length())
+
+
+@lru_cache(maxsize=None)
+def _jitted_tables(grid: AngleGrid) -> Callable:
+    jax, jnp = _jnp()
+    nodes = tuple(jnp.asarray(a) for a in grid.quadrature_nodes())
+
+    def one(row, omega_reference):
+        frame = reference_frame(jnp, grid, row, omega_reference)
+        phases, rates = carrier_table(jnp, grid, frame, nodes)
+        return frame.rotation, phases, rates, g_baseline(jnp, grid, frame, rates, nodes)
+
+    return jax.jit(jax.vmap(one))
+
+
+def carrier_tables(grid: AngleGrid, intrinsic, omega_reference, batch: int = 256, keep=None):
+    """What the fits and the regressor need of each binary at its reference,
+    in JAX batches (a hundred times faster than :func:`reference_frame` and
+    :func:`carrier_table` in numpy, one binary at a time): the rotations
+    :math:`R_0` ``(N, 3, 3)``, the carrier phases and rates ``(N, 2,
+    n_quadrature)`` each, and the :func:`g_baseline` ``(N, n_coefficients)``;
+    only those of index in ``keep``, if given."""
+    return _batched_call(
+        _jitted_tables(grid), _batch_size(len(intrinsic), batch), intrinsic, omega_reference, keep=keep
     )
-    rotation = np.asarray(frame.rotation)
-    switch = fit_switch_spins(
-        grid, frame, x, state[:, 0:3] @ rotation, state[:, 3:6] @ rotation
+
+
+def _fit_chunk(grid: AngleGrid, intrinsic, omega_reference, x, zeta, g, priors=None):
+    """:func:`fit_envelopes` of each of a few binaries: their coefficients and
+    largest residuals."""
+    _, phases, rates = carrier_tables(grid, intrinsic, omega_reference, keep=(0, 1, 2))
+    results = [
+        fit_envelopes(grid, None, x[i], zeta[i], g[i], None if priors is None else priors[i],
+                      table=(phases[i], rates[i]))
+        for i in range(len(intrinsic))
+    ]
+    return np.array([r[0] for r in results]), np.array([r[1] for r in results])
+
+
+@lru_cache(maxsize=None)
+def _jitted_integration(grid: AngleGrid, n_steps: int) -> Callable:
+    jax, _ = _jnp()
+
+    def one(row, omega_reference):
+        angles, state, derivative = integrate_angles(
+            row[0], row[1], row[2], row[3:6], row[6:9], omega_reference / np.pi,
+            grid.omega_min / np.pi, n_steps, grid.omega_switch / np.pi,
+            full_state=True,
+        )
+        return angles.x, state, derivative
+
+    return jax.jit(jax.vmap(one))
+
+
+def _integrate_and_fit(grid: AngleGrid, intrinsic, omega_reference, n_steps: int, stride: int, batch: int):
+    """:func:`generate_training_set` for a few binaries, in one process: the
+    integration in a JAX batch, then the fits of each binary."""
+    x, state, derivative = _batched_call(
+        _jitted_integration(grid, n_steps), batch, intrinsic, omega_reference
     )
-    return x[::stride], zeta[::stride], g[::stride], switch
+    rotation, phases, rates, baselines = carrier_tables(grid, intrinsic, omega_reference, batch)
+    names = ("zeta", "g", "switch", "coefficients", "residuals")
+    results = []
+    for i in range(len(intrinsic)):
+        table = (phases[i], rates[i])
+        zeta, g = j_frame_angles(
+            rotation[i], x[i], state[i, :, 6:10], derivative[i, :, 6:10], (x.shape[1] - 1) // 2
+        )
+        switch = fit_switch_spins(
+            grid, None, x[i], state[i, :, 0:3] @ rotation[i], state[i, :, 3:6] @ rotation[i], table
+        )
+        zeta, g = zeta[::stride], g[::stride]
+        coefficients, residuals = fit_envelopes(grid, None, x[i, ::stride], zeta, g, table=table)
+        results.append((zeta, g, switch, coefficients, residuals))
+    data = {name: np.array([r[k] for r in results]) for k, name in enumerate(names)}
+    data["x"] = x[:, ::stride]
+    data["baselines"] = baselines
+    return data
+
+
+def generate_training_set(
+    grid: AngleGrid,
+    intrinsic: np.ndarray,
+    omega_reference: np.ndarray,
+    n_steps: int = N_STEPS,
+    stride: int = 2,
+    batch: int = 32,
+    n_jobs: int = -1,
+) -> dict:
+    r"""Integrate the precession of each binary over :attr:`AngleGrid.x_range`
+    and fit its envelopes.
+
+    The binaries are split in batches of ``batch``, each integrated (in a
+    JAX batch, single-threaded) and fitted by one of ``n_jobs`` worker
+    processes: ~35 ms a binary a core.
+
+    Returns a dictionary of ``x``, :math:`\zeta` and :math:`G - G_{\rm
+    ref}` (:func:`j_frame_angles`) on every ``stride``-th integration node,
+    ``(N, 2 n_steps / stride + 1)`` each (the reference is the middle node;
+    ``x`` is :func:`integration_nodes`), the ``(N, N_SWITCH)`` targets of
+    :func:`fit_switch_spins` (``switch``), the envelope ``coefficients`` and
+    largest ``residuals`` of :func:`fit_envelopes`, and the ``baselines``
+    of :func:`g_baseline`.
+    """
+    from joblib import Parallel, delayed
+
+    starts = range(0, len(intrinsic), batch)
+    parts = []
+    done = 0
+    with Parallel(n_jobs=n_jobs, return_as="generator") as parallel:
+        for part in parallel(
+            delayed(_integrate_and_fit)(
+                grid, intrinsic[s:s + batch], omega_reference[s:s + batch], n_steps, stride, batch
+            )
+            for s in starts
+        ):
+            parts.append(part)
+            done += len(part["switch"])
+            if len(parts) % max(len(starts) // 8, 1) == 0 or done == len(intrinsic):
+                logging.info("precession regression: integrated and fitted %i/%i", done, len(intrinsic))
+    return {key: np.concatenate([part[key] for part in parts]) for key in parts[0]}
+
+
+def integration_nodes(grid: AngleGrid, omega_reference, n_steps: int = N_STEPS, stride: int = 2) -> np.ndarray:
+    """The ``x`` of :func:`generate_training_set`, from the reference
+    frequencies alone, ``(N, 2 n_steps / stride + 1)``: the nodes of
+    :func:`~mlgw_bns.batched_precession.integrate_angles` from
+    ``omega_min`` to the switch, as it computes them."""
+    omega_reference = np.pi * (np.asarray(omega_reference, dtype=float)[:, None] / np.pi)
+    omega_lo = np.minimum(np.pi * (grid.omega_min / np.pi), omega_reference)
+    kappa_omega = KAPPA * omega_lo
+
+    def x_of(omega):
+        return np.log(omega) - kappa_omega / omega
+
+    x_reference = x_of(omega_reference)
+    back_step = (x_of(omega_lo) - x_reference) / n_steps
+    forward_step = (x_of(np.pi * (grid.omega_switch / np.pi)) - x_reference) / n_steps
+    steps = np.arange(n_steps + 1)
+    x = np.concatenate(
+        [(x_reference + back_step * steps)[:, :0:-1], x_reference + forward_step * steps], axis=1
+    )
+    return x[:, ::stride]
 
 
 def training_data(
@@ -1181,71 +1561,34 @@ def training_data(
     intrinsic: np.ndarray,
     omega_reference: np.ndarray,
     n_steps: int = N_STEPS,
-    batch: int = 64,
+    batch: int = 32,
     stride: int = 2,
     n_jobs: int = -1,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    r"""Integrate the precession of each binary over :attr:`AngleGrid.x_range`.
-
-    Returns ``x``, :math:`\zeta` and :math:`G - G_{\rm ref}`
-    (:func:`j_frame_angles`) on every ``stride``-th integration node,
-    ``(N, 2 n_steps / stride + 1)`` each (the reference is the middle node),
-    and the ``(N, N_SWITCH)`` targets of :func:`fit_switch_spins`.
-    """
-    from joblib import Parallel, delayed
-
-    jax, jnp = _jnp()
-
-    def one(row, omega):
-        angles, state, derivative = integrate_angles(
-            row[0], row[1], row[2], row[3:6], row[6:9], omega / np.pi,
-            grid.omega_min / np.pi, n_steps, grid.omega_switch / np.pi,
-            full_state=True,
-        )
-        return angles.x, state, derivative
-
-    integrate = jax.jit(jax.vmap(one))
-    results = []
-    with Parallel(n_jobs=n_jobs) as parallel:
-        for start in range(0, len(intrinsic), batch):
-            rows = intrinsic[start:start + batch]
-            omegas = omega_reference[start:start + batch]
-            x, state, derivative = (
-                np.asarray(a) for a in integrate(jnp.asarray(rows), jnp.asarray(omegas))
-            )
-            results += parallel(
-                delayed(_training_binary)(
-                    grid, rows[i], omegas[i], x[i], state[i], derivative[i], stride
-                )
-                for i in range(len(rows))
-            )
-            logging.info(
-                "precession regression: integrated %i/%i", start + len(rows), len(intrinsic)
-            )
-    return tuple(np.array([r[k] for r in results]) for k in range(4))
-
-
-def _fit_one(grid, row, omega_reference, x, zeta, g, prior):
-    frame = reference_frame(np, grid, row, omega_reference)
-    return fit_envelopes(grid, frame, x, zeta, g, prior)
+    r"""The ``x``, :math:`\zeta`, :math:`G - G_{\rm ref}` and switch targets
+    of :func:`generate_training_set`."""
+    data = generate_training_set(grid, intrinsic, omega_reference, n_steps, stride, batch, n_jobs)
+    return data["x"], data["zeta"], data["g"], data["switch"]
 
 
 def fit_all_envelopes(
-    grid: AngleGrid, intrinsic, omega_reference, x, zeta, g, priors=None, n_jobs: int = -1
+    grid: AngleGrid, intrinsic, omega_reference, x, zeta, g, priors=None, n_jobs: int = -1,
+    batch: int = 64,
 ) -> Tuple[np.ndarray, np.ndarray]:
     r""":func:`fit_envelopes` for each binary of :func:`training_data`, in
-    parallel: the ``(N, 7, n_coefficients)`` coefficients and the ``(N, 2)``
-    largest residuals of the fits of :math:`\zeta` and :math:`G`."""
+    parallel (batches of ``batch`` per worker): the ``(N, n_envelopes,
+    n_coefficients)`` coefficients and the ``(N, 2)`` largest residuals of
+    the fits of :math:`\zeta` and :math:`G`."""
     from joblib import Parallel, delayed
 
-    results = Parallel(n_jobs=n_jobs)(
-        delayed(_fit_one)(
-            grid, intrinsic[i], omega_reference[i], x[i], zeta[i], g[i],
-            None if priors is None else priors[i],
+    parts = Parallel(n_jobs=n_jobs)(
+        delayed(_fit_chunk)(
+            grid, intrinsic[s:s + batch], omega_reference[s:s + batch], x[s:s + batch],
+            zeta[s:s + batch], g[s:s + batch], None if priors is None else priors[s:s + batch],
         )
-        for i in range(len(intrinsic))
+        for s in range(0, len(intrinsic), batch)
     )
-    return np.array([r[0] for r in results]), np.array([r[1] for r in results])
+    return np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts])
 
 
 def refine_envelopes(
@@ -1317,20 +1660,17 @@ def _switch_targets(xp, intrinsic, omega_reference, switch, inverse: bool):
 
 
 def _g_baselines(grid: AngleGrid, intrinsic, omega_reference) -> np.ndarray:
-    """:func:`g_baseline` of each binary (numpy), ``(N, n_coefficients)``."""
-    baselines = []
-    for row, omega in zip(intrinsic, omega_reference):
-        frame = reference_frame(np, grid, row, float(omega))
-        _, rates = carrier_table(np, grid, frame)
-        baselines.append(g_baseline(np, grid, frame, rates))
-    return np.array(baselines)
+    """:func:`g_baseline` of each binary, ``(N, n_coefficients)`` (numpy,
+    computed in JAX batches)."""
+    return carrier_tables(grid, intrinsic, omega_reference, keep=(3,))[0]
 
 
 @dataclass
 class PrecessionRegressor:
-    """Precession angles from the parameters, by PCA and kernel ridge on the
-    envelopes of :func:`fit_envelopes` (and kernel ridge on the spins at the
-    switch, :func:`fit_switch_spins`); see the module docstring.
+    """Precession angles from the parameters, by PCA and kernel ridge (or a
+    :class:`~mlgw_bns.jax_mlp.JaxMLP`) on the envelopes of
+    :func:`fit_envelopes` (and on the spins at the switch,
+    :func:`fit_switch_spins`); see the module docstring.
 
     Build one with :meth:`train`; :meth:`angles` gives the
     :class:`RegressedAngles` of a binary in numpy, :meth:`jax_angles` a
@@ -1342,7 +1682,7 @@ class PrecessionRegressor:
     ranges: TrainingRanges
     pca_zeta: Any  # PrincipalComponentData
     pca_g: Any
-    network: Any  # KernelRidgeNetwork
+    network: Any  # KernelRidgeNetwork or JaxMLP
 
     @classmethod
     def train(
@@ -1355,6 +1695,10 @@ class PrecessionRegressor:
         kernel_gamma: float = 0.02,
         grid: AngleGrid = AngleGrid(),
         ranges: TrainingRanges = TrainingRanges(),
+        mlp: Optional[Any] = None,
+        mlp_loss: str = "natural",
+        baselines: Optional[np.ndarray] = None,
+        mlp_checkpoint: Optional[str] = None,
     ) -> "PrecessionRegressor":
         """Fit the PCAs and the regressor to the envelope ``coefficients``
         of :func:`fit_all_envelopes` (or :func:`refine_envelopes`) and the
@@ -1368,25 +1712,109 @@ class PrecessionRegressor:
         kernel_gamma : float
             Width of the RBF kernel, on standardized features; the ridge
             penalties are chosen per output by leave-one-out.
+        mlp : MLPConfig, optional
+            Regress with a :class:`~mlgw_bns.jax_mlp.JaxMLP` so configured
+            instead of kernel ridge.
+        mlp_loss : str
+            ``"natural"`` weighs the perceptron's squared errors as those of
+            the envelope coefficients and switch targets they reconstruct
+            (each principal component by its variance in the units of the
+            data); ``"uniform"`` weighs every standardized output alike, as
+            kernel ridge, which fits each on its own, effectively does.
+        baselines : array, optional
+            The :func:`g_baseline` of each binary, if known
+            (:func:`generate_training_set` gives them).
+        mlp_checkpoint : str, optional
+            Where the perceptron keeps its training state, to resume from
+            (:meth:`~mlgw_bns.jax_mlp.JaxMLP.fit`).
         """
-        from .neural_network import Hyperparameters, KernelRidgeNetwork
-        from .principal_component_analysis import PrincipalComponentAnalysisModel
-
-        coefficients = coefficients.copy()
-        coefficients[:, 3] -= _g_baselines(grid, intrinsic, omega_reference)
-        switch = _switch_targets(np, intrinsic, omega_reference, switch, inverse=False)
-        zeta_real, g_real = _pack(coefficients)
-        pca_zeta = PrincipalComponentAnalysisModel(n_components[0]).fit(zeta_real)
-        pca_g = PrincipalComponentAnalysisModel(n_components[1]).fit(g_real)
-        reduced = np.concatenate([
-            PrincipalComponentAnalysisModel.reduce_data(zeta_real, pca_zeta),
-            PrincipalComponentAnalysisModel.reduce_data(g_real, pca_g),
-            switch,
-        ], axis=1)
-        network = KernelRidgeNetwork(
-            Hyperparameters.default_kernel_ridge(len(intrinsic), kernel_gamma=kernel_gamma)
+        if baselines is None:
+            baselines = _g_baselines(grid, intrinsic, omega_reference)
+        return cls.train_on_chunks(
+            lambda: [(intrinsic, omega_reference, coefficients, switch, baselines)],
+            n_components=n_components, kernel_gamma=kernel_gamma, grid=grid, ranges=ranges,
+            mlp=mlp, mlp_loss=mlp_loss, mlp_checkpoint=mlp_checkpoint,
         )
-        network.fit(regression_features(np, intrinsic, omega_reference), reduced)
+
+    @classmethod
+    def train_on_chunks(
+        cls,
+        chunks: Callable,
+        n_components: Tuple[int, int] = (64, 64),
+        kernel_gamma: float = 0.02,
+        grid: AngleGrid = AngleGrid(),
+        ranges: TrainingRanges = TrainingRanges(),
+        mlp: Optional[Any] = None,
+        mlp_loss: str = "natural",
+        mlp_checkpoint: Optional[str] = None,
+    ) -> "PrecessionRegressor":
+        """:meth:`train` on a training set given in pieces, too large to hold:
+        ``chunks()`` gives an iterable of ``(intrinsic, omega_reference,
+        coefficients, switch, baselines)`` of disjoint sets of binaries, and
+        is called twice. The first pass accumulates the covariances of the
+        envelopes (:class:`~mlgw_bns.principal_component_analysis.CovarianceAccumulator`),
+        the second projects them on the principal components; only those
+        projections, the features and the switch targets of all the binaries
+        are held at once."""
+        from .data_management import PrincipalComponentData
+        from .neural_network import Hyperparameters, KernelRidgeNetwork
+        from .principal_component_analysis import CovarianceAccumulator
+
+        def targets(chunk):
+            intrinsic, omega_reference, coefficients, switch, baselines = chunk
+            coefficients = coefficients.copy()
+            coefficients[:, grid.n_zeta] -= baselines
+            return (
+                regression_features(np, intrinsic, omega_reference),
+                *_pack(coefficients, grid.n_zeta),
+                _switch_targets(np, intrinsic, omega_reference, switch, inverse=False),
+            )
+
+        start = time.perf_counter()
+        accumulators = (CovarianceAccumulator(), CovarianceAccumulator())
+        for chunk in chunks():
+            _, zeta_real, g_real, _ = targets(chunk)
+            accumulators[0].add(zeta_real)
+            accumulators[1].add(g_real)
+        bases = [a.principal_components(k) for a, k in zip(accumulators, n_components)]
+        features, projections, switches = [], [], []
+        for chunk in chunks():
+            chunk_features, zeta_real, g_real, chunk_switch = targets(chunk)
+            features.append(chunk_features)
+            switches.append(chunk_switch)
+            projections.append([(block - mean) @ vectors for block, (vectors, _, mean) in zip((zeta_real, g_real), bases)])
+        pcas, reduced = [], []
+        for j, (vectors, values, mean) in enumerate(bases):
+            projected = np.concatenate([p[j] for p in projections])
+            scaling = np.max(np.abs(projected), axis=0)
+            pcas.append(PrincipalComponentData(vectors, values, mean, scaling))
+            reduced.append(projected / scaling)
+        pca_zeta, pca_g = pcas
+        switch = np.concatenate(switches)
+        reduced = np.concatenate(reduced + [switch], axis=1)
+        features = np.concatenate(features)
+        logging.info(
+            "precession regression: principal components of %i binaries in %.0f s",
+            len(features), time.perf_counter() - start,
+        )
+        if mlp is None:
+            network = KernelRidgeNetwork(
+                Hyperparameters.default_kernel_ridge(len(features), kernel_gamma=kernel_gamma)
+            )
+            network.fit(features, reduced)
+        else:
+            from .jax_mlp import JaxMLP
+
+            weights = None
+            if mlp_loss == "natural":
+                units = np.concatenate([
+                    pca_zeta.principal_components_scaling, pca_g.principal_components_scaling,
+                    np.ones(switch.shape[1]),
+                ])
+                weights = np.var(reduced, axis=0) * units**2
+            elif mlp_loss != "uniform":
+                raise ValueError(f"unknown mlp_loss {mlp_loss!r}")
+            network = JaxMLP(mlp).fit(features, reduced, weights, checkpoint=mlp_checkpoint)
         return cls(grid=grid, ranges=ranges, pca_zeta=pca_zeta, pca_g=pca_g, network=network)
 
     @property
@@ -1397,7 +1825,7 @@ class PrecessionRegressor:
         return k, k + self.pca_g.eigenvalues.size
 
     def predict(self, intrinsic: np.ndarray, omega_reference: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """The ``(N, 7, n_coefficients)`` envelope coefficients and the
+        """The ``(N, n_envelopes, n_coefficients)`` envelope coefficients and the
         ``(N, N_SWITCH)`` switch targets (numpy)."""
         from .principal_component_analysis import PrincipalComponentAnalysisModel
 
@@ -1409,13 +1837,32 @@ class PrecessionRegressor:
             PrincipalComponentAnalysisModel.reconstruct_data(reduced[:, k:kk], self.pca_g),
             self.grid.n_coefficients,
         )
-        coefficients[:, 3] += _g_baselines(self.grid, intrinsic, omega_reference)
+        coefficients[:, self.grid.n_zeta] += _g_baselines(self.grid, intrinsic, omega_reference)
         return coefficients, _switch_targets(
             np, intrinsic, omega_reference, reduced[:, kk:], inverse=True
         )
 
+    def project(self, intrinsic: np.ndarray, omega_reference: np.ndarray, coefficients: np.ndarray) -> np.ndarray:
+        """The envelope ``coefficients`` of these binaries after the PCA
+        compression alone, as a perfect regression would predict them: the
+        floor the principal components set."""
+        from .principal_component_analysis import PrincipalComponentAnalysisModel
+
+        baselines = _g_baselines(self.grid, intrinsic, omega_reference)
+        coefficients = coefficients.copy()
+        coefficients[:, self.grid.n_zeta] -= baselines
+        blocks = [
+            PrincipalComponentAnalysisModel.reconstruct_data(
+                PrincipalComponentAnalysisModel.reduce_data(block, pca), pca
+            )
+            for block, pca in zip(_pack(coefficients, self.grid.n_zeta), (self.pca_zeta, self.pca_g))
+        ]
+        projected = _unpack(np, *blocks, self.grid.n_coefficients)
+        projected[:, self.grid.n_zeta] += baselines
+        return projected
+
     def predict_coefficients(self, intrinsic: np.ndarray, omega_reference: np.ndarray) -> np.ndarray:
-        """The ``(N, 7, n_coefficients)`` envelope coefficients (numpy)."""
+        """The ``(N, n_envelopes, n_coefficients)`` envelope coefficients (numpy)."""
         return self.predict(intrinsic, omega_reference)[0]
 
     def angles(self, intrinsic, omega_reference) -> RegressedAngles:
@@ -1439,20 +1886,29 @@ class PrecessionRegressor:
 
     def jax_coefficients(self) -> Callable:
         """A JAX function ``(intrinsic, omega_reference) -> (coefficients,
-        switch)``: the regressed ``(N, 7, n_coefficients)`` envelope
+        switch)``: the regressed ``(N, n_envelopes, n_coefficients)`` envelope
         coefficients, without the :func:`g_baseline` of :math:`g_0`, and the
         ``(N, N_SWITCH)`` switch targets."""
         from .batched import _freeze_kernel_ridge, _kernel_ridge
+        from .jax_mlp import JaxMLP
 
         _, jnp = _jnp()
-        regressor = self.network.regressor
-        kernel = _freeze_kernel_ridge(regressor.X_fit_, regressor.dual_coef_, regressor.gamma, [])
-        kernel = type(kernel)(*(jnp.asarray(getattr(kernel, f.name)) if f.name != "gamma"
-                                else kernel.gamma for f in fields(kernel)))
-        param_mean = jnp.asarray(self.network.param_scaler.mean_)
-        param_scale = jnp.asarray(self.network.param_scaler.scale_)
-        target_mean = jnp.asarray(self.network.target_scaler.mean_)
-        target_scale = jnp.asarray(self.network.target_scaler.scale_)
+        if isinstance(self.network, JaxMLP):
+            reduced_of = self.network.jax_function()
+        else:
+            regressor = self.network.regressor
+            kernel = _freeze_kernel_ridge(regressor.X_fit_, regressor.dual_coef_, regressor.gamma, [])
+            kernel = type(kernel)(*(jnp.asarray(getattr(kernel, f.name)) if f.name != "gamma"
+                                    else kernel.gamma for f in fields(kernel)))
+            param_mean = jnp.asarray(self.network.param_scaler.mean_)
+            param_scale = jnp.asarray(self.network.param_scaler.scale_)
+            target_mean = jnp.asarray(self.network.target_scaler.mean_)
+            target_scale = jnp.asarray(self.network.target_scaler.scale_)
+
+            def reduced_of(features):
+                (reduced,) = _kernel_ridge(jnp, (features - param_mean) / param_scale, [kernel])
+                return reduced * target_scale + target_mean
+
         k, kk = self._split
         blocks = []
         for pca in (self.pca_zeta, self.pca_g):
@@ -1464,9 +1920,7 @@ class PrecessionRegressor:
         n = self.grid.n_coefficients
 
         def coefficients(intrinsic, omega_reference):
-            features = regression_features(jnp, intrinsic, omega_reference)
-            (reduced,) = _kernel_ridge(jnp, (features - param_mean) / param_scale, [kernel])
-            reduced = reduced * target_scale + target_mean
+            reduced = reduced_of(regression_features(jnp, intrinsic, omega_reference))
             zeta_real = reduced[:, :k] @ blocks[0][0] + blocks[0][1]
             g_real = reduced[:, k:kk] @ blocks[1][0] + blocks[1][1]
             return _unpack(jnp, zeta_real, g_real, n), _switch_targets(
@@ -1495,7 +1949,7 @@ class PrecessionRegressor:
         def one_binary(row, omega_reference, coefficients_row, switch_row):
             frame = reference_frame(jnp, grid, row, omega_reference)
             phases, rates = carrier_table(jnp, grid, frame, nodes)
-            coefficients_row = coefficients_row.at[3].add(g_baseline(jnp, grid, frame, rates, nodes))
+            coefficients_row = coefficients_row.at[grid.n_zeta].add(g_baseline(jnp, grid, frame, rates, nodes))
             tail = _tail(grid, frame, coefficients_row, phases, rates, switch_row)
             return RegressedAngles(
                 coefficients_row, phases, rates, frame.rotation, frame.g_reference, *tail, grid

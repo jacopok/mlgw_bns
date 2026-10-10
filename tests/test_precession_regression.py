@@ -16,16 +16,20 @@ from mlgw_bns.batched_precession import (  # noqa: E402
     batch_arguments,
     integrate_angles,
 )
+from mlgw_bns.jax_mlp import MLPConfig  # noqa: E402
 from mlgw_bns.precession_regression import (  # noqa: E402
     AngleGrid,
     PrecessionRegressor,
     RegressedAngles,
     TrainingRanges,
+    _pack,
     _tail,
+    _unpack,
     carrier_table,
     fit_all_envelopes,
     fit_envelopes,
     frozen_precession_constants,
+    mean_precession_rate,
     nutation,
     reference_frame,
     training_data,
@@ -75,22 +79,40 @@ def grid():
     return AngleGrid()
 
 
-def test_envelopes_reproduce_the_integrated_rotation(grid):
+@pytest.fixture(scope="module")
+def integrated(grid):
+    """The integrated angles of :data:`ROWS`, as the training data has them."""
+    return training_data(grid, ROWS, OMEGA_REFERENCE, n_jobs=1)
+
+
+@pytest.mark.parametrize("variant, tolerance", [
+    ({}, 1e-5),
+    ({"sidebands": 1}, 1e-5),
+    # smoother envelopes trade ~1e-4 rad of fit for a split between the
+    # carriers that the regression can follow
+    ({"smoothing": 1e-2}, 5e-4),
+])
+def test_envelopes_reproduce_the_integrated_rotation(grid, integrated, variant, tolerance):
     """With envelopes and switch state fitted to a binary's own angles (no
     regression), the representation gives back the integrated rotation on
     both sides of the reference frequency, and the integration from the
-    switch carries it to the merger."""
+    switch carries it to the merger; also with more harmonics of the
+    nutation, or smoother envelopes."""
     integrate = jax.jit(lambda row, omega: astuple(integrate_angles(
         row[0], row[1], row[2], row[3:6], row[6:9], omega / np.pi,
         grid.omega_min / np.pi, N_STEPS, grid.omega_max / np.pi,
     )))
     momega = np.geomspace(grid.omega_min, grid.omega_max, 3000)
     below = grid.x_of(momega) <= grid.x_switch
-    x, zeta, g, switch = training_data(grid, ROWS, OMEGA_REFERENCE, n_jobs=1)
+    x, zeta, g, switch = integrated
+    grid = AngleGrid(**variant)
     for i, (row, omega_reference) in enumerate(zip(ROWS, OMEGA_REFERENCE)):
         frame = reference_frame(np, grid, row, omega_reference)
         coefficients, residuals = fit_envelopes(grid, frame, x[i], zeta[i], g[i])
-        assert max(residuals) < 1e-5
+        assert coefficients.shape == (grid.n_envelopes, grid.n_coefficients)
+        assert max(residuals) < tolerance
+        packed = _pack(coefficients[None], grid.n_zeta)
+        assert np.array_equal(_unpack(np, *packed, grid.n_coefficients)[0], coefficients)
         phases, rates = carrier_table(np, grid, frame)
         tail = _tail(grid, frame, *(jax.numpy.asarray(a) for a in (coefficients, phases, rates, switch[i])))
         angles = RegressedAngles(
@@ -100,15 +122,16 @@ def test_envelopes_reproduce_the_integrated_rotation(grid):
         exact = TabulatedAngles(*(np.asarray(a) for a in integrate(row, omega_reference)))
         expected = [np.asarray(a) for a in exact.at_momega(jax.numpy.asarray(momega))]
         difference = rotation_difference(expected, angles.at_momega(momega))
-        assert np.max(difference[below]) < 1e-5
-        assert np.max(difference[~below]) < 2e-4
+        assert np.max(difference[below]) < tolerance
+        assert np.max(difference[~below]) < max(2e-4, tolerance)
 
 
 @pytest.mark.parametrize("q", [1.0, 1.02, 1.5])
 def test_nutation_matches_the_frozen_precession(grid, q):
-    """The closed-form nutation frequency is that of the full right-hand side
-    integrated at a fixed orbital frequency, from equal masses (where the
-    linearized beat is ~50% off) to unequal ones."""
+    """The closed-form nutation frequency, and the rate at which L-hat
+    precesses about J averaged over the nutation, are those of the full
+    right-hand side integrated at a fixed orbital frequency, from equal
+    masses (where the linearized beat is ~50% off) to unequal ones."""
     from scipy.integrate import solve_ivp
 
     row = ROWS[1].copy()
@@ -134,41 +157,57 @@ def test_nutation_matches_the_frozen_precession(grid, q):
     u_a, u_b = s_a @ l_hat, s_b @ l_hat
     y = u_a / q + u_b
     j = l_magnitude * l_hat + s_a + s_b
-    frequency, _, _ = nutation(
+    arguments = (
         np, q, s_a @ s_a, s_b @ s_b, l_magnitude, alpha_a, alpha_b, k,
         alpha_a * u_a + alpha_b * u_b - k * y**2, j @ j, y,
     )
+    frequency, _, m, z_lo, z_hi = nutation(*arguments, return_roots=True)
     solution = solve_ivp(
         rhs, (0, 5 * 2 * np.pi / frequency), np.concatenate([s_a, s_b, l_hat]),
-        method="DOP853", rtol=1e-11, atol=1e-14, events=projection_rate,
+        method="DOP853", rtol=1e-11, atol=1e-14, events=projection_rate, dense_output=True,
     )
     extrema = solution.t_events[0]
     assert len(extrema) >= 8
     integrated = 2 * np.pi / np.mean(extrema[2:] - extrema[:-2])
     assert abs(frequency / integrated - 1) < 5e-4
 
+    # the azimuth of L-hat about J over a whole number of nutation periods
+    j_hat = j / np.linalg.norm(j)
+    e_1 = np.cross(j_hat, [1.0, 0.0, 0.0])
+    e_1 /= np.linalg.norm(e_1)
+    e_2 = np.cross(j_hat, e_1)
+    times = np.linspace(extrema[0], extrema[-1 - (len(extrema) - 1) % 2], 20000)
+    l_t = solution.sol(times)[6:9]
+    azimuth = np.unwrap(np.arctan2(e_2 @ l_t, e_1 @ l_t))
+    averaged = (azimuth[-1] - azimuth[0]) / (times[-1] - times[0])
+    assert abs(mean_precession_rate(*arguments, z_lo, z_hi, m) / averaged - 1) < 5e-4
+
 
 def test_grids_pickled_before_the_elliptic_beat_keep_the_linear_one():
     import pickle
 
     state = dict(AngleGrid().__dict__)
-    del state["elliptic_beat"]
+    for added in ("elliptic_beat", "sidebands", "smoothing"):
+        del state[added]
     old = AngleGrid.__new__(AngleGrid)
     old.__setstate__(state)
     assert not old.elliptic_beat
+    assert old.sidebands == 0 and old.smoothing == AngleGrid().smoothing
     assert pickle.loads(pickle.dumps(AngleGrid())).elliptic_beat
 
 
-@pytest.fixture(scope="module")
-def regressor(grid):
-    """A small regressor: enough to exercise the machinery, not to be accurate."""
+@pytest.fixture(scope="module", params=["kernel ridge", "perceptron"])
+def regressor(grid, request):
+    """A small regressor, by kernel ridge or a perceptron: enough to exercise
+    the machinery, not to be accurate."""
     intrinsic, omega_reference = TrainingRanges().sample(48, seed=3)
     x, zeta, g, switch = training_data(
         grid, intrinsic, omega_reference, n_steps=512, batch=16, n_jobs=1
     )
     coefficients, _ = fit_all_envelopes(grid, intrinsic, omega_reference, x, zeta, g, n_jobs=1)
+    mlp = MLPConfig(hidden=(16, 16), epochs=20, batch_size=16) if request.param == "perceptron" else None
     return PrecessionRegressor.train(
-        intrinsic, omega_reference, coefficients, switch, n_components=(8, 8), grid=grid
+        intrinsic, omega_reference, coefficients, switch, n_components=(8, 8), grid=grid, mlp=mlp
     )
 
 

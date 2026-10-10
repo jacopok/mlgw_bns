@@ -110,15 +110,95 @@ def frozen_rate(nu, q, a10, omega, s_a, s_b, l_hat, guess):
     return 2 * np.pi / np.mean(times[2:] - times[:-2]), omega_dot
 
 
+def beat_phases(grid, row, omega_reference, n_frozen):
+    r"""Integrate the binary ``row`` and compare the beat phase each model
+    accumulates between successive extrema of :math:`\vec{S}_A \cdot \hat{L}`
+    with the true :math:`\pi`: ``(mid, phases, frozen_inside)``, the
+    :math:`\Omega` of each half-cycle, the relative error of each model's
+    phase over it, and where the frozen rate is interpolated rather than
+    extrapolated."""
+    q = row[0]
+    angles, state, _ = integrate_angles(
+        row[0], row[1], row[2], jnp.asarray(row[3:6]), jnp.asarray(row[6:9]),
+        omega_reference / np.pi, grid.omega_min / np.pi, 4096,
+        final_frequency_22=grid.omega_switch / np.pi, full_state=True,
+    )
+    state = np.asarray(state)
+    omega = state[:, 10]
+    s_a, s_b, l_hat = state[:, 0:3], state[:, 3:6], state[:, 6:9]
+    mid, true, edges = extrema_rates(omega, np.sum(s_a * l_hat, axis=1))
+
+    frame = reference_frame(np, grid, row, omega_reference)
+    nu = q / (1 + q) ** 2
+    a10 = float(frame.a10_tidal)
+    picks = np.unique(np.geomspace(1, len(mid), n_frozen).astype(int) - 1)
+    frozen = np.empty(len(picks))
+    for j, i in enumerate(picks):
+        k = np.searchsorted(omega, mid[i])
+        _, _, _, _, omega_dot, _ = _pn_precession_derivatives(
+            nu, q, mid[i], s_a[k], s_b[k], l_hat[k], a10
+        )
+        f_rate, omega_dot = frozen_rate(
+            nu, q, a10, mid[i], s_a[k], s_b[k], l_hat[k], true[i] * omega_dot
+        )
+        frozen[j] = f_rate / omega_dot
+
+    # the beat phase each model accumulates between successive true
+    # extrema, which is pi: the rate is not constant over a half-cycle,
+    # so comparing rates at its midpoint is biased where it is long
+    fine = np.geomspace(edges[0], edges[-1], 20000)
+    ok = np.isfinite(frozen)
+    models = {
+        name: np.subtract(*carrier_rates(np, frame, fine, np.ones_like(fine), elliptic))
+        for name, elliptic in (("linear", False), ("elliptic", True))
+    }
+    models["frozen"] = np.exp(np.interp(np.log(fine), np.log(mid[picks][ok]), np.log(frozen[ok])))
+    phases = {}
+    for name, rate in models.items():
+        cumulative = np.concatenate([[0.0], np.cumsum(0.5 * (rate[1:] + rate[:-1]) * np.diff(fine))])
+        phases[name] = np.diff(np.interp(edges, fine, cumulative)) / np.pi - 1
+    inside = (mid >= mid[picks][ok][0]) & (mid <= mid[picks][ok][-1]) if ok.any() else np.zeros_like(mid, bool)
+    return mid, phases, inside
+
+
+def validation_binaries(args, grid):
+    """The ``--top`` binaries of ``--validation`` with the most anharmonic
+    nutation, and ``--controls`` of the least."""
+    from precession_regression_study import load, nutation_parameters
+
+    data = load(args.validation)
+    max_m = nutation_parameters(grid, data["intrinsic"], data["omega_reference"]).max(axis=1)
+    order = np.argsort(max_m)[::-1]
+    chosen = np.concatenate([order[: args.top], order[::-1][: args.controls]])
+    return data["intrinsic"][chosen], data["omega_reference"][chosen], max_m[chosen]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--n", type=int, default=6, help="Omega samples per binary for the frozen period")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--chi-perp", type=float, nargs="+", default=[0.1, 0.4])
     parser.add_argument("--q", type=float, nargs="+", default=[1.02, 1.1, 1.25, 1.5, 2.0])
+    parser.add_argument("--validation", nargs="+",
+                        help="instead, binaries of these files of precession_regression_study.py")
+    parser.add_argument("--top", type=int, default=12, help="... with the largest max m")
+    parser.add_argument("--controls", type=int, default=4, help="... and with the smallest")
     args = parser.parse_args()
 
     grid = AngleGrid()
+    if args.validation:
+        rows, omegas, max_m = validation_binaries(args, grid)
+        print("beat phase accumulated over the band minus the true one, in cycles "
+              "(frozen: between its nodes only)")
+        print(f"{'q':>5} {'chi_1z':>6} {'chi_2z':>6} {'max m':>6} {'cycles':>7} {'linear':>8} {'elliptic':>9} {'frozen':>8}")
+        for row, omega_reference, m in zip(rows, omegas, max_m):
+            mid, phases, inside = beat_phases(grid, row, omega_reference, args.n)
+            total = {name: np.sum(phase) / 2 for name, phase in phases.items()}
+            total["frozen"] = np.sum(phases["frozen"][inside]) / 2
+            print(f"{row[0]:5.2f} {row[5]:+6.2f} {row[8]:+6.2f} {m:6.3f} {len(mid) / 2:7.1f}"
+                  f" {total['linear']:+8.2f} {total['elliptic']:+9.2f} {total['frozen']:+8.2f}")
+        return
+
     omega_reference = 1e-3
     rng = np.random.default_rng(args.seed)
     print("relative error of the beat phase over each half-cycle, averaged in bands of Omega")
@@ -126,48 +206,9 @@ def main():
     for chi_perp in args.chi_perp:
         for q in args.q:
             row = binary(q, chi_perp, rng)
-            angles, state, _ = integrate_angles(
-                row[0], row[1], row[2], jnp.asarray(row[3:6]), jnp.asarray(row[6:9]),
-                omega_reference / np.pi, grid.omega_min / np.pi, 4096,
-                final_frequency_22=grid.omega_switch / np.pi, full_state=True,
-            )
-            state = np.asarray(state)
-            omega = state[:, 10]
-            s_a, s_b, l_hat = state[:, 0:3], state[:, 3:6], state[:, 6:9]
-            mid, true, edges = extrema_rates(omega, np.sum(s_a * l_hat, axis=1))
-
-            frame = reference_frame(np, grid, row, omega_reference)
-            nu = q / (1 + q) ** 2
-            a10 = float(frame.a10_tidal)
-            picks = np.unique(np.geomspace(1, len(mid), args.n).astype(int) - 1)
-            frozen = np.empty(len(picks))
-            for j, i in enumerate(picks):
-                k = np.searchsorted(omega, mid[i])
-                _, _, _, _, omega_dot, _ = _pn_precession_derivatives(
-                    nu, q, mid[i], s_a[k], s_b[k], l_hat[k], a10
-                )
-                f_rate, omega_dot = frozen_rate(
-                    nu, q, a10, mid[i], s_a[k], s_b[k], l_hat[k], true[i] * omega_dot
-                )
-                frozen[j] = f_rate / omega_dot
-
-            # the beat phase each model accumulates between successive true
-            # extrema, which is pi: the rate is not constant over a half-cycle,
-            # so comparing rates at its midpoint is biased where it is long
-            fine = np.geomspace(edges[0], edges[-1], 20000)
-            ok = np.isfinite(frozen)
-            models = {
-                name: np.subtract(*carrier_rates(np, frame, fine, np.ones_like(fine), elliptic))
-                for name, elliptic in (("linear", False), ("elliptic", True))
-            }
-            models["frozen"] = np.exp(np.interp(np.log(fine), np.log(mid[picks][ok]), np.log(frozen[ok])))
-            phases = {}
-            for name, rate in models.items():
-                cumulative = np.concatenate([[0.0], np.cumsum(0.5 * (rate[1:] + rate[:-1]) * np.diff(fine))])
-                phases[name] = np.diff(np.interp(edges, fine, cumulative)) / np.pi - 1
+            mid, phases, inside = beat_phases(grid, row, omega_reference, args.n)
             # report in bands of Omega, the frozen one only between its nodes
-            bands = np.geomspace(edges[0], edges[-1], args.n + 1)
-            inside = (mid >= mid[picks][ok][0]) & (mid <= mid[picks][ok][-1])
+            bands = np.geomspace(mid[0], mid[-1] * (1 + 1e-12), args.n + 1)
             for lo, hi in zip(bands[:-1], bands[1:]):
                 sel = (mid >= lo) & (mid < hi)
                 if not sel.any():
