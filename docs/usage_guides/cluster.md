@@ -121,6 +121,10 @@ finished:
 - `submit.sh STAGE...` submits stages again: after a failure, or after
   adding sizes or series to `cluster.env`. A dataset whose last shard is full
   can be grown by raising its size.
+- The precession `submit.sh` does not submit the stages already done
+  (`precession_scale.py pending`), nor regressors already validated: run
+  again with new series (each may have sizes of its own, `name|options|sizes`)
+  it submits only their training.
 
 ## When a job fails
 

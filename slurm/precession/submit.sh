@@ -18,8 +18,10 @@
 #             GENERATE_TASKS refitting the envelopes
 #   train     a job per series and size: train, then validate
 # Each starts once the stages it needs, submitted with it, have succeeded.
-# Everything is resumable and skips what is done: submitting a stage again
-# (after a failure, or with more sizes) redoes nothing that is there. Jobs
+# Stages already done (precession_scale.py pending) are not submitted, nor
+# regressors already validated, so running it again with more SERIES or
+# SIZES submits only those. Everything is resumable besides: a stage
+# submitted again after a failure redoes nothing that is there. Jobs
 # reaching their walltime checkpoint and are requeued (job.sh).
 #
 # Follow with (from the repository: source slurm/precession/cluster.env sets DATA)
@@ -51,23 +53,31 @@ for dataset in "train $N_TRAIN 1" "validation $N_VALIDATION 2"; do
         --shard-size "$SHARD_SIZE" --mass-ratio $MASS_RATIO --smoothing "$SMOOTHING" 2>/dev/null | head -1
 done
 
+# the stages done already (the datasets made, the envelopes refined) are skipped
+PENDING=" $(OMP_NUM_THREADS=1 JAX_PLATFORMS=cpu "$PYTHON" "$S" pending "$DATA/validation" "$DATA/train" \
+    --refine-iterations "$REFINE_ITERATIONS" | tr '\n' ' ')"
+pending() { [[ "$PENDING" == *" $1 "* ]] || { echo "$1: done"; return 1; }; }
+
 sbatch_common
 
 GENERATED="" EXACT="" REFINED=""
 for stage in "${STAGES[@]}"; do
     case "$stage" in
     generate)
+        pending generate || continue
         # shellcheck disable=SC2046
         GENERATED=$(submit precession generate "$GENERATE_CPUS" "$GENERATE_MEM" "$GENERATE_TIME" \
             --array="0-$((GENERATE_TASKS - 1))" -- generate)
         echo "generate: $GENERATED (array of $GENERATE_TASKS)" ;;
     exact)
+        pending exact || continue
         # shellcheck disable=SC2046
         EXACT=$(submit precession exact "$EXACT_CPUS" "$EXACT_MEM" "$EXACT_TIME" $(after "$GENERATED") -- exact)
         echo "exact: $EXACT" ;;
     refine)
         previous="$GENERATED"
         for (( iteration = 1; iteration <= REFINE_ITERATIONS; iteration++ )); do
+            pending "refine$iteration" || continue
             # shellcheck disable=SC2046
             prior=$(submit precession "prior$iteration" "$PRIOR_CPUS" "$PRIOR_MEM" "$PRIOR_TIME" \
                 --array="0-$((FOLDS - 1))" $(after "$previous") -- prior "$iteration")
@@ -81,14 +91,18 @@ for stage in "${STAGES[@]}"; do
         source_="base"
         (( REFINE_ITERATIONS > 0 )) && source_="refine$REFINE_ITERATIONS"
         for series in "${SERIES[@]}"; do
-            name="${series%%|*}" options="${series#*|}"
-            for n in $SIZES; do
+            # name|options, or name|options|sizes (SIZES otherwise)
+            IFS='|' read -r name options sizes <<< "$series"
+            skipped=()
+            for n in ${sizes:-$SIZES}; do
                 (( n <= N_TRAIN )) || continue
+                [[ -f "$DATA/runs/validate_${name}_$n.npz" ]] && { skipped+=("$n"); continue; }
                 if [[ " $options " == *" --mlp "* ]]; then
                     mem="$((8 + 16 * n / 1048576))G"
                     extra=(${MLP_GRES:+--gres="$MLP_GRES"})
+                    # the defaults first: the options of the series override them
                     # shellcheck disable=SC2206
-                    arguments=($options --mlp-steps "$MLP_STEPS" --mlp-batch "$(mlp_batch "$n")")
+                    arguments=(--mlp-steps "$MLP_STEPS" --mlp-batch "$(mlp_batch "$n")" $options)
                 else
                     (( n <= KRR_MAX )) || continue
                     # the kernel matrix and its eigenvectors, and some room
@@ -102,6 +116,7 @@ for stage in "${STAGES[@]}"; do
                     $(after "$REFINED" "$EXACT") -- train "$name" "$n" --source "$source_" "${arguments[@]}")
                 echo "train $name, $n binaries ($source_): $id"
             done
+            [[ ${#skipped[@]} -eq 0 ]] || echo "train $name: done for ${skipped[*]}"
         done ;;
     *)
         echo "unknown stage $stage: generate, exact, refine or train" >&2; exit 1 ;;

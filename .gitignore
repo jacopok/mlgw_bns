@@ -118,3 +118,15 @@ visualization/precession_error_vs_inplane_spin.npz
 /visualization/precession_scale/
 /visualization/modes_scale/
 /slurm/*/cluster.env
+visualization/spin_phase_learnability.py
+visualization/profile_precession_dynamics.py
+.gitignore
+visualization/precession_scale.py
+visualization/precession_beat_ab/*
+visualization/precession_experiments/*
+.gitignore
+visualization/spin_phase_baseline.py
+visualization/precession_learning_curve.py
+visualization/precession_baseline.py
+visualization/linear_response_check.py
+visualization/precession_error_vs_inplane_spin.npz
