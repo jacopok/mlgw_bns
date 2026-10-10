@@ -41,7 +41,7 @@ cd "$ROOT"
 }
 source slurm/modes/cluster.env
 source slurm/lib.sh
-[[ -x "$PYTHON" ]] || { echo "no $PYTHON: uv sync first" >&2; exit 1; }
+check_environment
 resolve_data
 M=visualization/modes_scale.py
 STAGES=("$@")

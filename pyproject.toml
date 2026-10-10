@@ -90,3 +90,9 @@ packages = ["mlgw_bns"]
  
 [tool.isort]
 profile = "black"
+
+[tool.uv.sources]
+# the fork's initial-spa-fix branch: the public TEOBResumS aborts on some of
+# the waveforms of the training sets
+teobresums = { git = "https://github.com/jacopok/teobresums", branch = "initial-spa-fix", subdirectory = "Python" }
+

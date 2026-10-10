@@ -23,10 +23,13 @@ waiting for those it needs; `job.sh` is what each job runs.
 
 On the cluster, in a clone of the repository:
 
-1. `uv sync` --- the modes pipeline also needs TEOBResumS's Python module
-   (`teobresums`, a development dependency): build it on the cluster, and
-   point `[tool.uv.sources]` of `pyproject.toml` at its checkout (e.g.
-   `teobresums = { path = "../teobresums/Python" }`) before syncing.
+1. `uv sync --extra jax` (JAX for the perceptrons). This also builds
+   TEOBResumS (`teobresums`, a development dependency) from the
+   `initial-spa-fix` branch of `github.com/jacopok/teobresums`, at the commit
+   in `uv.lock` (`[tool.uv.sources]` of `pyproject.toml`): the public release
+   aborts on some of the waveforms of the training sets. Building it needs a C
+   compiler and GSL (`module load gsl` or similar first); after new commits
+   on the branch, `uv lock --upgrade-package teobresums`.
 2. `cp slurm/modes/cluster.env.example slurm/modes/cluster.env` (or
    `slurm/precession/...`), and edit it: the account and partition, and
    `DATA`, where everything goes. It must be on a filesystem that every node
