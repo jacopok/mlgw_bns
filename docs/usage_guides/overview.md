@@ -99,6 +99,17 @@ merger time and coalescence phase of all of them.
 The hyperparameters used here are those provided with the package;
 to perform an optimization see [](hyperparameter_optimization).
 
+The regressor of each mode, from the parameters to the principal components
+of its residuals, is chosen with the `nn_kind` keyword:
+{class}`~mlgw_bns.neural_network.KernelRidgeNetwork`, with which the packaged
+model is trained, a perceptron trained with JAX
+({class}`~mlgw_bns.neural_network.JaxMLPNetwork`), or the original
+scikit-learn perceptron ({class}`~mlgw_bns.neural_network.SklearnNetwork`,
+the default). The scripts which train the packaged models,
+`make_default_dataset.py` and `make_hom7_dataset.py`, show the settings and
+dataset sizes used for them; training sets too large for one machine are
+made and trained on in parallel batch jobs, see [](cluster-training).
+
 ## Working with a single mode
 
 A single `ModeModel` --- the object which actually does the machine learning

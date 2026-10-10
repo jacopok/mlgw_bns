@@ -87,16 +87,21 @@ uv run snakeviz prediction_profile.prof
 from the command line, and a local webpage containing an interactive visualization 
 of the execution times of the various internal functions.
 
-The expected result, if the length of the required frequencies 
-is of the order of a few thousands (as is needed, for example, with reduced order quadratures), 
-is that: 
-- most of the time will be taken by interpolation: the internal function 
-    is called `model.cartesian_waveforms_at_frequencies`, which calls 
-    `downsampling_interpolation.resample` twice (once for amplitude, once for phase),
-    and which in turns calls the scipy low-level functions `splrep` and `splev`;
-- some time is taken by the prediction of the waveforms (`mode_model.ModeModel.predict_waveforms_bulk`), of which
-  - some time (about half) is taken by the prediction of the residuals with the neural network and PCA:
-        `mode_model.ModeModel.predict_residuals_bulk`;
-  - some time (about half) is taken by the evaluation of the post-Newtonian amplitude and phase:
-        `dataset_generation.Dataset.recompose_residuals`;
+The expected result, for the packaged seven-mode model and a few hundred
+frequencies, is that almost all of the time goes to
+`mode_model.ModeModel.predict_amplitude_phase`, once for each mode (and once
+more for the $(2,2)$, which also sets the merger reference,
+`mode_model.ModeModel.merger_reference`). Of that:
+- about 40% is the regressor of each mode (`neural_network.KernelRidgeNetwork.predict`,
+  through `mode_model.ModeModel.predict_residuals_bulk`), which evaluates a
+  kernel on every training waveform, so that it grows with the training set
+  (see [](cluster-training) for a perceptron, whose cost does not);
+- about 30% is the cubic-spline resampling of the amplitude and phase from
+  the downsampling nodes to the requested frequencies
+  (`downsampling_interpolation.resample`, through scipy's `CubicSpline`);
+- about 15% is the post-Newtonian amplitude and phase which the residuals
+  are taken against (`pn_modes`, `taylorf2`).
+
+With thousands of frequencies the resampling and the post-Newtonian
+expressions take a larger share.
 - any remaining time required should be comparatively small.

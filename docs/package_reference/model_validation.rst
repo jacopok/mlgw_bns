@@ -5,3 +5,5 @@ Model Validation
 
 .. autoclass:: mlgw_bns.model_validation.ValidateModel
     :members:
+
+.. autofunction:: mlgw_bns.model_validation.stored_waveform_mismatches

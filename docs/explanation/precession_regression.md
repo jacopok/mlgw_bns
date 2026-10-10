@@ -516,6 +516,61 @@ carriers (see [Into the carriers](precession-regression-carriers)). The
 improvement is real but not yet the order of magnitude that the beat alone
 would suggest.
 
+(precession-regression-error)=
+## Where the error is, and what reduces it
+
+Replacing, one at a time, each stage of the pipeline by the exact quantity
+(`visualization/precession_regression_study.py validate --oracle`) shows that
+the error is all in the regression: with the fitted envelopes themselves the
+median mismatch is $5 \times 10^{-11}$, with their principal components (64
+of each) $1.2 \times 10^{-7}$, against $4.5 \times 10^{-4}$ for kernel ridge
+on 4096 binaries; 128 components change nothing. Kernel ridge's own
+leave-one-out error says the same: at 4096 binaries it explains only about
+65% of the variance of the $G$ envelopes.
+
+The targets, not the regressor's capacity, are what is hard. With the 128
+cells of the default {class}`~mlgw_bns.precession_regression.AngleGrid` the
+envelopes resolve the slow beats of $q \simeq 1$ binaries, so that how the
+nutation is split between $c_1$ and $c_2$ is set by a tiny smoothing penalty
+and jumps across parameter space. Pinning it --- a stronger smoothing
+(`AngleGrid.smoothing = 1e-2`), fewer cells, or the refinement of
+{func}`~mlgw_bns.precession_regression.refine_envelopes`, which refits each
+binary's envelopes with the prediction of a regressor trained on the others
+as a prior --- is worth about four times the data. A perceptron
+({class}`~mlgw_bns.jax_mlp.JaxMLP`, 4 hidden layers of 256, on the same
+principal components) does no better than kernel ridge on the raw targets,
+but on smoothed and refined ones it is the best regressor by far, and
+improves with the data about as $N^{-0.9}$. Median, 90th percentile and
+fraction above $10^{-2}$ of the waveform mismatch, $1 \leq q \leq 1.5$, 1024
+held-out binaries (`visualization/precession_learning_curve.py`):
+
+| targets | kernel ridge, 4096 | kernel ridge, 16384 | perceptron, 4096 | perceptron, 16384 |
+|---|---|---|---|---|
+| as fitted | $4.5 \times 10^{-4}$, $9.2 \times 10^{-3}$, 9.8% | $3.1 \times 10^{-4}$, $7.6 \times 10^{-3}$, 8.6% | $3.8 \times 10^{-4}$, $9.3 \times 10^{-3}$, 9.5% | $3.0 \times 10^{-4}$, $8.9 \times 10^{-3}$, 9.2% |
+| smoothed | $3.0 \times 10^{-4}$, $7.3 \times 10^{-3}$, 8.0% | $1.8 \times 10^{-4}$, $4.8 \times 10^{-3}$, 6.9% | | |
+| smoothed, refined twice | $2.4 \times 10^{-4}$, $7.1 \times 10^{-3}$, 7.8% | $1.5 \times 10^{-4}$, $4.5 \times 10^{-3}$, 7.0% | $1.5 \times 10^{-4}$, $5.7 \times 10^{-3}$, 7.0% | $5.7 \times 10^{-5}$, $2.9 \times 10^{-3}$, 4.9% |
+
+(One seed each; the perceptron at 4096 in single precision, the others in
+double, which made no difference beyond that seed's scatter.) The largest
+mismatches, up to ~0.7, are of binaries with $q$ within a few thousandths of
+one, where the two carriers straddle the true mean precession rate; neither
+more data nor any of the following has moved them.
+
+Three ideas from the literature did not help as they stand: more
+*sidebands* (carriers at $\Phi_1 + k(\Phi_1 - \Phi_2)$, worse with each one
+added), training sets *oversampled* at large in-plane spins (the errors there
+are not for lack of data), and carriers at the *precession-averaged* rate
+$\langle \Omega_z \rangle$ (in closed form,
+{func}`~mlgw_bns.precession_regression.mean_precession_rate`), which fix
+the windings of $q < 1.05$ binaries but are slightly off where the
+linearized carriers were exact, and are worse overall.
+
+So the way forward is the perceptron on well-posed targets, trained on as
+many binaries as can be made: {mod}`mlgw_bns.precession_dataset` keeps
+training sets of millions of binaries on disk, made, refined and trained on
+in parallel batch jobs, about 25 ms of a core a binary; see
+[](cluster-training).
+
 ## References
 
 The papers this page uses, in the order of the argument:
