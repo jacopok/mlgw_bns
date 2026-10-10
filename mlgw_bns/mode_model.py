@@ -73,6 +73,7 @@ from .downsampling_interpolation import (
 )
 from .neural_network import (
     Hyperparameters,
+    JaxMLPNetwork,
     KernelRidgeNetwork,
     NeuralNetwork,
     SklearnNetwork,
@@ -88,10 +89,13 @@ from .higher_order_modes import mode_to_k
 #: The regressor backends a saved model may name in its metadata. The
 #: network is the historical default; the kernel is far more accurate on
 #: the same training data, at the cost of a prediction time that grows
-#: with the training set. See :class:`~mlgw_bns.neural_network.KernelRidgeNetwork`.
+#: with the training set. See :class:`~mlgw_bns.neural_network.KernelRidgeNetwork`
+#: and, for a perceptron whose cost does not,
+#: :class:`~mlgw_bns.neural_network.JaxMLPNetwork`.
 NN_KINDS: dict[str, Type[NeuralNetwork]] = {
     "SklearnNetwork": SklearnNetwork,
     "KernelRidgeNetwork": KernelRidgeNetwork,
+    "JaxMLPNetwork": JaxMLPNetwork,
 }
 
 
@@ -144,6 +148,8 @@ class ParametersWithExtrinsic:
     merger_time : float
             Time of the merger, in seconds. Defaults to 0.
 
+    Notes
+    -----
     The merger is where the frequency-domain phase of the (2,2) mode
     becomes linear, at the top of the trained band; see
     :meth:`ModeModel.predict_amplitude_phase`.
@@ -882,8 +888,11 @@ class ModeModel:
         return PrincipalComponentAnalysisModel(self.pca_components_number)
 
 
-    def _training_power_weights(self) -> Optional[np.ndarray]:
-        """Power weights for the training set, or ``None`` for a flat fit.
+    def _training_power_weights(
+        self, amplitude_residuals: Optional[np.ndarray] = None
+    ) -> Optional[np.ndarray]:
+        """Power weights for the training set (or for the waveforms of these
+        ``amplitude_residuals``), or ``None`` for a flat fit.
 
         Returns ``None`` --- meaning "fit unweighted", byte-identical to
         the behaviour before power weighting existed --- unless
@@ -898,7 +907,9 @@ class ModeModel:
         if not self.power_weighting or self.mode is None or self.mode.m % 2 == 0:
             return None
 
-        assert self.training_dataset is not None
+        if amplitude_residuals is None:
+            assert self.training_dataset is not None
+            amplitude_residuals = self.training_dataset.amplitude_residuals
         assert self.downsampling_indices is not None
 
         amplitude_indices = self.downsampling_indices.amplitude_indices
@@ -916,16 +927,19 @@ class ModeModel:
         )
 
         return mode_power_weights(
-            self.training_dataset.amplitude_residuals,
+            amplitude_residuals,
             self.dataset.frequencies_hz[amplitude_indices],
             pn_amplitude=pn_amplitude,
             exponent=self.power_weight_exponent,
         )
 
     def train_nn(
-        self, hyper: Hyperparameters, indices: Union[list[int], slice] = slice(None)
+        self,
+        hyper: Hyperparameters,
+        indices: Union[list[int], slice] = slice(None),
+        checkpoint: Optional[str] = None,
     ) -> NeuralNetwork:
-        """Train a
+        """Train a network on the training dataset (see :meth:`fit_nn`).
 
         Parameters
         ----------
@@ -936,6 +950,9 @@ class ModeModel:
             Indices used to perform a selection of a subsection
             of the training data; by default ``slice(None)``
             which means all available training data is used.
+        checkpoint : str, optional
+            Where a :class:`~mlgw_bns.neural_network.JaxMLPNetwork` keeps
+            the state of its training; see :meth:`fit_nn`.
 
         Notes
         -----
@@ -950,48 +967,94 @@ class ModeModel:
             Trained network.
         """
         assert self.training_parameters is not None
-        assert self.pca_data is not None
-
-        # print(len(self.training_parameters.parameter_array))
-
-        training_residuals = (
-            self.reduced_residuals
-            * (self.pca_data.eigenvalues ** hyper.pc_exponent)[np.newaxis, :]
-        )
-
-        nn = self.nn_kind(hyper)
 
         sample_weight = self._training_power_weights()
         if sample_weight is not None:
             sample_weight = sample_weight[indices]
 
-        start_time = time.time()  # Record the start time
-
-        nn.fit(
+        return self.fit_nn(
+            hyper,
             self.training_parameters.parameter_array[indices],
-            training_residuals[indices],
-            sample_weight=sample_weight,
+            self.reduced_residuals[indices],
+            sample_weight,
+            checkpoint=checkpoint,
         )
 
-        end_time = time.time()  # Record the end time
+    def fit_nn(
+        self,
+        hyper: Hyperparameters,
+        parameters: np.ndarray,
+        reduced_residuals: np.ndarray,
+        sample_weight: Optional[np.ndarray] = None,
+        checkpoint: Optional[str] = None,
+    ) -> NeuralNetwork:
+        """Fit a network of kind :attr:`nn_kind` from ``parameters``
+        ``(N, 5)`` to the principal components of their residuals
+        ``(N, pca_components_number)`` (as
+        :meth:`PrincipalComponentAnalysisModel.reduce_data
+        <mlgw_bns.principal_component_analysis.PrincipalComponentAnalysisModel.reduce_data>`
+        gives them), with these power weights (see
+        :meth:`_training_power_weights`).
 
-        training_duration = end_time - start_time  # Compute the duration
+        This is :meth:`train_nn` without the training dataset, for training
+        sets reduced a piece at a time (as
+        :class:`~mlgw_bns.modes_dataset.ShardedModesDataset` does).
+
+        Parameters
+        ----------
+        checkpoint : str, optional
+            Where a :class:`~mlgw_bns.neural_network.JaxMLPNetwork` keeps
+            the state of its training, to resume it after an interruption
+            (other kinds take none).
+
+        Returns
+        -------
+        NeuralNetwork
+            Trained network.
+        """
+        assert self.pca_data is not None
+
+        training_residuals = (
+            reduced_residuals
+            * (self.pca_data.eigenvalues ** hyper.pc_exponent)[np.newaxis, :]
+        )
+
+        nn = self.nn_kind(hyper)
+        fit_options: dict = {}
+        if isinstance(nn, JaxMLPNetwork):
+            # what a unit of each output is in the residuals, for its loss
+            fit_options["output_units"] = self.pca_data.principal_components_scaling / (
+                self.pca_data.eigenvalues ** hyper.pc_exponent
+            )
+            fit_options["checkpoint"] = checkpoint
+        elif checkpoint is not None:
+            raise ValueError(f"{type(nn).__name__} trainings are not checkpointed")
+
+        start_time = time.time()
+
+        nn.fit(parameters, training_residuals, sample_weight=sample_weight, **fit_options)
+
         logging.info(
             "Training the network on %i %s waveforms took %.2f seconds "
             "(peak memory usage so far: %s)",
-            len(training_residuals[indices]),
+            len(training_residuals),
             "unweighted"
             if sample_weight is None
             else f"power-weighted (median omega {np.median(sample_weight):.3g})",
-            training_duration,
+            time.time() - start_time,
             format_bytes(peak_memory_usage()),
         )
 
-        # loss_over_epochs = nn.get_loss_over_epochs()
-
-        # print(f"Loss over epochs: {loss_over_epochs}")
-        
         return nn
+
+    def default_hyperparameters(self, n_train: int) -> Hyperparameters:
+        """The hyperparameters :meth:`set_hyper_and_train_nn` uses unless
+        given others, for :attr:`nn_kind` and this mode."""
+        if self.nn_kind is KernelRidgeNetwork:
+            return Hyperparameters.default_kernel_ridge(n_train, mode=self.mode)
+        if self.nn_kind is JaxMLPNetwork:
+            return Hyperparameters.default_jax_mlp(n_train)
+        return Hyperparameters.default(n_train)
 
     def set_hyper_and_train_nn(self, hyper: Optional[Hyperparameters] = None, idxs: Union[list[int], slice] = slice(None)) -> None:
         """Train the network according to the hyperparameters given,
@@ -1007,12 +1070,7 @@ class ModeModel:
 
         if hyper is None:
             assert self.training_dataset is not None
-            if self.nn_kind is KernelRidgeNetwork:
-                hyper = Hyperparameters.default_kernel_ridge(
-                    len(self.training_dataset), mode=self.mode
-                )
-            else:
-                hyper = Hyperparameters.default(len(self.training_dataset))
+            hyper = self.default_hyperparameters(len(self.training_dataset))
 
         logging.info("Training the network with hyperparameters %s", hyper)
 

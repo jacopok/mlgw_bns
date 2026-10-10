@@ -1070,3 +1070,141 @@ class ValidateModel:
         pairs = list(zip(cartesian_1, cartesian_2))
         iterator = tqdm(pairs, unit="mismatches", disable=disable_tqdm, leave=None)
         return [self.mismatch(w1, w2) for w1, w2 in iterator]
+
+
+def _detached(validator: ValidateModel) -> ValidateModel:
+    """A copy of ``validator`` without its model, which its mismatches do
+    not need: cheap to send to worker processes."""
+    detached = ValidateModel.__new__(ValidateModel)
+    detached.__dict__.update({k: v for k, v in validator.__dict__.items() if k != "model"})
+    detached.model = None  # type: ignore[assignment]
+    return detached
+
+
+def _chunk_mismatches(
+    validator: ValidateModel,
+    keys: list,
+    referenced: dict,
+    unreferenced: dict,
+    harmonics: np.ndarray,
+) -> dict:
+    """The per-mode and full-waveform mismatches of a chunk of
+    :func:`stored_waveform_mismatches`: ``referenced[key]`` and
+    ``unreferenced[key]`` are pairs ``(truth, prediction)`` of Cartesian
+    waveforms on ``validator.frequencies``, ``harmonics`` the ``(n, n_modes)``
+    spin-weighted spherical harmonics weighing the modes."""
+    n = len(harmonics)
+    out = {f"mode {key}": np.empty(n) for key in keys}
+    out.update({f"power {key}": np.empty(n) for key in keys})
+    out["full"] = np.empty(n)
+    weights = _trapezoid_weights(validator.frequencies) / validator.psd_values
+    for i in range(n):
+        for key in keys:
+            truth, prediction = referenced[key]
+            out[f"mode {key}"][i] = validator.mismatch(truth[i], prediction[i])
+        # keyed by (l, m), which the azimuthal rotation of each mode needs
+        lm = [tuple(int(c) for c in key[1::3]) for key in keys]
+        modes_truth = {
+            lm[j]: unreferenced[key][0][i] * harmonics[i, j] for j, key in enumerate(keys)
+        }
+        modes_prediction = {
+            lm[j]: unreferenced[key][1][i] * harmonics[i, j] for j, key in enumerate(keys)
+        }
+        total = sum(modes_truth.values())
+        power = np.sum(np.abs(total) ** 2 * weights)
+        for j, key in enumerate(keys):
+            out[f"power {key}"][i] = np.sum(np.abs(modes_truth[lm[j]]) ** 2 * weights) / power
+        out["full"][i] = validator.full_waveform_mismatch(
+            modes_truth, modes_prediction, frequencies=validator.frequencies
+        )
+    return out
+
+
+def stored_waveform_mismatches(
+    model,
+    parameters: np.ndarray,
+    residuals: dict,
+    inclinations: Optional[np.ndarray] = None,
+    chunk: int = 128,
+    n_jobs: int = 1,
+) -> Dict[str, np.ndarray]:
+    r"""Mismatches of a :class:`~mlgw_bns.model.Model` against waveforms
+    known through their residuals (as
+    :class:`~mlgw_bns.modes_dataset.ShardedModesDataset` keeps them), with
+    the PSD of :class:`ValidateModel`, in its band.
+
+    No EOB waveform is made, so that the validation set can be large; but
+    the true waveforms are known only at the downsampling nodes, like the
+    predicted ones, so that the error of the resampling between them (the
+    same for both) is not seen. These are the mismatches of the regression
+    and of the truncation of the principal components.
+
+    Parameters
+    ----------
+    model : Model
+        Trained, with the downsampling indices of the residuals.
+    parameters : np.ndarray
+        ``(n, 5)``, as in :attr:`ParameterSet.parameter_array
+        <mlgw_bns.dataset_generation.ParameterSet.parameter_array>`.
+    residuals : dict
+        ``mode -> Residuals`` of every mode of ``model``, at its nodes.
+    inclinations : np.ndarray, optional
+        ``(n,)`` of the full waveforms; isotropic (seeded) by default.
+    chunk : int
+        Waveforms predicted and resampled at a time.
+    n_jobs : int
+        Processes computing the mismatches.
+
+    Returns
+    -------
+    dict
+        Arrays ``(n,)``: ``"mode l2_m2"`` and so on, the mismatch of each mode
+        with its merger time and phase optimised (as
+        :meth:`ValidateModel.validation_mismatches` gives it); ``"full"``,
+        that of the sum of the modes, weighted by
+        :math:`{}_{-2}Y_{\ell m}(\iota, 0)`, with a time and an azimuth
+        optimised (:meth:`ValidateModel.full_waveform_mismatch`), both
+        waveforms referenced to the (2,2) at the start of the band as the
+        residuals are; ``"power l2_m2"`` and so on, each mode's share of the
+        PSD-weighted power of the full waveform; and ``"inclination"``.
+    """
+    from joblib import Parallel, delayed  # type: ignore
+
+    from .special_func import spinsphericalharm
+
+    modes = list(model.modes)
+    keys = [f"l{mode.l}_m{mode.m}" for mode in modes]
+    n = len(parameters)
+    if inclinations is None:
+        inclinations = np.arccos(np.random.default_rng(0).uniform(-1.0, 1.0, n))
+    harmonics = np.stack(
+        [np.asarray(spinsphericalharm(-2, mode.l, mode.m, 0.0, inclinations)[0]) for mode in modes], axis=1
+    )
+    validators = {mode: ValidateModel(model.mode_models[mode]) for mode in modes}
+    frequencies = validators[modes[0]].frequencies
+    for validator in validators.values():
+        if not np.array_equal(validator.frequencies, frequencies):
+            raise ValueError("The modes are validated on different frequencies")
+
+    def pieces():
+        for start in range(0, n, chunk):
+            rows = slice(start, min(start + chunk, n))
+            parameter_set = ParameterSet(np.asarray(parameters[rows], dtype=float))
+            referenced, unreferenced = {}, {}
+            for mode, key in zip(modes, keys):
+                mode_model = model.mode_models[mode]
+                validator = validators[mode]
+                truth = mode_model.dataset.recompose_residuals(
+                    residuals[mode][rows], parameter_set, mode_model.downsampling_indices
+                )
+                prediction = mode_model.predict_waveforms_bulk(parameter_set, mode_model.nn)
+                unreferenced[key] = validator.waveforms(truth, prediction)
+                referenced[key] = validator.waveforms(
+                    validator.merger_referenced(truth), validator.merger_referenced(prediction)
+                )
+            yield _detached(validators[modes[0]]), keys, referenced, unreferenced, harmonics[rows]
+
+    parts = Parallel(n_jobs=n_jobs)(delayed(_chunk_mismatches)(*piece) for piece in pieces())
+    out = {key: np.concatenate([part[key] for part in parts]) for key in parts[0]}
+    out["inclination"] = np.asarray(inclinations, dtype=float)
+    return out

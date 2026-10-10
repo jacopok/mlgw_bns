@@ -14,12 +14,17 @@ relies on at training and prediction time:
   fit/predict/save/load interface used by the rest of the codebase, so
   that different backends can be swapped in transparently.
 
-* :class:`SklearnNetwork` --- the concrete implementation used in
-  production. Wraps an :class:`MLPRegressor` together with a
-  :class:`StandardScaler` for the input features.
+* :class:`SklearnNetwork` --- the original backend, and still the default
+  ``nn_kind`` of :class:`~mlgw_bns.mode_model.ModeModel`: an
+  :class:`MLPRegressor` together with a :class:`StandardScaler` for the
+  input features.
 
 * :class:`KernelRidgeNetwork` --- an RBF kernel ridge regression with the
-  same interface, the default for the higher-order-mode models.
+  same interface, with which the packaged models are trained.
+
+* :class:`JaxMLPNetwork` --- a perceptron trained with JAX
+  (:class:`~mlgw_bns.jax_mlp.JaxMLP`), whose cost and size do not grow with
+  the training set, and whose training can be checkpointed.
 
 * :func:`retrieve_best_trials_list` and :func:`best_trial_under_n`
   --- helpers for fetching the pretrained Pareto front of best
@@ -51,6 +56,8 @@ from importlib.resources import files
 from sklearn.kernel_ridge import KernelRidge  # type: ignore
 from sklearn.neural_network import MLPRegressor  # type: ignore
 from sklearn.preprocessing import StandardScaler  # type: ignore
+
+from .jax_mlp import JaxMLP, MLPConfig
 
 if TYPE_CHECKING:
     import optuna
@@ -335,6 +342,17 @@ class Hyperparameters:
             selection, relative to :math:`\epsilon \sum_j |K(x, x_j) a_j|`
             (0.1 by default, calibrated on the packaged regressors; 0
             selects on the leave-one-out error alone).
+    mlp : MLPConfig, optional
+            Architecture and training of a :class:`JaxMLPNetwork`; ``None``
+            (the default) for those of :class:`~mlgw_bns.jax_mlp.MLPConfig`.
+            Ignored by the other backends, as :class:`JaxMLPNetwork` ignores
+            the attributes of :class:`~sklearn.neural_network.MLPRegressor`.
+    mlp_loss : str, optional
+            How the loss of a :class:`JaxMLPNetwork` weighs the principal
+            components: ``"natural"`` (the default), as much as they
+            contribute to the residuals, so that the loss is their squared
+            error; ``"uniform"``, each standardized, which is what kernel
+            ridge (one regression per component) amounts to.
     """
 
     pc_exponent: float
@@ -369,6 +387,9 @@ class Hyperparameters:
     #: prediction in different orders (a batch and single rows, or numpy
     #: and JAX) differ by 0.07--0.14 times ``eps * sum_j |K_j a_j|``.
     kernel_rounding_factor: float = field(default=0.1)
+
+    mlp: Optional[MLPConfig] = field(default=None)
+    mlp_loss: str = field(default="natural")
 
     @property
     def n_layers(self) -> int:
@@ -611,6 +632,44 @@ class Hyperparameters:
             kernel_gamma=kernel_gamma if kernel_gamma is not None else cls.kernel_gamma,
             kernel_alpha=kernel_alpha if kernel_alpha is not None else cls.kernel_alpha,
             kernel_alpha_selection=kernel_alpha_selection,
+        )
+
+    @classmethod
+    def default_jax_mlp(
+        cls, n_train: int, config: Optional[MLPConfig] = None, loss: str = "natural"
+    ) -> "Hyperparameters":
+        """Build a :class:`Hyperparameters` for :class:`JaxMLPNetwork`.
+
+        The fields of the other backends are filled with placeholders, as in
+        :meth:`default_kernel_ridge`.
+
+        Parameters
+        ----------
+        n_train : int
+                Number of training waveforms.
+        config : MLPConfig, optional
+                Architecture and training; the defaults of
+                :class:`~mlgw_bns.jax_mlp.MLPConfig` if not given.
+        loss : str
+                ``"natural"`` or ``"uniform"``; see :attr:`mlp_loss`.
+
+        Returns
+        -------
+        Hyperparameters
+        """
+        return cls(
+            pc_exponent=0.0,
+            n_train=n_train,
+            hidden_layer_sizes=(1,),
+            activation="relu",
+            alpha=0.0,
+            batch_size=1,
+            learning_rate_init=0.0,
+            tol=0.0,
+            validation_fraction=0.1,
+            n_iter_no_change=1,
+            mlp=config if config is not None else MLPConfig(),
+            mlp_loss=loss,
         )
 
     @classmethod
@@ -1076,6 +1135,100 @@ class KernelRidgeNetwork(NeuralNetwork):
     @classmethod
     def from_file(cls, filename: Union[IO[bytes], str]) -> "KernelRidgeNetwork":
         """Inverse of :meth:`save`. The tuple is unpacked into the constructor."""
+        return cls(*joblib.load(filename))
+
+
+class _Standardization:
+    """The ``mean_`` and ``scale_`` of a fitted
+    :class:`~sklearn.preprocessing.StandardScaler`, which is what
+    :mod:`mlgw_bns.batched` reads of one."""
+
+    def __init__(self, mean: np.ndarray, scale: np.ndarray):
+        self.mean_ = mean
+        self.scale_ = scale
+
+
+class JaxMLPNetwork(NeuralNetwork):
+    r"""A perceptron from parameters to component coefficients, trained with
+    JAX (:class:`~mlgw_bns.jax_mlp.JaxMLP`), selected by passing it as
+    ``nn_kind`` to :class:`~mlgw_bns.mode_model.ModeModel`.
+
+    Unlike :class:`KernelRidgeNetwork`, whose stored size and evaluation
+    time grow with the training set (it keeps every training point, and
+    evaluates a kernel on each), a perceptron's do not; and its training,
+    a few hundred thousand steps of Adam whatever the size of the
+    training set, scales to millions of waveforms where an exact kernel
+    solve (cubic in their number) does not. It is evaluated in double
+    precision, in numpy (:meth:`predict`) or in JAX
+    (:mod:`mlgw_bns.batched`).
+
+    Parameters
+    ----------
+    hyper : Hyperparameters
+            :attr:`~Hyperparameters.mlp` and :attr:`~Hyperparameters.mlp_loss`
+            are read; see :meth:`Hyperparameters.default_jax_mlp`.
+    network : JaxMLP, optional
+            A fitted network to wrap.
+    """
+
+    def __init__(self, hyper: Hyperparameters, network: Optional[JaxMLP] = None):
+        super().__init__(hyper=hyper)
+        config = getattr(hyper, "mlp", None)
+        self.network = network if network is not None else JaxMLP(config if config is not None else MLPConfig())
+
+    def fit(
+        self,
+        x_data: np.ndarray,
+        y_data: np.ndarray,
+        sample_weight: Optional[np.ndarray] = None,
+        output_units: Optional[np.ndarray] = None,
+        checkpoint: Optional[str] = None,
+    ) -> None:
+        """Train (see :meth:`JaxMLP.fit <mlgw_bns.jax_mlp.JaxMLP.fit>`).
+
+        Parameters
+        ----------
+        output_units : np.ndarray, optional
+                What a unit of each output is worth in the residuals ---
+                ``principal_components_scaling / eigenvalues**pc_exponent``,
+                which :meth:`~mlgw_bns.mode_model.ModeModel.fit_nn` gives
+                --- for the ``"natural"`` loss; without them the loss is
+                uniform.
+        checkpoint : str, optional
+                Where to keep the state of the training, to resume it after
+                an interruption; see :meth:`JaxMLP.fit
+                <mlgw_bns.jax_mlp.JaxMLP.fit>`.
+        """
+        loss = getattr(self.hyper, "mlp_loss", "natural")
+        if loss not in ("natural", "uniform"):
+            raise ValueError(f"Unknown mlp_loss {loss!r}: expected 'natural' or 'uniform'.")
+        weights = None
+        if loss == "natural" and output_units is not None:
+            weights = np.var(y_data, axis=0) * np.asarray(output_units, dtype=float) ** 2
+        self.network.fit(
+            x_data, y_data, weights, checkpoint=checkpoint, sample_weight=sample_weight
+        )
+
+    def predict(self, x_data: np.ndarray) -> np.ndarray:
+        return self.network.predict(np.asarray(x_data, dtype=float))
+
+    @property
+    def param_scaler(self) -> _Standardization:
+        """The standardization of the inputs."""
+        return _Standardization(self.network.input_mean, self.network.input_scale)
+
+    @property
+    def target_scaler(self) -> _Standardization:
+        """The standardization of the outputs."""
+        return _Standardization(self.network.output_mean, self.network.output_scale)
+
+    def save(self, filename: str) -> None:
+        """Pickle ``(hyper, network)`` to ``filename`` via joblib."""
+        joblib.dump((self.hyper, self.network), filename)
+
+    @classmethod
+    def from_file(cls, filename: Union[IO[bytes], str]) -> "JaxMLPNetwork":
+        """Inverse of :meth:`save`."""
         return cls(*joblib.load(filename))
 
 
