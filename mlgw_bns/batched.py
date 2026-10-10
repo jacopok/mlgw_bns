@@ -109,6 +109,7 @@ import numpy as np
 from scipy.interpolate import CubicSpline  # type: ignore
 
 from .dataset_generation import AMP_SI_BASE
+from .jax_mlp import array_activation
 from .pn_modes import H_21, H_22, H_31, H_32, H_33, H_43, H_44, Mode
 from .special_func import wigner_d_function
 from .taylorf2 import _make_taylorf2_psi
@@ -468,7 +469,7 @@ def _freeze_spline(knots: np.ndarray) -> _Spline:
 
 
 def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
-    from .neural_network import KernelRidgeNetwork, SklearnNetwork
+    from .neural_network import JaxMLPNetwork, KernelRidgeNetwork, SklearnNetwork
 
     dataset = model.dataset
     ranges = model.parameter_ranges
@@ -555,6 +556,20 @@ def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
                     mlp_activation=nn.nn.activation,
                     target_mean=None,
                     target_scale=None,
+                    **common,
+                )
+            )
+        elif isinstance(nn, JaxMLPNetwork):
+            network = nn.network
+            modes_arrays.append(
+                _ModeArrays(
+                    regressor_kind="mlp",
+                    kernel=None,
+                    mlp_weights=[np.asarray(w, dtype=float) for w, _ in network.weights],
+                    mlp_biases=[np.asarray(b, dtype=float) for _, b in network.weights],
+                    mlp_activation=network.config.activation,
+                    target_mean=np.asarray(network.output_mean, dtype=float),
+                    target_scale=np.asarray(network.output_scale, dtype=float),
                     **common,
                 )
             )
@@ -656,6 +671,11 @@ _ACTIVATIONS = {
     "tanh": lambda xp, x: xp.tanh(x),
     "logistic": lambda xp, x: 1.0 / (1.0 + xp.exp(-x)),
     "identity": lambda xp, x: x,
+    # those of `JaxMLPNetwork`
+    **{
+        name: (lambda name: lambda xp, x: array_activation(xp, name)(x))(name)
+        for name in ("gelu", "silu", "softplus", "elu")
+    },
 }
 
 
@@ -800,6 +820,8 @@ class BatchedSurrogate:
                     activation = activation @ w + b
                     if j != last:
                         activation = _ACTIVATIONS[ma.mlp_activation](xp, activation)
+                if ma.target_scale is not None:
+                    activation = activation * ma.target_scale + ma.target_mean
                 components[i] = activation
         for indices in kernel_groups.values():
             first = modes_arrays[indices[0]]

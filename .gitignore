@@ -112,3 +112,9 @@ visualization/teob_alpha_unwrap_bug.*
 
 *.log
 *.npz
+visualization/precession_error_vs_inplane_spin.npz
+
+# datasets and runs of visualization/precession_scale.py
+/visualization/precession_scale/
+/visualization/modes_scale/
+/slurm/*/cluster.env
