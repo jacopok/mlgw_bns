@@ -20,6 +20,7 @@ cd "$ROOT"
 [[ -f slurm/precession/cluster.env ]] && source slurm/precession/cluster.env
 source slurm/lib.sh
 DATA="${DATA:-visualization/precession_scale/run}"
+resolve_data
 S=visualization/precession_scale.py
 CPUS="${SLURM_CPUS_PER_TASK:-$(nproc)}"
 [[ $# -ge 1 ]] || { sed -n '2,17p' "$0"; exit 1; }

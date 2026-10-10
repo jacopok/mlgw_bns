@@ -22,6 +22,7 @@ cd "$ROOT"
 [[ -f slurm/modes/cluster.env ]] && source slurm/modes/cluster.env
 source slurm/lib.sh
 DATA="${DATA:-visualization/modes_scale/run}"
+resolve_data
 M=visualization/modes_scale.py
 CPUS="${SLURM_CPUS_PER_TASK:-$(nproc)}"
 [[ $# -ge 1 ]] || { sed -n '2,18p' "$0"; exit 1; }

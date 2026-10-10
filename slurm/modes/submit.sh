@@ -24,7 +24,7 @@
 # (after a failure, or with more sizes) redoes nothing that is there. Jobs
 # reaching their walltime checkpoint and are requeued (job.sh).
 #
-# Follow with
+# Follow with (from the repository: source slurm/modes/cluster.env sets DATA)
 #   squeue --me
 #   tail -f $DATA/logs/*.log
 #   .venv/bin/python visualization/modes_scale.py status $DATA/train $DATA/validation
@@ -42,8 +42,8 @@ cd "$ROOT"
 source slurm/modes/cluster.env
 source slurm/lib.sh
 [[ -x "$PYTHON" ]] || { echo "no $PYTHON: uv sync first" >&2; exit 1; }
+resolve_data
 M=visualization/modes_scale.py
-mkdir -p "$DATA/logs"
 STAGES=("$@")
 [[ ${#STAGES[@]} -gt 0 ]] || STAGES=(downsampling generate pca train)
 
@@ -105,3 +105,9 @@ for stage in "${STAGES[@]}"; do
         echo "unknown stage $stage: downsampling, generate, pca or train" >&2; exit 1 ;;
     esac
 done
+
+echo
+echo "logs in $DATA/logs; to follow, from $ROOT:"
+echo "  source slurm/modes/cluster.env   # sets DATA=$DATA"
+echo "  squeue --me; tail -f \$DATA/logs/*.log"
+echo "  .venv/bin/python visualization/modes_scale.py status $DATA/train $DATA/validation"

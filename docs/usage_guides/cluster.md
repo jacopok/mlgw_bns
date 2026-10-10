@@ -74,7 +74,12 @@ The precession pipeline (`slurm/precession/submit.sh`):
 
 ## Following it
 
+`DATA` and the other settings exist only in the scripts: `submit.sh` prints
+where the logs go, and sourcing `cluster.env` from the repository sets them
+in a shell too.
+
 ```bash
+source slurm/modes/cluster.env    # DATA
 squeue --me
 tail -f $DATA/logs/*.log
 .venv/bin/python visualization/modes_scale.py status $DATA/train $DATA/validation
@@ -113,6 +118,23 @@ finished:
 - `submit.sh STAGE...` submits stages again: after a failure, or after
   adding sizes or series to `cluster.env`. A dataset whose last shard is full
   can be grown by raising its size.
+
+## When a job fails
+
+Every job logs to `$DATA/logs/<pipeline>-<step>-<id>.log` (array tasks
+`-<id>_<task>.log`), appending: the output of every attempt of a requeued
+job is there. If a job ends without a log, SLURM could not write it (the
+filesystem of `DATA` must be visible from the compute nodes) or did not
+start it; its accounting says why:
+
+```bash
+sacct -j <id> --format=JobID%20,JobName%30,State,ExitCode,Reason,Elapsed,NodeList,Restarts
+scontrol show job <id>    # while it is still known
+```
+
+A step stopping by itself as it starts (exit status 75 within
+`MIN_RUN_SECONDS`, 10 minutes, without the walltime signal) is not requeued,
+so that a broken job fails instead of looping.
 
 ## Copying the results back
 
