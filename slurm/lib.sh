@@ -3,6 +3,15 @@
 
 PYTHON="${PYTHON:-.venv/bin/python}"
 
+# the environment can import TEOBResumS and JAX, or the jobs would fail
+check_environment() {
+    [[ -x "$PYTHON" ]] || { echo "no $PYTHON: uv sync --extra jax first" >&2; exit 1; }
+    "$PYTHON" -c "import EOBRun_module, jax" || {
+        echo "$PYTHON cannot import TEOBResumS (EOBRun_module) or JAX: uv sync --extra jax" >&2
+        exit 1
+    }
+}
+
 # DATA made absolute (the jobs start elsewhere than where they were submitted)
 # and exported, with its logs directory made: SLURM silently drops the output
 # of a job whose --output directory does not exist
