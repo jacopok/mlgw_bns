@@ -11,6 +11,7 @@ or here::
     # seen; each claims shards until none is left (--hours: stop claiming after)
     python $S generate data/validation data/train --jobs 8
     python $S status data/train
+    python $S pending data/validation data/train --refine-iterations 2   # what is left
     # refinement k of the envelopes: the priors of each fold, then the refits
     python $S refine-prior data/train --iteration 1 --fold 0   # ... --fold 3
     python $S refine-fit data/train --iteration 1
@@ -95,6 +96,19 @@ def status(args) -> None:
             )
             print(f"  refinement {iteration}: {priors}/{folds} priors")
             print("  " + dataset.status(f"refine{iteration}").replace("\n", "\n  "))
+
+
+def pending(args) -> None:
+    """The stages of submit.sh not yet done, one a line: ``generate``,
+    ``exact`` and ``refine<k>`` for k up to ``--refine-iterations``."""
+    validation, train = ShardedDataset(args.validation), ShardedDataset(args.train)
+    if any(len(d.done()) < d.n_shards for d in (validation, train)):
+        print("generate")
+    if not os.path.exists(os.path.join(args.validation, "exact.npz")):
+        print("exact")
+    for iteration in range(1, args.refine_iterations + 1):
+        if len(train.done(f"refine{iteration}")) < train.n_shards:
+            print(f"refine{iteration}")
 
 
 def refine_prior(args) -> None:
@@ -200,6 +214,12 @@ def main() -> int:
     command = commands.add_parser("status")
     command.add_argument("dataset", nargs="+")
     command.set_defaults(run=status)
+
+    command = commands.add_parser("pending", help="the stages of submit.sh not yet done")
+    command.add_argument("validation")
+    command.add_argument("train")
+    command.add_argument("--refine-iterations", type=int, default=0)
+    command.set_defaults(run=pending)
 
     command = commands.add_parser("refine-prior", help="train the regressor giving the priors of a fold")
     command.add_argument("dataset")

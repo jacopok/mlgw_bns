@@ -39,7 +39,9 @@ SERIES = [
 ]
 SIZES = [1024, 2048, 4096, 8192, 16384]
 #: the colours and markers of the series found in a directory, in order
-PALETTE = [(colour, marker) for _, _, colour, marker in SERIES]
+PALETTE = [(colour, marker) for _, _, colour, marker in SERIES] + [
+    ("#7b5cd6", "P"), ("#3f8f9e", "X"), ("#a8632b", "h"), ("#5a5a5a", "*"), ("#b0b84a", "p"),
+]
 def panels(threshold: float) -> list:
     """Title, statistic of the mismatches and scale of each panel."""
     exponent = np.log10(threshold)
