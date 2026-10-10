@@ -7,6 +7,7 @@ the data, instead deferring its management to the higher-level :class:`ModeModel
 from __future__ import annotations
 
 import logging  # type: ignore
+from typing import Optional
 
 import numpy as np
 
@@ -128,6 +129,46 @@ class PrincipalComponentTraining:
         residuals for every mode from one shared EOB sweep.
         """
         return self.pca_model.fit(residuals.combined)
+
+
+class CovarianceAccumulator:
+    r"""The mean and scatter matrix of rows given in chunks: a PCA of more
+    rows than fit in memory, in one pass over them.
+
+    The eigenvalues of the scatter :math:`X_0^\top X_0` of the zero-mean rows
+    are the squares of their singular values, which
+    :meth:`PrincipalComponentAnalysisModel.fit` finds by an SVD of
+    :math:`X_0`; through the scatter, components below ~1e-16 of the
+    largest eigenvalue are lost to rounding. The sums are taken about the
+    mean of the first chunk, so that they do not cancel against the mean.
+    """
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.shift: Optional[np.ndarray] = None
+        self.first: Optional[np.ndarray] = None
+        self.second: Optional[np.ndarray] = None
+
+    def add(self, rows: np.ndarray) -> None:
+        """Accumulate the rows ``(n, number_of_dimensions)``."""
+        rows = np.asarray(rows, dtype=float)
+        if self.shift is None:
+            self.shift = rows.mean(axis=0)
+            self.first = np.zeros_like(self.shift)
+            self.second = np.zeros((rows.shape[1], rows.shape[1]))
+        centred = rows - self.shift
+        self.count += len(rows)
+        self.first += centred.sum(axis=0)
+        self.second += centred.T @ centred
+
+    def principal_components(self, number_of_components: int):
+        """The ``(number_of_dimensions, number_of_components)`` eigenvectors,
+        the eigenvalues (largest first) and the mean of the rows so far."""
+        offset = self.first / self.count
+        scatter = self.second - self.count * np.outer(offset, offset)
+        eigenvalues, eigenvectors = np.linalg.eigh(scatter)
+        order = np.argsort(eigenvalues)[::-1][:number_of_components]
+        return eigenvectors[:, order], eigenvalues[order], self.shift + offset
 
 
 class PrincipalComponentAnalysisModel:
