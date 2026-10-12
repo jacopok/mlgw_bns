@@ -262,6 +262,11 @@ def add_optimize_arguments(command) -> None:
                          help="TPE, or a Gaussian process (completed trials only: best without pruning; needs torch)")
     command.add_argument("--pruner", choices=["none", "median", "halving"], default="halving",
                          help="of the perceptrons, on their held-out loss")
+    command.add_argument("--prune-start", type=float,
+                         help="fraction of the steps before the first pruning "
+                              "(default: halving 0.1, median 0.2); a study keeps its pruner's settings")
+    command.add_argument("--prune-reduction", type=int, default=3,
+                         help="successive halving: 1 / this many trials kept at each rung")
     command.add_argument("--fix", nargs="+", default=[], metavar="NAME=VALUE",
                          help="hold these parameters of the search space (e.g. activation=gelu depth=4)")
     command.add_argument("--enqueue-from", help="another study's directory: try its best trials first")
@@ -310,13 +315,22 @@ def parse_fixed(pairs) -> dict:
 def open_optimization(args, journal: str, name: str, metric: str):
     """The study of an ``optimize`` command (and, with ``--enqueue-from``,
     the best trials of the other one enqueued in it)."""
-    from mlgw_bns.hyperparameter_optimization import enqueue_best, make_pruner, open_study, read_study
+    from mlgw_bns.hyperparameter_optimization import (
+        check_pruner_settings,
+        enqueue_best,
+        make_pruner,
+        open_study,
+        pruner_settings,
+        read_study,
+    )
 
-    pruner = make_pruner(args.pruner if args.kind == "mlp" else "none", args.mlp_steps)
+    kind = args.pruner if args.kind == "mlp" else "none"
+    pruner = make_pruner(kind, args.mlp_steps, args.prune_start, args.prune_reduction)
     study = open_study(
         os.path.join(args.study, journal), name, pruner=pruner, fixed=parse_fixed(args.fix), sampler=args.sampler,
         metric=metric,
     )
+    check_pruner_settings(study, pruner_settings(kind, args.prune_start, args.prune_reduction))
     if args.enqueue_from:
         source = read_study(os.path.join(args.enqueue_from, journal))
         print(f"{enqueue_best(study, source, args.enqueue_top)} trials of {args.enqueue_from} enqueued")
@@ -335,7 +349,7 @@ def mlp_trial(trial, args, n: int, checkpoints: str, stop):
 
     config = mlp_config_from_trial(trial, args.mlp_steps, n)
     trial.set_user_attr("command_line", mlp_command_line(config))
-    return config, checkpoint_name(checkpoints, trial), pruning_progress(trial, stop)
+    return config, checkpoint_name(checkpoints, trial), pruning_progress(trial, stop, args.mlp_steps)
 
 
 def report_studies(args) -> None:

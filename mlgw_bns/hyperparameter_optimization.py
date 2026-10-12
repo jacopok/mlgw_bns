@@ -520,19 +520,53 @@ def read_study(filename: str) -> optuna.Study:
     return optuna.load_study(study_name=summary.study_name, storage=storage)
 
 
-def make_pruner(kind: str, steps: int) -> optuna.pruners.BasePruner:
+def pruner_settings(kind: str, start: Optional[float] = None, reduction: int = 3) -> dict:
+    """The settings of :func:`make_pruner`, with the defaults filled in."""
+    if kind == "none":
+        return {"kind": kind}
+    if kind == "median":
+        return {"kind": kind, "start": 0.2 if start is None else start}
+    if kind == "halving":
+        return {"kind": kind, "start": 0.1 if start is None else start, "reduction": reduction}
+    raise ValueError(f"unknown pruner {kind!r}: none, median or halving")
+
+
+def make_pruner(kind: str, steps: int, start: Optional[float] = None, reduction: int = 3) -> optuna.pruners.BasePruner:
     """``"none"``; ``"median"``: a trial whose best held-out loss is worse
-    than the median of the others' at the same step, after the first fifth
-    of the steps; ``"halving"``: successive halving, the trials compared
-    after a tenth of the steps, then three and nine times as many, a third
-    kept each time."""
+    than the median of the others' at the same step, after the first
+    ``start`` (default a fifth) of the steps; ``"halving"``: successive
+    halving, the trials compared after ``start`` (default a tenth) of the
+    steps, then ``reduction`` times as many and so on, the best
+    1 / ``reduction`` kept each time."""
+    settings = pruner_settings(kind, start, reduction)
     if kind == "none":
         return optuna.pruners.NopPruner()
+    first = max(int(settings["start"] * steps), 1)
     if kind == "median":
-        return optuna.pruners.MedianPruner(n_startup_trials=8, n_warmup_steps=steps // 5)
-    if kind == "halving":
-        return optuna.pruners.SuccessiveHalvingPruner(min_resource=max(steps // 10, 1), reduction_factor=3)
-    raise ValueError(f"unknown pruner {kind!r}: none, median or halving")
+        return optuna.pruners.MedianPruner(n_startup_trials=8, n_warmup_steps=first)
+    return optuna.pruners.SuccessiveHalvingPruner(min_resource=first, reduction_factor=reduction)
+
+
+# successive halving keeps the values of the trials at each rung (as system
+# attributes "completed_rung_<i>"), which before the settings were kept were
+# those of its only settings then
+_LEGACY_HALVING = {"kind": "halving", "start": 0.1, "reduction": 3}
+
+
+def check_pruner_settings(study: optuna.Study, settings: dict) -> None:
+    """Keep ``settings`` (:func:`pruner_settings`) in ``study``, or raise
+    ValueError if it was run with others: successive halving compares a
+    trial with the others at the same rung, which with other settings are
+    at other steps."""
+    kept = study.user_attrs.get("pruner")
+    if kept is None and any("completed_rung_0" in t.system_attrs for t in study.get_trials(deepcopy=False)):
+        kept = _LEGACY_HALVING
+    if kept is None:
+        study.set_user_attr("pruner", settings)
+    elif kept != settings:
+        raise ValueError(
+            f"{study.study_name} was run with the pruner {kept}, not {settings}: use these, or another study"
+        )
 
 
 def _value(trial: optuna.trial.FrozenTrial) -> float:
@@ -597,16 +631,20 @@ class StopRequested:
             raise Stopped(f"signal {self.signal}")
 
 
-def pruning_progress(trial: optuna.Trial, stop: StopRequested) -> Callable[[int, float], None]:
+def pruning_progress(
+    trial: optuna.Trial, stop: StopRequested, steps: Optional[int] = None
+) -> Callable[[int, float], None]:
     """A ``progress`` of :meth:`JaxMLP.fit <mlgw_bns.jax_mlp.JaxMLP.fit>`
     reporting the best held-out loss to ``trial`` (in log10), pruning it if
-    its study's pruner says so, and stopping on a signal."""
+    its study's pruner says so (not in the last 5% of its ``steps``, its
+    training as good as done), and stopping on a signal."""
+    last = np.inf if steps is None else 0.95 * steps
 
-    def progress(steps: int, best_loss: float) -> None:
+    def progress(step: int, best_loss: float) -> None:
         stop.check()
-        trial.report(float(np.log10(best_loss)), steps)
-        if trial.should_prune():
-            raise optuna.TrialPruned(f"pruned at step {steps}")
+        trial.report(float(np.log10(best_loss)), step)
+        if step < last and trial.should_prune():
+            raise optuna.TrialPruned(f"pruned at step {step}")
 
     return progress
 

@@ -38,11 +38,14 @@ import pytest  # noqa: E402
 from mlgw_bns.data_management import Residuals  # noqa: E402
 from mlgw_bns.hyperparameter_optimization import (  # noqa: E402
     StopRequested,
+    check_pruner_settings,
     enqueue_best,
     make_pruner,
     mlp_command_line,
     mlp_config_from_trial,
     open_study,
+    pruner_settings,
+    pruning_progress,
     read_study,
     recover_stale_trials,
     run_in_parallel,
@@ -100,6 +103,43 @@ def test_workers_share_a_study_in_a_journal(tmp_path):
     assert len(open_study(journal, "toy").trials) > first
     assert trial_hours(other) >= 1.0 / 3600
     assert any(t.params == {"learning_rate": 1e-3} for t in other.trials[first:])
+
+
+def test_a_study_keeps_its_pruner_settings(tmp_path):
+    journal = str(tmp_path / "study.journal")
+    # a study run (by halving) before the settings were kept
+    study = open_study(journal, "toy", pruner=make_pruner("halving", 3))
+    assert run_worker(study, quadratic, hours=0.5 / 3600)
+    assert "pruner" not in study.user_attrs
+    with pytest.raises(ValueError, match="another study"):
+        check_pruner_settings(study, pruner_settings("halving", 0.25, 2))
+    check_pruner_settings(study, pruner_settings("halving"))
+    fresh = open_study(str(tmp_path / "fresh.journal"), "fresh")
+    check_pruner_settings(fresh, pruner_settings("halving", 0.25, 2))
+    check_pruner_settings(fresh, pruner_settings("halving", 0.25, 2))
+    with pytest.raises(ValueError):
+        check_pruner_settings(fresh, pruner_settings("median"))
+
+
+def test_no_pruning_at_the_end_of_training(tmp_path):
+    study = open_study(str(tmp_path / "study.journal"), "toy", pruner=make_pruner("halving", 100, 0.25, 2))
+    for loss in (1.0, 0.1):  # the second, better, is the one kept at every rung
+        trial = study.ask()
+        progress = pruning_progress(trial, StopRequested(), steps=100)
+        for step in (25, 50, 99):
+            progress(step, loss)
+        study.tell(trial, loss)
+    trial = study.ask()
+    progress = pruning_progress(trial, StopRequested(), steps=100)
+    with pytest.raises(optuna.TrialPruned):
+        progress(25, 10.0)
+    trial = study.ask()
+    progress = pruning_progress(trial, StopRequested())
+    with pytest.raises(optuna.TrialPruned):
+        progress(100, 10.0)
+    trial = study.ask()
+    progress = pruning_progress(trial, StopRequested(), steps=100)
+    progress(100, 10.0)  # its last 5%: not pruned
 
 
 def test_a_stopped_trial_is_retried_and_a_stale_one_recovered(tmp_path):
