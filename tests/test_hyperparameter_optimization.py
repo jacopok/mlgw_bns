@@ -131,12 +131,14 @@ def test_a_stopped_trial_is_retried_and_a_stale_one_recovered(tmp_path):
 def test_enqueue_best_and_the_search_space(tmp_path):
     source = open_study(str(tmp_path / "small.journal"), "small")
     source.optimize(lambda t: (mlp_config_from_trial(t, 1000, 4096), t.number)[1], n_trials=6)
-    target = open_study(str(tmp_path / "large.journal"), "large")
+    target = open_study(str(tmp_path / "large.journal"), "large", metric="log10 error")
+    assert read_study(str(tmp_path / "large.journal")).metric_names == ["log10 error"]
     assert enqueue_best(target, source, 3) == 3
     assert enqueue_best(target, source, 3) == 0  # already there
     best = sorted(source.trials, key=lambda t: t.value)[:3]
     trial = target.ask()
     assert trial.user_attrs["enqueued_from"] == f"small#{best[0].number}"
+    assert trial.user_attrs["enqueued"] == best[0].params
     config = mlp_config_from_trial(trial, 1000, 4096)
     assert config.hidden == (best[0].params["width"],) * best[0].params["depth"]
     assert config.batch_size == 2 ** best[0].params["log2_batch"]

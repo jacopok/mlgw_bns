@@ -11,6 +11,9 @@ loaded, and the waveforms are referenced differently in time and phase.
 
 ### Changed
 
+- optuna 5 (was 4.9), and optuna-dashboard in the dev dependencies. The
+    studies' retries keep the parameters a trial was enqueued with in its
+    user attribute `enqueued` (optuna 5 has no `system_attrs` for them).
 - **The time-shift and mode-phase regressors are gone.** The phase residuals
     of every training waveform are now referenced, all modes together, to its
     (2,2) mode at the lowest frequency of the band, `f0`: every mode is
@@ -294,7 +297,12 @@ loaded, and the waveforms are referenced differently in time and phase.
     checkpoint, those of dead workers recovered by heartbeat; studies seeded
     with the best trials of another (`enqueue_best`, e.g. on fewer samples);
     studies read without writing or locking (`read_study`), so that their
-    journals can be copied and reported on while they run.
+    journals can be copied and reported on while they run;
+    `visualization/studies_dashboard.py` copies them every 10 minutes and
+    shows them in an optuna dashboard (with a note of the best trial's
+    `train` options and a plot of accuracy against size). Optuna 5:
+    `--sampler gp` (its `GPSampler`, now stable), parameter importances
+    (PED-ANOVA) in the `studies` report, named objectives.
     `PrecessionRegressor.train_on_chunks` is now `reduce_chunks` then
     `fit_reduced`, for many fits to one reduced training set.
 - `MLPConfig.warmup` (a linear warmup of the learning rate) and

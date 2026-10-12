@@ -280,7 +280,9 @@ def optimize(args) -> int:
     stop = StopRequested()
     mode = Mode(*args.mode)
     name = mode_name(mode)
-    study = open_optimization(args, f"{name}.journal", f"{os.path.basename(os.path.abspath(args.study))}_{name}")
+    study = open_optimization(
+        args, f"{name}.journal", f"{os.path.basename(os.path.abspath(args.study))}_{name}", "log10 regression error"
+    )
     if spent(args, study):
         return 0
     dataset, validation = ShardedModesDataset(args.dataset), ShardedModesDataset(args.validation)

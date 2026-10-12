@@ -226,6 +226,25 @@ rsync -av --exclude 'checkpoints/' --exclude '*.lock' cluster:$DATA/optimize/ vi
 python visualization/modes_scale.py studies visualization/modes_scale/run/optimize/*
 ```
 
+To follow them, `visualization/studies_dashboard.py` does this every 10
+minutes for both pipelines and shows all the studies in an
+[optuna dashboard](https://optuna-dashboard.readthedocs.io) (the history
+of each, the importance of its parameters, the learning curves of its
+perceptrons as they were pruned or not, the value of its trials against
+their number of weights; and a note with its best trial's `train`
+options):
+
+```bash
+python visualization/studies_dashboard.py --modes cluster:/path/of/the/modes/DATA \
+    --precession cluster:/path/of/the/precession/DATA        # then open http://localhost:8080
+```
+
+The `studies` report gives the importance of the parameters too
+(PED-ANOVA, from 10 completed trials). `--sampler gp` samples with a
+Gaussian process instead of TPE: better on few trials, but it learns only
+from the completed ones (not the pruned), so it is meant with
+`--pruner none`, and it needs torch (`uv sync --extra torch`).
+
 ## Copying the results back
 
 What is worth copying is small; the training sets are not, and stay on the

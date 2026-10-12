@@ -465,31 +465,46 @@ def open_study(
     pruner: Optional[optuna.pruners.BasePruner] = None,
     fixed: Optional[dict] = None,
     seed: Optional[int] = None,
+    sampler: str = "tpe",
+    metric: Optional[str] = None,
 ) -> optuna.Study:
-    """The study ``study_name`` (minimizing one objective) kept in the optuna
-    journal ``filename``, made if not there. Its trials are sampled by TPE
-    (multivariate; with the "constant liar", so that workers running at once
-    do not all try the same), with the parameters in ``fixed`` held to their
-    values."""
+    """The study ``study_name`` (minimizing one objective, named ``metric``)
+    kept in the optuna journal ``filename``, made if not there. Its trials
+    are sampled by multivariate TPE (``sampler="tpe"``; with the "constant
+    liar", so that workers running at once do not all try the same) or by a
+    Gaussian process (``"gp"``: its acquisition integrating over the
+    outcomes of the trials running; it learns from the completed trials
+    only, not the pruned ones, and needs torch), with the parameters in
+    ``fixed`` held to their values."""
     from optuna.storages import JournalStorage
     from optuna.storages.journal import JournalFileBackend
 
     os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
-        sampler: optuna.samplers.BaseSampler = optuna.samplers.TPESampler(
-            multivariate=True, constant_liar=True, seed=seed
-        )
+        if sampler == "tpe":
+            chosen: optuna.samplers.BaseSampler = optuna.samplers.TPESampler(
+                multivariate=True, constant_liar=True, seed=seed
+            )
+        elif sampler == "gp":
+            chosen = optuna.samplers.GPSampler(seed=seed)
+        else:
+            raise ValueError(f"unknown sampler {sampler!r}: tpe or gp")
         if fixed:
-            sampler = optuna.samplers.PartialFixedSampler(fixed, sampler)
-    return optuna.create_study(
+            chosen = optuna.samplers.PartialFixedSampler(fixed, chosen)
+    study = optuna.create_study(
         storage=JournalStorage(JournalFileBackend(filename)),
         study_name=study_name,
         direction="minimize",
         pruner=pruner if pruner is not None else optuna.pruners.NopPruner(),
-        sampler=sampler,
+        sampler=chosen,
         load_if_exists=True,
     )
+    if metric is not None and study.metric_names != [metric]:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
+            study.set_metric_names([metric])
+    return study
 
 
 def read_study(filename: str) -> optuna.Study:
@@ -530,14 +545,14 @@ def enqueue_best(study: optuna.Study, source: optuna.Study, number: int) -> int:
     workers to try first; how many were not tried or enqueued there yet."""
     tried = {tuple(sorted(t.params.items())) for t in study.get_trials(deepcopy=False)}
     tried |= {
-        tuple(sorted(t.system_attrs.get("fixed_params", {}).items()))
+        tuple(sorted(_enqueued(t).items()))
         for t in study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.WAITING,))
     }
     done = [t for t in source.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))]
     added = 0
     for trial in sorted(done, key=_value)[:number]:
         if tuple(sorted(trial.params.items())) not in tried:
-            study.enqueue_trial(trial.params, user_attrs={"enqueued_from": f"{source.study_name}#{trial.number}"})
+            _enqueue(study, trial.params, enqueued_from=f"{source.study_name}#{trial.number}")
             added += 1
     return added
 
@@ -596,12 +611,22 @@ def pruning_progress(trial: optuna.Trial, stop: StopRequested) -> Callable[[int,
     return progress
 
 
+def _enqueue(study: optuna.Study, params: dict, **user_attrs) -> None:
+    """Enqueue a trial of ``params`` in ``study``, with ``user_attrs``, and
+    the parameters themselves (as the user attribute ``enqueued``: optuna
+    keeps them where only it can read them)."""
+    study.enqueue_trial(params, user_attrs={**user_attrs, "enqueued": params})
+
+
+def _enqueued(trial: optuna.trial.FrozenTrial) -> dict:
+    """The parameters ``trial`` was enqueued with (:func:`_enqueue`)."""
+    return dict(trial.user_attrs.get("enqueued", {}))
+
+
 def _retry(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
     """Enqueue ``trial`` again: the parameters it sampled, and those it was
     enqueued with (if it stopped before sampling them)."""
-    params = dict(trial.system_attrs.get("fixed_params", {}))
-    params.update(trial.params)
-    study.enqueue_trial(params, user_attrs={"retry_of": trial.number})
+    _enqueue(study, {**_enqueued(trial), **trial.params}, retry_of=trial.number)
 
 
 def recover_stale_trials(study: optuna.Study, stale_seconds: float) -> int:
@@ -756,7 +781,9 @@ def run_in_parallel(command: Sequence[str], workers: int) -> int:
 
 def study_report(study: optuna.Study, top: int = 10) -> str:
     """The best ``top`` trials of ``study``, their parameters and user
-    attributes, and how many trials ended how."""
+    attributes, how many trials ended how, and the importance of each
+    parameter (PED-ANOVA: how much more often its values among the best
+    trials fall where they do than among all)."""
     trials = study.get_trials(deepcopy=False)
     counts = {state.name.lower(): 0 for state in optuna.trial.TrialState}
     for trial in trials:
@@ -768,6 +795,9 @@ def study_report(study: optuna.Study, top: int = 10) -> str:
     ]
     done = sorted((t for t in trials if t.state == optuna.trial.TrialState.COMPLETE), key=_value)
     for trial in done[:top]:
-        attrs = {k: v for k, v in trial.user_attrs.items() if k not in ("heartbeat", "worker")}
+        attrs = {k: v for k, v in trial.user_attrs.items() if k not in ("heartbeat", "worker", "enqueued")}
         lines.append(f"  #{trial.number}: {trial.value:.4g}  {trial.params}  {attrs}")
+    if len(done) >= 10:
+        importances = optuna.importance.get_param_importances(study)
+        lines.append("  importance: " + ", ".join(f"{name} {value:.2f}" for name, value in importances.items()))
     return "\n".join(lines)

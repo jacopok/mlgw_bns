@@ -203,7 +203,9 @@ def optimize(args) -> int:
     if (status := in_parallel(args)) is not None:
         return status
     stop = StopRequested()
-    study = open_optimization(args, "study.journal", os.path.basename(os.path.abspath(args.study)))
+    study = open_optimization(
+        args, "study.journal", os.path.basename(os.path.abspath(args.study)), "mean log10 mismatch"
+    )
     if spent(args, study):
         return 0
     if args.kind == "krr" and args.n > args.max_kernel_ridge:

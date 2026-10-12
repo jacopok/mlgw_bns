@@ -258,6 +258,8 @@ def add_optimize_arguments(command) -> None:
                          help="processes running trials at once, each on its share of the CPUs")
     command.add_argument("--mlp-steps", type=int, default=200000, help="steps of every perceptron (fixed)")
     command.add_argument("--mlp-loss", default="natural", choices=["natural", "uniform"])
+    command.add_argument("--sampler", choices=["tpe", "gp"], default="tpe",
+                         help="TPE, or a Gaussian process (completed trials only: best without pruning; needs torch)")
     command.add_argument("--pruner", choices=["none", "median", "halving"], default="halving",
                          help="of the perceptrons, on their held-out loss")
     command.add_argument("--fix", nargs="+", default=[], metavar="NAME=VALUE",
@@ -305,13 +307,16 @@ def parse_fixed(pairs) -> dict:
     return fixed
 
 
-def open_optimization(args, journal: str, name: str):
+def open_optimization(args, journal: str, name: str, metric: str):
     """The study of an ``optimize`` command (and, with ``--enqueue-from``,
     the best trials of the other one enqueued in it)."""
     from mlgw_bns.hyperparameter_optimization import enqueue_best, make_pruner, open_study, read_study
 
     pruner = make_pruner(args.pruner if args.kind == "mlp" else "none", args.mlp_steps)
-    study = open_study(os.path.join(args.study, journal), name, pruner=pruner, fixed=parse_fixed(args.fix))
+    study = open_study(
+        os.path.join(args.study, journal), name, pruner=pruner, fixed=parse_fixed(args.fix), sampler=args.sampler,
+        metric=metric,
+    )
     if args.enqueue_from:
         source = read_study(os.path.join(args.enqueue_from, journal))
         print(f"{enqueue_best(study, source, args.enqueue_top)} trials of {args.enqueue_from} enqueued")

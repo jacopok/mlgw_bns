@@ -117,6 +117,7 @@ visualization/precession_error_vs_inplane_spin.npz
 # datasets and runs of visualization/precession_scale.py
 /visualization/precession_scale/
 /visualization/modes_scale/
+/visualization/studies_dashboard/
 /slurm/*/cluster.env
 visualization/spin_phase_learnability.py
 visualization/profile_precession_dynamics.py
