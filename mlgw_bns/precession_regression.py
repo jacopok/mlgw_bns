@@ -1666,6 +1666,20 @@ def _g_baselines(grid: AngleGrid, intrinsic, omega_reference) -> np.ndarray:
 
 
 @dataclass
+class ReducedTrainingSet:
+    """What :meth:`PrecessionRegressor.reduce_chunks` makes of a training
+    set: the regression's inputs ``(N, n_features)``, its outputs ``(N,
+    n_zeta_components + n_g_components + N_SWITCH)`` (the principal
+    components, scaled, and the switch targets), and the principal
+    components."""
+
+    features: np.ndarray
+    reduced: np.ndarray
+    pca_zeta: Any
+    pca_g: Any
+
+
+@dataclass
 class PrecessionRegressor:
     """Precession angles from the parameters, by PCA and kernel ridge (or a
     :class:`~mlgw_bns.jax_mlp.JaxMLP`) on the envelopes of
@@ -1755,9 +1769,21 @@ class PrecessionRegressor:
         envelopes (:class:`~mlgw_bns.principal_component_analysis.CovarianceAccumulator`),
         the second projects them on the principal components; only those
         projections, the features and the switch targets of all the binaries
-        are held at once."""
+        are held at once (:meth:`reduce_chunks`, then :meth:`fit_reduced`)."""
+        return cls.fit_reduced(
+            cls.reduce_chunks(chunks, n_components, grid), kernel_gamma=kernel_gamma, grid=grid, ranges=ranges,
+            mlp=mlp, mlp_loss=mlp_loss, mlp_checkpoint=mlp_checkpoint,
+        )
+
+    @staticmethod
+    def reduce_chunks(
+        chunks: Callable, n_components: Tuple[int, int] = (64, 64), grid: AngleGrid = AngleGrid(),
+    ) -> "ReducedTrainingSet":
+        """The first part of :meth:`train_on_chunks`: the principal
+        components of the envelopes and the regression's inputs and outputs,
+        which any number of regressors can be fitted to
+        (:meth:`fit_reduced`)."""
         from .data_management import PrincipalComponentData
-        from .neural_network import Hyperparameters, KernelRidgeNetwork
         from .principal_component_analysis import CovarianceAccumulator
 
         def targets(chunk):
@@ -1789,14 +1815,37 @@ class PrecessionRegressor:
             scaling = np.max(np.abs(projected), axis=0)
             pcas.append(PrincipalComponentData(vectors, values, mean, scaling))
             reduced.append(projected / scaling)
-        pca_zeta, pca_g = pcas
         switch = np.concatenate(switches)
-        reduced = np.concatenate(reduced + [switch], axis=1)
-        features = np.concatenate(features)
+        data = ReducedTrainingSet(
+            features=np.concatenate(features), reduced=np.concatenate(reduced + [switch], axis=1),
+            pca_zeta=pcas[0], pca_g=pcas[1],
+        )
         logging.info(
             "precession regression: principal components of %i binaries in %.0f s",
-            len(features), time.perf_counter() - start,
+            len(data.features), time.perf_counter() - start,
         )
+        return data
+
+    @classmethod
+    def fit_reduced(
+        cls,
+        data: "ReducedTrainingSet",
+        kernel_gamma: float = 0.02,
+        grid: AngleGrid = AngleGrid(),
+        ranges: TrainingRanges = TrainingRanges(),
+        mlp: Optional[Any] = None,
+        mlp_loss: str = "natural",
+        mlp_checkpoint: Optional[str] = None,
+        mlp_progress: Optional[Callable[[int, float], None]] = None,
+    ) -> "PrecessionRegressor":
+        """The second part of :meth:`train_on_chunks`: kernel ridge (with
+        ``kernel_gamma``), or a perceptron with the configuration ``mlp``
+        (:class:`~mlgw_bns.jax_mlp.MLPConfig`), fitted to ``data``;
+        ``mlp_progress`` as ``progress`` of :meth:`JaxMLP.fit
+        <mlgw_bns.jax_mlp.JaxMLP.fit>`."""
+        from .neural_network import Hyperparameters, KernelRidgeNetwork
+
+        features, reduced, pca_zeta, pca_g = data.features, data.reduced, data.pca_zeta, data.pca_g
         if mlp is None:
             network = KernelRidgeNetwork(
                 Hyperparameters.default_kernel_ridge(len(features), kernel_gamma=kernel_gamma)
@@ -1807,14 +1856,15 @@ class PrecessionRegressor:
 
             weights = None
             if mlp_loss == "natural":
+                n_switch = reduced.shape[1] - pca_zeta.eigenvalues.size - pca_g.eigenvalues.size
                 units = np.concatenate([
                     pca_zeta.principal_components_scaling, pca_g.principal_components_scaling,
-                    np.ones(switch.shape[1]),
+                    np.ones(n_switch),
                 ])
                 weights = np.var(reduced, axis=0) * units**2
             elif mlp_loss != "uniform":
                 raise ValueError(f"unknown mlp_loss {mlp_loss!r}")
-            network = JaxMLP(mlp).fit(features, reduced, weights, checkpoint=mlp_checkpoint)
+            network = JaxMLP(mlp).fit(features, reduced, weights, checkpoint=mlp_checkpoint, progress=mlp_progress)
         return cls(grid=grid, ranges=ranges, pca_zeta=pca_zeta, pca_g=pca_g, network=network)
 
     @property

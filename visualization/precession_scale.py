@@ -51,11 +51,18 @@ from mlgw_bns.precession_regression import AngleGrid, TrainingRanges
 sys.path.insert(0, os.path.dirname(__file__))
 from precession_regression_study import (  # noqa: E402
     add_mlp_arguments,
+    add_optimize_arguments,
+    in_parallel,
     exact_waveforms,
     load,
     mlp_config,
+    mlp_trial,
+    open_optimization,
     print_unexplained,
+    report_studies,
+    spent,
     validate,
+    waveform_mismatches,
 )
 
 def seconds(hours):
@@ -182,6 +189,63 @@ def train(args) -> int:
     return 0
 
 
+def optimize(args) -> int:
+    """A worker of a hyperparameter study of the regressor
+    (``<study>/study.journal``): the value of a trial is the mean of the
+    log10 waveform mismatches of the first ``--validate-n`` binaries of the
+    validation set (its median, 90th percentile and fraction above 1e-2 are
+    kept with it)."""
+    import optuna
+
+    from mlgw_bns.hyperparameter_optimization import StopRequested, run_worker
+    from mlgw_bns.precession_regression import PrecessionRegressor
+
+    if (status := in_parallel(args)) is not None:
+        return status
+    stop = StopRequested()
+    study = open_optimization(args, "study.journal", os.path.basename(os.path.abspath(args.study)))
+    if spent(args, study):
+        return 0
+    if args.kind == "krr" and args.n > args.max_kernel_ridge:
+        raise SystemExit(f"kernel ridge on {args.n} binaries: above --max-kernel-ridge {args.max_kernel_ridge}")
+    dataset = ShardedDataset(args.dataset)
+    data = PrecessionRegressor.reduce_chunks(
+        dataset.training_chunks(args.n, args.source), tuple(args.components), dataset.config.grid,
+    )
+    validation = load([args.validation])
+    n_validation = len(validation["intrinsic"]) if args.validate_n is None else args.validate_n
+    cache = os.path.join(args.validation, "exact.npz")
+    checkpoints = os.path.join(args.study, "checkpoints")
+    os.makedirs(checkpoints, exist_ok=True)
+
+    def objective(trial, stop) -> float:
+        kwargs = dict(grid=dataset.config.grid, ranges=dataset.config.ranges)
+        checkpoint = None
+        if args.kind == "mlp":
+            config, checkpoint, progress = mlp_trial(trial, args, args.n, checkpoints, stop)
+            kwargs.update(mlp=config, mlp_loss=args.mlp_loss, mlp_checkpoint=checkpoint, mlp_progress=progress)
+        else:
+            kwargs.update(kernel_gamma=trial.suggest_float("kernel_gamma", 1e-3, 1.0, log=True))
+        try:
+            regressor = PrecessionRegressor.fit_reduced(data, **kwargs)
+        except optuna.TrialPruned:
+            if checkpoint is not None and os.path.exists(checkpoint):
+                os.remove(checkpoint)
+            raise
+        if checkpoint is not None and os.path.exists(checkpoint):
+            os.remove(checkpoint)
+        stop.check()
+        mismatches = np.maximum(waveform_mismatches(regressor, validation, n_validation, cache=cache)[0], 1e-16)
+        trial.set_user_attr("median", float(np.median(mismatches)))
+        trial.set_user_attr("90%", float(np.percentile(mismatches, 90)))
+        trial.set_user_attr("above 1e-2", float(np.mean(mismatches > 1e-2)))
+        if args.kind == "mlp":
+            trial.set_user_attr("weights", int(sum(w.size + b.size for w, b in regressor.network.weights)))
+        return float(np.mean(np.log10(mismatches)))
+
+    return 0 if run_worker(study, objective, args.hours, stop, stale_minutes=args.stale_minutes) else EXIT_REQUEUE
+
+
 def exact(args) -> None:
     data = load([args.dataset])
     n = len(data["intrinsic"]) if args.n is None else args.n
@@ -255,6 +319,20 @@ def main() -> int:
     command.add_argument("--validate-n", type=int, help="its first this many binaries (default: all)")
     command.add_argument("--validate-out", help="default: validate_<regressor>.npz next to it")
     command.set_defaults(run=train)
+
+    command = commands.add_parser("optimize", help="a worker of a hyperparameter study of the regressor")
+    command.add_argument("dataset", help="training set")
+    command.add_argument("--validation", required=True, help="validation set (with its exact.npz)")
+    command.add_argument("--source", default="base", help="the envelopes: base or refine<k>")
+    command.add_argument("--components", type=int, nargs=2, default=[64, 64])
+    command.add_argument("--max-kernel-ridge", type=int, default=32768)
+    add_optimize_arguments(command)
+    command.set_defaults(run=optimize)
+
+    command = commands.add_parser("studies", help="the best trials of hyperparameter studies")
+    command.add_argument("study", nargs="+", help="directories")
+    command.add_argument("--top", type=int, default=10)
+    command.set_defaults(run=report_studies)
 
     command = commands.add_parser("exact", help="cache the waveforms of a validation set with integrated angles")
     command.add_argument("dataset")

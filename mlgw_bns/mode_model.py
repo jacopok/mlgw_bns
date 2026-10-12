@@ -5,7 +5,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from functools import lru_cache
-from typing import IO, ClassVar, Optional, Type, Union
+from typing import IO, Callable, ClassVar, Optional, Type, Union
 
 import time
 import h5py
@@ -987,6 +987,7 @@ class ModeModel:
         reduced_residuals: np.ndarray,
         sample_weight: Optional[np.ndarray] = None,
         checkpoint: Optional[str] = None,
+        progress: Optional[Callable[[int, float], None]] = None,
     ) -> NeuralNetwork:
         """Fit a network of kind :attr:`nn_kind` from ``parameters``
         ``(N, 5)`` to the principal components of their residuals
@@ -1006,6 +1007,10 @@ class ModeModel:
             Where a :class:`~mlgw_bns.neural_network.JaxMLPNetwork` keeps
             the state of its training, to resume it after an interruption
             (other kinds take none).
+        progress : callable, optional
+            Given to :meth:`JaxMLP.fit <mlgw_bns.jax_mlp.JaxMLP.fit>` by a
+            :class:`~mlgw_bns.neural_network.JaxMLPNetwork` (other kinds
+            report no progress).
 
         Returns
         -------
@@ -1027,6 +1032,7 @@ class ModeModel:
                 self.pca_data.eigenvalues ** hyper.pc_exponent
             )
             fit_options["checkpoint"] = checkpoint
+            fit_options["progress"] = progress
         elif checkpoint is not None:
             raise ValueError(f"{type(nn).__name__} trainings are not checkpointed")
 

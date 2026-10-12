@@ -50,18 +50,36 @@ import sys
 import time
 
 import numpy as np
+import optuna
 
+from mlgw_bns.data_management import Residuals
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.jax_mlp import TrainingInterrupted
 from mlgw_bns.model import Model
 from mlgw_bns.model_validation import stored_waveform_mismatches
 from mlgw_bns.mode_model import ParametersWithExtrinsic
-from mlgw_bns.modes_dataset import HOM7_MODES, ModesDatasetConfig, ShardedModesDataset, same_indices, stored_size
+from mlgw_bns.modes_dataset import (
+    HOM7_MODES,
+    ModesDatasetConfig,
+    ShardedModesDataset,
+    mode_name,
+    same_indices,
+    stored_size,
+)
 from mlgw_bns.neural_network import Hyperparameters, JaxMLPNetwork, KernelRidgeNetwork
 from mlgw_bns.sharding import EXIT_REQUEUE, Stopped, save_arrays, save_json, stop_on_signals
 
 sys.path.insert(0, os.path.dirname(__file__))
-from precession_regression_study import add_mlp_arguments, mlp_config  # noqa: E402
+from precession_regression_study import (  # noqa: E402
+    add_mlp_arguments,
+    add_optimize_arguments,
+    in_parallel,
+    mlp_config,
+    mlp_trial,
+    open_optimization,
+    report_studies,
+    spent,
+)
 
 #: Memory of an exact kernel ridge fit on N waveforms, in bytes: the kernel
 #: and its eigenvectors (measured: 9.8 GB at 24576).
@@ -166,7 +184,9 @@ def train(args) -> int:
     try:
         model = dataset.train(
             args.n, args.out, nn_kind=nn_kind, hyperparameters=hyperparameters,
-            pca_size=args.pca_size, modes=args.modes, checkpoint=args.checkpoint,
+            pca_size=args.pca_size, modes=args.modes,
+            # kernel ridge is not checkpointed (job.sh asks for a checkpoint whatever the regressor)
+            checkpoint=args.checkpoint if args.mlp else None,
         )
     except (TrainingInterrupted, Stopped) as error:
         logging.info("stopped: %s", error)
@@ -230,6 +250,81 @@ def validate(args) -> int:
     print(f"{args.out}: {len(parameters)} waveforms in {seconds_taken:.0f} s; full waveform median "
           f"{summary['full']['median']:.2e}, 90% {summary['full']['90%']:.2e}, max {summary['full']['max']:.2e}")
     return 0
+
+
+def reconstructed(mode_model, reduced: np.ndarray) -> Residuals:
+    """The residuals of the principal components ``reduced`` of a mode."""
+    return Residuals.from_combined_residuals(
+        mode_model.pca_model.reconstruct_data(reduced, mode_model.pca_data),
+        mode_model.downsampling_indices.numbers_of_points,
+    )
+
+
+def optimize(args) -> int:
+    """A worker of the hyperparameter study of the regressor of one mode
+    (``<study>/l2_m2.journal``): the error of a trial is the mean square
+    difference (:meth:`HyperparameterOptimization.residuals_difference
+    <mlgw_bns.hyperparameter_optimization.HyperparameterOptimization.residuals_difference>`,
+    power-weighted for the modes trained so) of the residuals of the
+    validation set from its predicted principal components and from its
+    true ones: the error of the regression alone, without the truncation of
+    the principal components, which is the same in every trial."""
+    from mlgw_bns.hyperparameter_optimization import (
+        HyperparameterOptimization,
+        StopRequested,
+        run_worker,
+    )
+
+    if (status := in_parallel(args)) is not None:
+        return status
+    stop = StopRequested()
+    mode = Mode(*args.mode)
+    name = mode_name(mode)
+    study = open_optimization(args, f"{name}.journal", f"{os.path.basename(os.path.abspath(args.study))}_{name}")
+    if spent(args, study):
+        return 0
+    dataset, validation = ShardedModesDataset(args.dataset), ShardedModesDataset(args.validation)
+    if not same_indices(dataset.downsampling()[mode], validation.downsampling()[mode]):
+        raise SystemExit(f"{args.validation} has other downsampling indices than {args.dataset}")
+    nn_kind = JaxMLPNetwork if args.kind == "mlp" else KernelRidgeNetwork
+    if args.kind == "krr" and args.n > args.max_kernel_ridge:
+        raise SystemExit(f"kernel ridge on {args.n} waveforms: above --max-kernel-ridge {args.max_kernel_ridge}")
+    model = dataset.model(nn_kind=nn_kind)
+    mode_model = model.mode_models[mode]
+    mode_model.pca_data = dataset.principal_components(args.pca_size or args.n)[mode]
+    start = time.time()
+    parameters, reduced, weights = dataset.reduced(model, mode, args.n)
+    validation_parameters, validation_reduced, validation_weights = validation.reduced(model, mode, args.validate_n)
+    truth = reconstructed(mode_model, validation_reduced)
+    logging.info("%s: %i training and %i validation waveforms read in %.0f s", name, len(parameters),
+                 len(validation_parameters), time.time() - start)
+    checkpoints = os.path.join(args.study, "checkpoints", name)
+    os.makedirs(checkpoints, exist_ok=True)
+
+    def objective(trial, stop) -> float:
+        checkpoint = progress = None
+        if args.kind == "mlp":
+            config, checkpoint, progress = mlp_trial(trial, args, args.n, checkpoints, stop)
+            hyper = Hyperparameters.default_jax_mlp(args.n, config, args.mlp_loss)
+        else:
+            hyper = Hyperparameters.from_trial_kernel_ridge(trial, n_train=args.n)
+        try:
+            nn = mode_model.fit_nn(hyper, parameters, reduced, weights, checkpoint=checkpoint, progress=progress)
+        except optuna.TrialPruned:
+            if checkpoint is not None and os.path.exists(checkpoint):
+                os.remove(checkpoint)
+            raise
+        if checkpoint is not None and os.path.exists(checkpoint):
+            os.remove(checkpoint)
+        predicted = nn.predict(validation_parameters) / mode_model.pca_data.eigenvalues ** hyper.pc_exponent
+        error = HyperparameterOptimization.residuals_difference(
+            truth, reconstructed(mode_model, predicted), validation_weights
+        )
+        if args.kind == "mlp":
+            trial.set_user_attr("weights", int(sum(w.size + b.size for w, b in nn.network.weights)))
+        return float(np.log10(error))
+
+    return 0 if run_worker(study, objective, args.hours, stop, stale_minutes=args.stale_minutes) else EXIT_REQUEUE
 
 
 class Oracle:
@@ -430,6 +525,20 @@ def main() -> int:
     command.add_argument("--validate-out", help="default: validate_<run>.npz next to the run's directory")
     command.add_argument("--jobs", type=int, default=1, help="processes of the validation")
     command.set_defaults(run=train)
+
+    command = commands.add_parser("optimize", help="a worker of the hyperparameter study of a mode's regressor")
+    command.add_argument("dataset", help="training set")
+    command.add_argument("--validation", required=True, help="validation set")
+    command.add_argument("--mode", type=parse_mode, required=True)
+    command.add_argument("--pca-size", type=int, help="principal components of the first this many (default: N)")
+    command.add_argument("--max-kernel-ridge", type=int, default=65536)
+    add_optimize_arguments(command)
+    command.set_defaults(run=optimize)
+
+    command = commands.add_parser("studies", help="the best trials of hyperparameter studies")
+    command.add_argument("study", nargs="+", help="directories")
+    command.add_argument("--top", type=int, default=10)
+    command.set_defaults(run=report_studies)
 
     command = commands.add_parser("validate", help="mismatches of a model on a validation set")
     command.add_argument("dataset")

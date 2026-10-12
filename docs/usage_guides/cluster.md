@@ -143,6 +143,89 @@ A step stopping by itself as it starts (exit status 75 within
 `MIN_RUN_SECONDS`, 10 minutes, without the walltime signal) is not requeued,
 so that a broken job fails instead of looping.
 
+## Hyperparameter studies
+
+The `optimize` stage of either pipeline (not run by default) is the
+cluster's `optimize_n_hours.py`:
+
+```bash
+slurm/modes/submit.sh optimize 24          # the studies, for 24 hours (their walltime)
+slurm/precession/submit.sh optimize 24
+```
+
+runs an [optuna](https://optuna.org) study per entry of `OPTIMIZE_STUDIES`
+(per mode, for the modes model: an array of 7 jobs), kept in a journal
+file under `$DATA/optimize/<study>/`
+({func}`~mlgw_bns.hyperparameter_optimization.open_study`, no database
+needed), each in a job on a node of its own (`OPTIMIZE_CPUS`: 16 for the
+modes, 32 for the precession) for the hours given. In it, `OPTIMIZE_WORKERS` processes share the cores
+({func}`~mlgw_bns.hyperparameter_optimization.run_in_parallel`: each
+pinned to its share, with as many threads) and the study, each reading the
+training and validation sets once, then running trials until the walltime
+({func}`~mlgw_bns.hyperparameter_optimization.run_worker`; `--hours`
+instead stops them when the study's trials have taken that many hours,
+summed). The job is not requeued: submitting the stage again continues
+the studies where they were. In a study:
+
+- a trial trains a perceptron (the search space is
+  {data}`~mlgw_bns.hyperparameter_optimization.MLP_SEARCH_SPACE`: depth,
+  width, activation, learning rate and its final fraction, warmup, clipping
+  of the gradients, batch, weight decay) on the first `--n` samples for a
+  fixed `MLP_STEPS` steps, or kernel ridge (`--kind krr`: its width only);
+- its value is measured on the validation set: for a mode, the mean square
+  error of the regression in the residuals (without the truncation of the
+  principal components, the same in every trial); for the precession, the
+  mean log10 waveform mismatch of the first `--validate-n` binaries;
+- the perceptrons report their best held-out loss as they train, and
+  successive halving (`--pruner`) stops the worse ones at a tenth of their
+  steps, then at three tenths;
+- a worker warned of the walltime stops its trial (the perceptron saving
+  its checkpoint) and enqueues it again; the retry, by the next job,
+  resumes from the checkpoint. A trial whose worker died without warning
+  (its heartbeat stopped for `--stale-minutes`) is retried by the next
+  worker to start.
+
+A study searches at one training-set size `--n`, the one the regressor
+will be trained on. A perceptron's trial costs the same whatever the size
+(its steps are fixed), so a search on fewer samples saves nothing, and
+what is best depends on the size: in the learning curves, batches of 4096
+are worse than 1024 at $2^{14}$ binaries and better at $2^{20}$, and deeper
+or wider networks keep up to $2^{18}$ but not at $2^{20}$. (Kernel ridge,
+whose cost grows as $N^3$, has one parameter to search: cheap at any size
+it can be trained at.) `--enqueue-from` seeds a study with the best trials
+of another as its workers start; `--fix NAME=VALUE` holds parameters of
+the search space. Kernel ridge is best run with `--workers 1`, its linear
+algebra on all the cores.
+
+How well a perceptron trains depends on its seed about as much as on its
+hyperparameters: the same 4 x 256 network on the same $2^{13}$ waveforms of
+the (2,2) mode reaches a held-out loss of 5e-6, 2e-5 or 2e-4 with three
+seeds, as it learns or not the corner of the highest mass ratios and
+$\Lambda_1$ (on $2^{14}$, 7e-5 to 4e-4). Each trial's seed is therefore a
+function of its parameters (another for every trial, the same for a retry),
+so that the study does not favour the configurations lucky with one seed;
+the best trials of a study are still the luckiest of their neighbours, and
+are worth training again with a few other seeds (`--mlp-seed`, in a
+`SERIES`) before one is chosen.
+
+```bash
+python visualization/modes_scale.py studies $DATA/optimize/*        # the best trials, and the train options of each
+python visualization/precession_scale.py studies $DATA/optimize/*
+```
+
+The study files are small: copy `optimize/` back without its
+`checkpoints/` and lock files, at any time, while the studies run as well.
+A journal is only appended to, line by line, so a copy is the study as it
+was some moment before (a last line not copied in full is left out), and
+`studies` reads it without writing to it or waiting for its lock
+({func}`~mlgw_bns.hyperparameter_optimization.read_study`); running trials
+are counted as running.
+
+```bash
+rsync -av --exclude 'checkpoints/' --exclude '*.lock' cluster:$DATA/optimize/ visualization/modes_scale/run/optimize/
+python visualization/modes_scale.py studies visualization/modes_scale/run/optimize/*
+```
+
 ## Copying the results back
 
 What is worth copying is small; the training sets are not, and stay on the
@@ -156,10 +239,11 @@ From the **modes** pipeline (`$DATA` of `slurm/modes/cluster.env`):
 | `logs/` | the output of every job | small | yes |
 | `train/config.json`, `train/downsampling.npz`, `train/pca/`, `validation/config.json`, `validation/downsampling.npz` | what the models were trained and validated on | ~10 MB | yes |
 | `train/shards/`, `validation/shards/` | the datasets | 9.4 GB + 0.6 GB | no |
-| `*/locks/`, `runs/*/checkpoint_*` | in-progress state | | no |
+| `optimize/` | the hyperparameter studies (optuna journals), also while they run | small | yes, without `checkpoints/` and `*.lock` |
+| `*/locks/`, `runs/*/checkpoint_*`, `optimize/*/checkpoints/` | in-progress state | | no |
 
 ```bash
-rsync -av --exclude 'shards/' --exclude 'locks/' --exclude '*checkpoint*' \
+rsync -av --exclude 'shards/' --exclude 'locks/' --exclude '*checkpoint*' --exclude '*.lock' \
     cluster:$DATA/ visualization/modes_scale/run/
 ```
 
@@ -171,11 +255,12 @@ From the **precession** pipeline (`$DATA` of `slurm/precession/cluster.env`):
 | `logs/` | the output of every job | small | yes |
 | `train/config.json`, `validation/config.json`, `train/refine/*/config.json`, `train/refine/*/fold*.joblib` | what was trained on, and the priors of the refinements | ~30 MB | yes |
 | `validation/exact.npz` | the validation waveforms with integrated angles, to validate other regressors without integrating again | ~0.8 GB | if you will validate more |
+| `optimize/` | the hyperparameter studies (optuna journals), also while they run | small | yes, without `checkpoints/` and `*.lock` |
 | `train/shards/`, `train/refine/*/shards/`, `validation/shards/` | the datasets | ~70 GB | no |
 
 ```bash
-rsync -av --exclude 'shards/' --exclude 'locks/' --exclude '*.checkpoint' \
-    cluster:$DATA/ visualization/precession_scale/run/
+rsync -av --exclude 'shards/' --exclude 'locks/' --exclude '*.checkpoint' --exclude 'checkpoints/' \
+    --exclude '*.lock' cluster:$DATA/ visualization/precession_scale/run/
 ```
 
 Then, here:

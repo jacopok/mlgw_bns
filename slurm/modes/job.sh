@@ -9,12 +9,15 @@
 #                                             # the regressor of mode SLURM_ARRAY_TASK_ID (all, here)
 #   slurm/modes/job.sh validate NAME SIZE [modes_scale.py train options]
 #                                             # assemble the model, validate it on the validation set
+#   slurm/modes/job.sh optimize NAME [modes_scale.py optimize options]
+#                                             # the workers of the study NAME of mode SLURM_ARRAY_TASK_ID,
+#                                             # until the walltime (here: give --mode)
 #
 # Settings from cluster.env (see cluster.env.example). Every step skips what
 # is already done. Inside SLURM, USR1 (--signal=B:USR1@SIGNAL_LEAD, before the
 # walltime) makes the step checkpoint or abandon its shard and exit with 75,
-# and the job is requeued, at most MAX_REQUEUES times; TERM (scancel) stops it
-# without requeueing.
+# and the job is requeued, at most MAX_REQUEUES times (optimize: not, it
+# ends at the walltime); TERM (scancel) stops it without requeueing.
 set -euo pipefail
 # under sbatch the script runs from a spool copy: submit.sh submits from the repository
 ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -25,7 +28,7 @@ DATA="${DATA:-visualization/modes_scale/run}"
 resolve_data
 M=visualization/modes_scale.py
 CPUS="${SLURM_CPUS_PER_TASK:-$(nproc)}"
-[[ $# -ge 1 ]] || { sed -n '2,18p' "$0"; exit 1; }
+[[ $# -ge 1 ]] || { sed -n '2,20p' "$0"; exit 1; }
 STEP="$1"; shift
 
 # the modes, in the order of the array tasks of a training
@@ -55,6 +58,12 @@ case "$STEP" in
         else
             CMD+=(--validate "$DATA/validation" --jobs "$CPUS")
         fi ;;
+    optimize)
+        export OMP_NUM_THREADS="$CPUS" REQUEUE=0  # it ends at the walltime
+        NAME="$1"; shift
+        CMD=("$PYTHON" "$M" optimize "$DATA/train" --validation "$DATA/validation" --pca-size "$PCA_SIZE"
+             --study "$DATA/optimize/$NAME" "$@")
+        [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] && CMD+=(--mode "${MODES[$((SLURM_ARRAY_TASK_ID % ${#MODES[@]}))]}") ;;
     *)
         echo "unknown step $STEP" >&2; exit 1 ;;
 esac

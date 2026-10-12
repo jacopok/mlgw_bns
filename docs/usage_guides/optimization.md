@@ -15,3 +15,7 @@ from mlgw_bns.hyperparameter_optimization import HyperparameterOptimization
 ho = HyperparameterOptimization(model.mode_models[Mode(2, 2)])
 ho.optimize_and_save(2.)
 ```
+On a cluster, with training sets too large for a laptop, and for the
+perceptrons as well as kernel ridge, the `optimize` stage of the SLURM
+pipelines runs studies shared by many workers: see
+[Hyperparameter studies](cluster.md#hyperparameter-studies).

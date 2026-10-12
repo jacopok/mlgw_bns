@@ -90,3 +90,33 @@ def test_steps_set_the_epochs():
     config = MLPConfig(batch_size=128).with_steps(200000, 1024)
     # 922 of the 1024 kept (as in fit): 7 batches an epoch
     assert config.epochs == round(200000 / 7) and config.check_every == config.epochs // 200
+
+
+def test_warmup_and_clipping_train_and_report_progress(data):
+    """The warmup and the clipping of the gradients are options of the same
+    training (off by default, which they leave as it was); ``progress`` sees
+    the best held-out loss at every check, and an exception it raises ends
+    the training."""
+    x, y = data
+    config = dataclasses.replace(CONFIG, epochs=200)
+    reports = []
+    mlp = JaxMLP(dataclasses.replace(config, warmup=0.1, clip_norm=0.5)).fit(
+        x, y, progress=lambda steps, best: reports.append((steps, best))
+    )
+    steps_per_epoch = (len(x) - int(round(0.1 * len(x)))) // config.batch_size
+    assert [s for s, _ in reports] == [int(e) * steps_per_epoch for e in mlp.history[:, 0]]
+    assert np.all(np.diff([b for _, b in reports]) <= 0)
+    assert min(b for _, b in reports) < 0.1 * reports[0][1]
+    default = JaxMLP(config).fit(x, y)
+    unchanged = JaxMLP(dataclasses.replace(config, warmup=0.0, clip_norm=None)).fit(x, y)
+    assert np.array_equal(default.history, unchanged.history)
+    assert not np.array_equal(default.history, mlp.history)
+
+    class Stop(Exception):
+        pass
+
+    def stop(steps, best):
+        raise Stop
+
+    with pytest.raises(Stop):
+        JaxMLP(config).fit(x, y, progress=stop)

@@ -10,6 +10,8 @@
 #   slurm/modes/submit.sh                          # all the stages, each after the one before
 #   slurm/modes/submit.sh downsampling generate    # only these
 #   slurm/modes/submit.sh train                    # e.g. after adding SERIES or SIZES
+#   slurm/modes/submit.sh optimize 24              # the hyperparameter studies, for 24 hours
+#                                                  # (not by default; again to continue them)
 #
 # The stages:
 #   downsampling  the downsampling indices of the training set, shared by the
@@ -19,6 +21,12 @@
 #   pca           the principal components of the first PCA_SIZE waveforms
 #   train         per series and size, a job per mode (an array) training its
 #                 regressor, then one assembling the model and validating it
+#   optimize      per study of OPTIMIZE_STUDIES, a job per mode (an array) of
+#                 OPTIMIZE_CPUS cores, of OPTIMIZE_WORKERS workers running its
+#                 trials for the hours given (the walltime: the trials running
+#                 then resume from their checkpoints when it is submitted
+#                 again): an optuna study per mode, in
+#                 $DATA/optimize/<study>/l2_m2.journal and so on
 # Each starts once the stages it needs, submitted with it, have succeeded.
 # Everything is resumable and skips what is done: submitting a stage again
 # (after a failure, or with more sizes) redoes nothing that is there. Jobs
@@ -31,6 +39,8 @@
 # and, as the validations end,
 #   .venv/bin/python visualization/modes_scale.py summary $DATA/runs
 #   .venv/bin/python visualization/precession_learning_curve.py --directory $DATA/runs --threshold 1e-4
+# and of the studies
+#   .venv/bin/python visualization/modes_scale.py studies $DATA/optimize/*
 # What to copy back: see docs/usage_guides/cluster.md.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -44,7 +54,7 @@ source slurm/lib.sh
 check_environment
 resolve_data
 M=visualization/modes_scale.py
-STAGES=("$@")
+stages "$@"
 [[ ${#STAGES[@]} -gt 0 ]] || STAGES=(downsampling generate pca train)
 
 # the datasets: made, or checked against the configuration already there (the
@@ -101,8 +111,20 @@ for stage in "${STAGES[@]}"; do
                 echo "train $name, $n waveforms: $trained (array of 7 modes), then validate: $validated"
             done
         done ;;
+    optimize)
+        [[ -n "$HOURS" ]] || { echo "optimize: for how many hours? submit.sh optimize HOURS" >&2; exit 1; }
+        for study in "${OPTIMIZE_STUDIES[@]}"; do
+            name="${study%%|*}" options="${study#*|}"
+            extra=()
+            [[ " $options " == *" --kind krr "* ]] || extra=(${MLP_GRES:+--gres="$MLP_GRES"})
+            # shellcheck disable=SC2046,SC2206
+            id=$(submit modes "optimize_$name" "$OPTIMIZE_CPUS" "$OPTIMIZE_MEM" "$(walltime "$HOURS")" \
+                --array=0-6 "${extra[@]}" $(after "$PCA" "$GENERATED") \
+                -- optimize "$name" --workers "$OPTIMIZE_WORKERS" --mlp-steps "$MLP_STEPS" $options)
+            echo "optimize $name: $id (array of the 7 modes, $HOURS hours of $OPTIMIZE_WORKERS workers each)"
+        done ;;
     *)
-        echo "unknown stage $stage: downsampling, generate, pca or train" >&2; exit 1 ;;
+        echo "unknown stage $stage: downsampling, generate, pca, train or optimize" >&2; exit 1 ;;
     esac
 done
 

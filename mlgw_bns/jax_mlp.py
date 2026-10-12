@@ -5,8 +5,9 @@ regressors that are evaluated inside JAX functions (such as
 :class:`~mlgw_bns.precession_regression.PrecessionRegressor`): the trained
 network is a pure function of its inputs, :meth:`JaxMLP.jax_function`.
 
-Training is plain Adam (with optional decoupled weight decay) on minibatches,
-the learning rate decaying as a cosine, on a weighted mean squared error of
+Training is plain Adam (with optional decoupled weight decay and clipping of
+the gradients' norm) on minibatches, the learning rate decaying as a cosine
+(after an optional linear warmup), on a weighted mean squared error of
 the standardized outputs; a fraction of the training set is held out, and
 the parameters with the lowest loss on it are kept.
 
@@ -80,6 +81,11 @@ class MLPConfig:
     #: of the parameters and the arithmetic of the training (the fitted
     #: network is evaluated in double precision)
     dtype: str = "float32"
+    #: fraction of the steps over which the learning rate rises linearly
+    #: from zero to :attr:`learning_rate`, before its cosine decay
+    warmup: float = 0.0
+    #: the gradients are rescaled to at most this global norm (None: not)
+    clip_norm: Optional[float] = None
 
     def with_steps(self, steps: int, n_train: int) -> "MLPConfig":
         """This configuration, with as many epochs as make about ``steps``
@@ -118,6 +124,7 @@ class JaxMLP:
         checkpoint_seconds: float = 600.0,
         log_seconds: float = 60.0,
         sample_weight: Optional[np.ndarray] = None,
+        progress: Optional[Callable[[int, float], None]] = None,
     ) -> "JaxMLP":
         """Train on inputs ``x`` ``(N, d_in)`` and targets ``y`` ``(N,
         d_out)``. ``loss_weights`` ``(d_out,)`` weigh the squared errors of
@@ -130,7 +137,10 @@ class JaxMLP:
         ``SIGUSR1`` (then :class:`TrainingInterrupted` is raised); a
         checkpoint of the same training (configuration and data) is resumed
         from, one of another refused. Progress is logged every
-        ``log_seconds``.
+        ``log_seconds``, and given to ``progress(steps, best_loss)`` (if
+        given) whenever the held-out loss is computed: the optimizer steps
+        taken and the lowest held-out loss so far; an exception it raises
+        (to stop a hyperparameter trial early) ends the training.
         """
         import jax
         import jax.numpy as jnp
@@ -178,17 +188,27 @@ class JaxMLP:
         batch_size = min(config.batch_size, len(kept))
         n_batches = max(len(kept) // batch_size, 1)
         total_steps = config.epochs * n_batches
+        warmup_steps = int(round(config.warmup * total_steps))
         b1, b2, eps = 0.9, 0.999, 1e-8
 
         def step(carry, batch):
             p, m, v, t = carry
             grads = jax.grad(loss)(p, *batch)
+            if config.clip_norm is not None:
+                norm = jnp.sqrt(sum(jnp.sum(g * g) for g in jax.tree_util.tree_leaves(grads)))
+                factor = jnp.minimum(1.0, config.clip_norm / (norm + 1e-12)).astype(dtype)
+                grads = jax.tree_util.tree_map(lambda g: g * factor, grads)
             t = t + 1
             tf = t.astype(dtype)
-            progress = jnp.minimum(tf / total_steps, 1.0)
+            if warmup_steps:
+                fraction = jnp.clip((tf - warmup_steps) / max(total_steps - warmup_steps, 1), 0.0, 1.0)
+            else:
+                fraction = jnp.minimum(tf / total_steps, 1.0)
             rate = config.final_learning_rate + 0.5 * (config.learning_rate - config.final_learning_rate) * (
-                1.0 + jnp.cos(jnp.pi * progress)
+                1.0 + jnp.cos(jnp.pi * fraction)
             )
+            if warmup_steps:
+                rate = rate * jnp.minimum(tf / warmup_steps, 1.0)
             m = jax.tree_util.tree_map(lambda a, g: b1 * a + (1 - b1) * g, m, grads)
             v = jax.tree_util.tree_map(lambda a, g: b2 * a + (1 - b2) * g * g, v, grads)
             p = jax.tree_util.tree_map(
@@ -249,6 +269,8 @@ class JaxMLP:
                         state["stale"] = 0
                     else:
                         state["stale"] += 1
+                    if progress is not None:
+                        progress((i + 1) * n_batches, state["best_loss"])
                 state["finished"] = i + 1 == config.epochs or (
                     config.patience is not None and state["stale"] >= config.patience
                 )

@@ -9,6 +9,8 @@
 #   slurm/precession/submit.sh                    # all the stages, each after the one before
 #   slurm/precession/submit.sh generate exact     # only these
 #   slurm/precession/submit.sh train              # e.g. after adding SERIES or SIZES
+#   slurm/precession/submit.sh optimize 24        # the hyperparameter studies, for 24 hours
+#                                                 # (not by default; again to continue them)
 #
 # The stages:
 #   generate  GENERATE_TASKS jobs (an array) claiming shards of both datasets
@@ -17,6 +19,11 @@
 #   refine    per iteration, FOLDS jobs training the priors, then
 #             GENERATE_TASKS refitting the envelopes
 #   train     a job per series and size: train, then validate
+#   optimize  per study of OPTIMIZE_STUDIES, a job on a node of its own, of
+#             OPTIMIZE_WORKERS workers running its trials for the hours given
+#             (the walltime: the trials running then resume from their
+#             checkpoints when it is submitted again):
+#             $DATA/optimize/<study>/study.journal
 # Each starts once the stages it needs, submitted with it, have succeeded.
 # Stages already done (precession_scale.py pending) are not submitted, nor
 # regressors already validated, so running it again with more SERIES or
@@ -30,6 +37,8 @@
 #   .venv/bin/python visualization/precession_scale.py status $DATA/validation $DATA/train
 # and, as the train jobs end, plot the learning curve:
 #   .venv/bin/python visualization/precession_learning_curve.py --directory $DATA/runs
+# and the best trials of the studies
+#   .venv/bin/python visualization/precession_scale.py studies $DATA/optimize/*
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -42,7 +51,7 @@ source slurm/lib.sh
 check_environment
 resolve_data
 S=visualization/precession_scale.py
-STAGES=("$@")
+stages "$@"
 [[ ${#STAGES[@]} -gt 0 ]] || STAGES=(generate exact refine train)
 
 # the datasets: made, or checked against the configuration already there
@@ -118,8 +127,22 @@ for stage in "${STAGES[@]}"; do
             done
             [[ ${#skipped[@]} -eq 0 ]] || echo "train $name: done for ${skipped[*]}"
         done ;;
+    optimize)
+        [[ -n "$HOURS" ]] || { echo "optimize: for how many hours? submit.sh optimize HOURS" >&2; exit 1; }
+        source_="base"
+        (( REFINE_ITERATIONS > 0 )) && source_="refine$REFINE_ITERATIONS"
+        for study in "${OPTIMIZE_STUDIES[@]}"; do
+            name="${study%%|*}" options="${study#*|}"
+            extra=()
+            [[ " $options " == *" --kind krr "* ]] || extra=(${MLP_GRES:+--gres="$MLP_GRES"})
+            # shellcheck disable=SC2046,SC2206
+            id=$(submit precession "optimize_$name" "$OPTIMIZE_CPUS" "$OPTIMIZE_MEM" "$(walltime "$HOURS")" \
+                "${extra[@]}" $(after "$REFINED" "$EXACT") \
+                -- optimize "$name" --source "$source_" --workers "$OPTIMIZE_WORKERS" --mlp-steps "$MLP_STEPS" $options)
+            echo "optimize $name ($source_): $id ($HOURS hours of $OPTIMIZE_WORKERS workers)"
+        done ;;
     *)
-        echo "unknown stage $stage: generate, exact, refine or train" >&2; exit 1 ;;
+        echo "unknown stage $stage: generate, exact, refine, train or optimize" >&2; exit 1 ;;
     esac
 done
 

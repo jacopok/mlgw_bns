@@ -69,8 +69,9 @@ single_threaded() {
 # forwarded to it, and if it exits with 75 (stopped, its work saved) the job
 # is requeued, at most MAX_REQUEUES times, provided it was warned of the
 # walltime or ran for MIN_RUN_SECONDS (not to requeue in a loop something
-# stopping as it starts); TERM (scancel) stops it without requeueing. Exits
-# with its status.
+# stopping as it starts); TERM (scancel) stops it without requeueing. With
+# REQUEUE=0 (a job meant to end at its walltime) it is not requeued, and the
+# job succeeds. Exits with its status.
 run_step() {
     echo "=== [$(date -Is)] $(hostname) ${SLURM_JOB_ID:+job $SLURM_JOB_ID${SLURM_ARRAY_TASK_ID:+ task $SLURM_ARRAY_TASK_ID} (requeue ${SLURM_RESTART_COUNT:-0}) }cpus=${CPUS:-?}"
     echo "$*"
@@ -90,7 +91,10 @@ run_step() {
     echo "=== [$(date -Is)] exited with $rc"
     # 75: stopped before finishing (the walltime, or --hours), with its work saved
     if [[ $rc == 75 && $terminated == 0 ]]; then
-        if [[ $walltime == 0 ]] && (( SECONDS < ${MIN_RUN_SECONDS:-600} )); then
+        if [[ ${REQUEUE:-1} == 0 ]]; then
+            echo "=== stopped, its work saved: not requeued (REQUEUE=0)"
+            rc=0
+        elif [[ $walltime == 0 ]] && (( SECONDS < ${MIN_RUN_SECONDS:-600} )); then
             echo "=== stopped after ${SECONDS} s without the walltime signal: not requeued" >&2
         elif (( ${SLURM_RESTART_COUNT:-0} < ${MAX_REQUEUES:-20} )); then
             local job="${SLURM_ARRAY_JOB_ID:+${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
@@ -104,6 +108,22 @@ run_step() {
         echo "=== stopped by the walltime signal with status $rc: not requeued" >&2
     fi
     exit "$rc"
+}
+
+# walltime HOURS: a walltime of sbatch (minutes) of that many hours (a
+# decimal number)
+walltime() {
+    [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "not a number of hours: $1" >&2; exit 1; }
+    awk -v h="$1" 'BEGIN { printf "%d", h * 60 + 0.5 }'
+}
+
+# stages ARGUMENTS...: STAGES, the arguments of submit.sh but a number,
+# which is HOURS (of the optimize stage)
+stages() {
+    STAGES=() HOURS=""
+    for argument in "$@"; do
+        if [[ "$argument" =~ ^[0-9]+([.][0-9]+)?$ ]]; then HOURS="$argument"; else STAGES+=("$argument"); fi
+    done
 }
 
 # the batch of a perceptron's training on N samples: 128, growing with the

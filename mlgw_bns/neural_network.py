@@ -47,7 +47,7 @@ import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Optional, Union
+from typing import IO, TYPE_CHECKING, Callable, Optional, Union
 
 import joblib  # type: ignore
 import numpy as np
@@ -1183,8 +1183,10 @@ class JaxMLPNetwork(NeuralNetwork):
         sample_weight: Optional[np.ndarray] = None,
         output_units: Optional[np.ndarray] = None,
         checkpoint: Optional[str] = None,
+        progress: Optional[Callable[[int, float], None]] = None,
     ) -> None:
-        """Train (see :meth:`JaxMLP.fit <mlgw_bns.jax_mlp.JaxMLP.fit>`).
+        """Train (see :meth:`JaxMLP.fit <mlgw_bns.jax_mlp.JaxMLP.fit>`, which
+        also describes ``progress``).
 
         Parameters
         ----------
@@ -1206,7 +1208,7 @@ class JaxMLPNetwork(NeuralNetwork):
         if loss == "natural" and output_units is not None:
             weights = np.var(y_data, axis=0) * np.asarray(output_units, dtype=float) ** 2
         self.network.fit(
-            x_data, y_data, weights, checkpoint=checkpoint, sample_weight=sample_weight
+            x_data, y_data, weights, checkpoint=checkpoint, sample_weight=sample_weight, progress=progress
         )
 
     def predict(self, x_data: np.ndarray) -> np.ndarray:

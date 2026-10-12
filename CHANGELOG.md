@@ -177,6 +177,10 @@ loaded, and the waveforms are referenced differently in time and phase.
 
 ### Fixed
 
+- `visualization/modes_scale.py train` no longer passes the checkpoint of
+    `slurm/modes/job.sh` to kernel ridge, which refused it: every kernel ridge
+    training of the modes pipeline failed as it started.
+
 - `PrecessingModel.jax_predict(modes=...)` read the orbital phase at the
     reference frequency from the twisted multipoles only, so the odd-m branch
     could differ from the numpy path's, which reads it from all of the
@@ -274,6 +278,28 @@ loaded, and the waveforms are referenced differently in time and phase.
     timed and sized); `mlgw_bns.precession_dataset.ShardedDataset`,
     `visualization/precession_scale.py` and `slurm/precession/` for the
     regressed precession angles, up to 2^20 binaries.
+- **Hyperparameter studies on SLURM**: the `optimize` stage of both
+    pipelines (`optimize` commands of `visualization/modes_scale.py` and
+    `visualization/precession_scale.py`), the cluster's `optimize_n_hours.py`
+    for perceptrons as well as kernel ridge. Optuna studies kept in journal
+    files on the shared filesystem (`hyperparameter_optimization.open_study`),
+    a job per study (per mode: 16 cores each; the precession's: 32) for
+    the hours given to
+    `submit.sh optimize HOURS` (its walltime; not requeued, submitted again
+    to continue), of `--workers` processes each on its share of the cores
+    (`run_in_parallel`) reading the data once and running trials until
+    stopped, or a budget of trial-hours (`--hours`) is spent (`run_worker`);
+    the perceptrons pruned by successive halving on their held-out loss
+    (`JaxMLP.fit(progress=...)`), stopped trials retried from their
+    checkpoint, those of dead workers recovered by heartbeat; studies seeded
+    with the best trials of another (`enqueue_best`, e.g. on fewer samples);
+    studies read without writing or locking (`read_study`), so that their
+    journals can be copied and reported on while they run.
+    `PrecessionRegressor.train_on_chunks` is now `reduce_chunks` then
+    `fit_reduced`, for many fits to one reduced training set.
+- `MLPConfig.warmup` (a linear warmup of the learning rate) and
+    `MLPConfig.clip_norm` (clipping of the gradients' global norm), off by
+    default; `--mlp-warmup` and `--mlp-clip-norm`.
 - `mlgw_bns.neural_network.JaxMLPNetwork`, a perceptron trained with JAX
     (`mlgw_bns.jax_mlp.JaxMLP`: Adam with a cosine schedule, the best epoch
     on a held-out tenth kept, single precision, evaluated in double) as the
