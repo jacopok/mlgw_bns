@@ -41,7 +41,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Iterator, Optional, Sequence
+from typing import Callable, Iterator, Mapping, Optional, Sequence, Union
 
 import numpy as np
 
@@ -49,7 +49,7 @@ from .data_management import DownsamplingIndices, ParameterRanges, PrincipalComp
 from .dataset_generation import ParameterSet
 from .higher_order_modes import Mode
 from .model import Model
-from .neural_network import Hyperparameters, KernelRidgeNetwork
+from .neural_network import Hyperparameters, JaxMLPNetwork, KernelRidgeNetwork
 from .principal_component_analysis import PrincipalComponentTraining
 from .sharding import ShardedStore, save_arrays, write_atomically
 
@@ -322,11 +322,12 @@ class ShardedModesDataset(ShardedStore):
         self,
         n: int,
         filename: str,
-        nn_kind: type = KernelRidgeNetwork,
+        nn_kind: Union[type, Mapping[Mode, type]] = KernelRidgeNetwork,
         hyperparameters: Optional[Callable[[Mode, int], Hyperparameters]] = None,
         pca_size: Optional[int] = None,
         modes: Optional[Sequence] = None,
         checkpoint: Optional[str] = None,
+        sizes: Optional[Mapping[Mode, int]] = None,
     ) -> Optional[Model]:
         """Train a :class:`~mlgw_bns.model.Model` on the first ``n`` valid
         waveforms and save it as ``filename`` (without its training data,
@@ -339,8 +340,9 @@ class ShardedModesDataset(ShardedStore):
         filename : str
             Base filename of the model (its files are ``{filename}_l2_m2_nn.pkl``
             and so on).
-        nn_kind : type
-            Of the regressors.
+        nn_kind : type or mapping
+            Of the regressors, or of the regressor of each mode (kernel
+            ridge for those not in it).
         hyperparameters : callable, optional
             ``(mode, n) -> Hyperparameters``; by default those of
             :meth:`ModeModel.default_hyperparameters
@@ -356,6 +358,9 @@ class ShardedModesDataset(ShardedStore):
             Base filename of the checkpoints of the training of each mode
             (``{checkpoint}_l2_m2.joblib``), for the regressors that keep
             one (:class:`~mlgw_bns.neural_network.JaxMLPNetwork`).
+        sizes : mapping, optional
+            Train the regressors of these modes on the first this many
+            waveforms instead of ``n``.
 
         Returns
         -------
@@ -365,7 +370,10 @@ class ShardedModesDataset(ShardedStore):
         for path in (filename, checkpoint):
             if path is not None:
                 os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        model = self.model(filename, nn_kind=nn_kind)
+        kinds = nn_kind if isinstance(nn_kind, Mapping) else {}
+        model = self.model(filename, nn_kind=KernelRidgeNetwork if kinds else nn_kind)
+        for mode, kind in kinds.items():
+            model.mode_models[mode].nn_kind = kind
         pca = self.principal_components(pca_size or n)
         for mode in self.modes:
             model.mode_models[mode].pca_data = pca[mode]
@@ -375,14 +383,19 @@ class ShardedModesDataset(ShardedStore):
                 logging.info("%s: the regressor of %s is there", filename, mode)
                 continue
             start = time.time()
-            parameters, reduced, weights = self.reduced(model, mode, n)
+            size = n if sizes is None else sizes.get(mode, n)
+            parameters, reduced, weights = self.reduced(model, mode, size)
             hyper = (
-                hyperparameters(mode, n) if hyperparameters is not None
-                else mode_model.default_hyperparameters(n)
+                hyperparameters(mode, size) if hyperparameters is not None
+                else mode_model.default_hyperparameters(size)
             )
             logging.info("%s: training %s on %i waveforms (%.0f s to read them)",
-                         filename, mode, n, time.time() - start)
-            state = None if checkpoint is None else f"{checkpoint}_{mode_name(mode)}.joblib"
+                         filename, mode, size, time.time() - start)
+            # (the other kinds are not checkpointed)
+            state = (
+                None if checkpoint is None or mode_model.nn_kind is not JaxMLPNetwork
+                else f"{checkpoint}_{mode_name(mode)}.joblib"
+            )
             nn = mode_model.fit_nn(hyper, parameters, reduced, weights, checkpoint=state)
             write_atomically(mode_model.filename_nn, lambda file: nn.save(file))  # type: ignore[arg-type]
             if state is not None and os.path.exists(state):

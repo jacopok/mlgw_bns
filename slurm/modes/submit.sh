@@ -12,6 +12,7 @@
 #   slurm/modes/submit.sh train                    # e.g. after adding SERIES or SIZES
 #   slurm/modes/submit.sh optimize 24              # the hyperparameter studies, for 24 hours
 #                                                  # (not by default; again to continue them)
+#   slurm/modes/submit.sh best                     # a model of the best trials of the studies so far
 #
 # The stages:
 #   downsampling  the downsampling indices of the training set, shared by the
@@ -27,6 +28,12 @@
 #                 then resume from their checkpoints when it is submitted
 #                 again): an optuna study per mode, in
 #                 $DATA/optimize/<study>/l2_m2.journal and so on
+#   best          per perceptron study of OPTIMIZE_STUDIES, a job per mode (an
+#                 array) training the perceptron of its best trial so far (the
+#                 trials named in the run, $DATA/runs/<study>_best<trials>_<N>),
+#                 or kernel ridge on the first BEST_KRR_N waveforms where that
+#                 does as well on the study's objective; then one assembling
+#                 the model and validating it
 # Each starts once the stages it needs, submitted with it, have succeeded.
 # Everything is resumable and skips what is done: submitting a stage again
 # (after a failure, or with more sizes) redoes nothing that is there. Jobs
@@ -123,8 +130,36 @@ for stage in "${STAGES[@]}"; do
                 -- optimize "$name" --workers "$OPTIMIZE_WORKERS" --mlp-steps "$MLP_STEPS" $options)
             echo "optimize $name: $id (array of the 7 modes, $HOURS hours of $OPTIMIZE_WORKERS workers each)"
         done ;;
+    best)
+        for study in "${OPTIMIZE_STUDIES[@]}"; do
+            name="${study%%|*}" options="${study#*|}"
+            # shellcheck disable=SC2086
+            n=$(option --n $options) steps=$(option --mlp-steps $options) kind=$(option --kind $options)
+            # shellcheck disable=SC2086
+            validate_n=$(option --validate-n $options)
+            [[ "${kind:-mlp}" == mlp ]] || continue
+            # the best trial of each mode now (a later best is another run)
+            best=$(OMP_NUM_THREADS=1 JAX_PLATFORMS=cpu "$PYTHON" "$M" best "$DATA/optimize/$name" 2>/dev/null)
+            [[ $(grep -c . <<< "$best") == 7 ]] || { echo "best $name: not every mode has a completed trial" >&2; exit 1; }
+            # shellcheck disable=SC2207
+            trials=($(awk '{print $1 "=" $2}' <<< "$best"))
+            run="${name}_best$(awk '{print $2}' <<< "$best" | paste -sd-)"
+            arguments=(--from-study "$DATA/optimize/$name" --trial "${trials[@]}" --mlp-steps "${steps:-$MLP_STEPS}"
+                       --krr-reference "$BEST_KRR_N" --reference-set "$DATA/validation"
+                       ${validate_n:+--reference-n "$validate_n"})
+            # the perceptron's data, and kernel ridge's matrix and eigenvectors
+            mem="$((8 + 4 * n / 1048576 + 21 * BEST_KRR_N / 1000 * BEST_KRR_N / 1000 * 8 / 10000))G"
+            extra=(${MLP_GRES:+--gres="$MLP_GRES"})
+            # shellcheck disable=SC2046
+            trained=$(submit modes "${run}_$n" "${MLP_CPUS:-$TRAIN_CPUS}" "$mem" "$TRAIN_TIME" --array=0-6 "${extra[@]}" \
+                $(after "$PCA" "$GENERATED") -- train "$run" "$n" "${arguments[@]}")
+            # shellcheck disable=SC2046
+            validated=$(submit modes "validate_${run}_$n" "$VALIDATE_CPUS" "$VALIDATE_MEM" "$VALIDATE_TIME" \
+                $(after "$trained") -- validate "$run" "$n" "${arguments[@]}")
+            echo "best of $name (${trials[*]}): $trained (array of 7 modes), then validate: $validated"
+        done ;;
     *)
-        echo "unknown stage $stage: downsampling, generate, pca, train or optimize" >&2; exit 1 ;;
+        echo "unknown stage $stage: downsampling, generate, pca, train, optimize or best" >&2; exit 1 ;;
     esac
 done
 

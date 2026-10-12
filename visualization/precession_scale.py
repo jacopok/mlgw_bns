@@ -20,6 +20,10 @@ or here::
     # train on the first N binaries (refined twice), resumably, and validate
     python $S train data/train --n 65536 --source refine2 --out runs/mlp_65536.joblib \
         --mlp --mlp-steps 200000 --checkpoint runs/mlp_65536.checkpoint --validate data/validation
+    # the perceptron of the best trial of a hyperparameter study (its trial number: best)
+    python $S best studies/mlp_n1048576
+    python $S train data/train --n 1048576 --source refine2 --out runs/best31_1048576.joblib \
+        --from-study studies/mlp_n1048576 --trial 31 --mlp-steps 200000 --validate data/validation
 
 Everything is resumable: ``generate`` and ``refine-fit`` skip the shards
 already made, ``train`` a regressor already saved, and the perceptron resumes
@@ -59,6 +63,7 @@ from precession_regression_study import (  # noqa: E402
     mlp_trial,
     open_optimization,
     print_unexplained,
+    report_best,
     report_studies,
     spent,
     validate,
@@ -143,10 +148,21 @@ def train(args) -> int:
         print(f"{args.out} is there")
     else:
         kwargs = dict(n_components=tuple(args.components), kernel_gamma=args.gamma)
-        if args.mlp:
+        if args.from_study:
+            from mlgw_bns.hyperparameter_optimization import study_mlp_config
+
+            if not args.mlp_steps:
+                raise SystemExit("--from-study: give the --mlp-steps of the study")
+            config, trial = study_mlp_config(
+                os.path.join(args.from_study, "study.journal"), args.mlp_steps, args.n, args.trial
+            )
+            logging.info("trial %i of %s (%.4g)", trial.number, args.from_study, trial.value)
+            args.mlp = True
+        elif args.mlp:
             config = mlp_config(args)
             if args.mlp_steps:
                 config = config.with_steps(args.mlp_steps, args.n)
+        if args.mlp:
             kwargs.update(mlp=config, mlp_loss=args.mlp_loss, mlp_checkpoint=args.checkpoint)
             logging.info("perceptron: %s", config)
         elif args.n > args.max_kernel_ridge:
@@ -316,6 +332,9 @@ def main() -> int:
                          help="refuse kernel ridge on more binaries (memory)")
     add_mlp_arguments(command)
     command.add_argument("--mlp-steps", type=int, help="train for about this many steps (sets the epochs)")
+    command.add_argument("--from-study", help="the perceptron of a trial of this study (directory), "
+                         "instead of the --mlp options")
+    command.add_argument("--trial", type=int, help="its number (default: the best one)")
     command.add_argument("--checkpoint", help="where the perceptron keeps its state, to resume from")
     command.add_argument("--validate", help="then validate on this dataset")
     command.add_argument("--validate-n", type=int, help="its first this many binaries (default: all)")
@@ -335,6 +354,10 @@ def main() -> int:
     command.add_argument("study", nargs="+", help="directories")
     command.add_argument("--top", type=int, default=10)
     command.set_defaults(run=report_studies)
+
+    command = commands.add_parser("best", help="the best trial of each study in a directory: journal, number, value")
+    command.add_argument("study", help="directory")
+    command.set_defaults(run=report_best)
 
     command = commands.add_parser("exact", help="cache the waveforms of a validation set with integrated angles")
     command.add_argument("dataset")

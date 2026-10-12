@@ -50,6 +50,7 @@ from mlgw_bns.hyperparameter_optimization import (  # noqa: E402
     recover_stale_trials,
     run_in_parallel,
     run_worker,
+    study_mlp_config,
     trial_hours,
 )
 from mlgw_bns.sharding import EXIT_REQUEUE, Stopped  # noqa: E402
@@ -190,6 +191,23 @@ def test_enqueue_best_and_the_search_space(tmp_path):
         stop = StopRequested()
         stop.signal = 15
         stop.check()
+
+
+def test_the_perceptron_of_a_trial_is_rebuilt_exactly(tmp_path):
+    journal = str(tmp_path / "study.journal")
+    study = open_study(journal, "toy")
+    configs = {}
+
+    def objective(trial):
+        configs[trial.number] = mlp_config_from_trial(trial, 1000, 4096)
+        return float(trial.number % 3)
+
+    study.optimize(objective, n_trials=4)
+    config, trial = study_mlp_config(journal, 1000, 4096)
+    assert trial.number == study.best_trial.number
+    # all of it, the seed and the learning rates to all their digits (not as command_line rounds them)
+    assert config == configs[trial.number]
+    assert study_mlp_config(journal, 1000, 4096, 2)[0] == configs[2]
 
 
 def test_parallel_workers_share_the_cpus_and_are_stopped_together(tmp_path):

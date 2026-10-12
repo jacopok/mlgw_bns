@@ -362,6 +362,16 @@ def report_studies(args) -> None:
             print(study_report(read_study(journal), top=args.top))
 
 
+def report_best(args) -> None:
+    """The best trial of each study (journal) in a directory, a line
+    ``<journal> <trial> <value>`` each, for scripts (``submit.sh best``)."""
+    from mlgw_bns.hyperparameter_optimization import read_study
+
+    for journal in sorted(glob.glob(os.path.join(args.study, "*.journal"))):
+        trial = read_study(journal).best_trial
+        print(os.path.basename(journal).removesuffix(".journal"), trial.number, f"{trial.value:.6g}")
+
+
 def mlp_config(args) -> MLPConfig:
     return MLPConfig(
         hidden=tuple(args.mlp_hidden), activation=args.mlp_activation,

@@ -245,6 +245,27 @@ Gaussian process instead of TPE: better on few trials, but it learns only
 from the completed ones (not the pruned), so it is meant with
 `--pruner none`, and it needs torch (`uv sync --extra torch`).
 
+The trials keep no regressor (their checkpoints are deleted as they end).
+The `best` stage trains, at any point of the studies, the regressor of the
+best trial of each one so far, and validates it as the `train` stage does:
+
+```bash
+slurm/precession/submit.sh best   # runs/<study>_best<trial>_<N>.joblib, and its validate_*.npz
+slurm/modes/submit.sh best        # runs/<study>_best<trial of each mode>_<N>/model, and its validate_*.npz
+```
+
+The perceptron is built from the trial's parameters
+({func}`~mlgw_bns.hyperparameter_optimization.study_mlp_config`, with
+`train --from-study`), not from its `command_line`, which rounds them:
+trained again, it is the trial's own, seed included (on the modes, the
+same objective to all the digits). For the modes, each mode's regressor is
+the perceptron only where it does better than kernel ridge on the first
+`BEST_KRR_N` waveforms (cluster.env), which is fitted and scored on the
+study's own objective first; the choice of each mode, with both values,
+is in `runs/<run>/model_l2_m2.choice.json` and so on. The trial numbers
+are in the run's name, so a later `best`, once the studies have found
+better trials, makes another run.
+
 ## Copying the results back
 
 What is worth copying is small; the training sets are not, and stay on the

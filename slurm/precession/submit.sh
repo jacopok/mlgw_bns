@@ -11,6 +11,7 @@
 #   slurm/precession/submit.sh train              # e.g. after adding SERIES or SIZES
 #   slurm/precession/submit.sh optimize 24        # the hyperparameter studies, for 24 hours
 #                                                 # (not by default; again to continue them)
+#   slurm/precession/submit.sh best               # the regressor of the best trial of the studies so far
 #
 # The stages:
 #   generate  GENERATE_TASKS jobs (an array) claiming shards of both datasets
@@ -24,6 +25,9 @@
 #             (the walltime: the trials running then resume from their
 #             checkpoints when it is submitted again):
 #             $DATA/optimize/<study>/study.journal
+#   best      per perceptron study of OPTIMIZE_STUDIES, a job training the
+#             perceptron of its best trial so far, then validating it:
+#             $DATA/runs/<study>_best<trial>_<N>.joblib
 # Each starts once the stages it needs, submitted with it, have succeeded.
 # Stages already done (precession_scale.py pending) are not submitted, nor
 # regressors already validated, so running it again with more SERIES or
@@ -141,8 +145,29 @@ for stage in "${STAGES[@]}"; do
                 -- optimize "$name" --source "$source_" --workers "$OPTIMIZE_WORKERS" --mlp-steps "$MLP_STEPS" $options)
             echo "optimize $name ($source_): $id ($HOURS hours of $OPTIMIZE_WORKERS workers)"
         done ;;
+    best)
+        source_="base"
+        (( REFINE_ITERATIONS > 0 )) && source_="refine$REFINE_ITERATIONS"
+        for study in "${OPTIMIZE_STUDIES[@]}"; do
+            name="${study%%|*}" options="${study#*|}"
+            # shellcheck disable=SC2086
+            n=$(option --n $options) steps=$(option --mlp-steps $options) kind=$(option --kind $options)
+            [[ "${kind:-mlp}" == mlp ]] || continue
+            # the best trial now (a later best is another run)
+            read -r _ trial value < <(OMP_NUM_THREADS=1 JAX_PLATFORMS=cpu "$PYTHON" "$S" best \
+                "$DATA/optimize/$name" 2>/dev/null) || true
+            [[ -n "${trial:-}" ]] || { echo "best $name: no completed trial" >&2; exit 1; }
+            run="${name}_best$trial"
+            [[ -f "$DATA/runs/validate_${run}_$n.npz" ]] && { echo "best $name: $run done"; continue; }
+            extra=(${MLP_GRES:+--gres="$MLP_GRES"})
+            # shellcheck disable=SC2046
+            id=$(submit precession "${run}_$n" "$TRAIN_CPUS" "$((8 + 16 * n / 1048576))G" "$TRAIN_TIME" "${extra[@]}" \
+                $(after "$REFINED" "$EXACT") -- train "$run" "$n" --source "$source_" \
+                --from-study "$DATA/optimize/$name" --trial "$trial" --mlp-steps "${steps:-$MLP_STEPS}")
+            echo "best of $name: trial $trial ($value), $n binaries ($source_): $id"
+        done ;;
     *)
-        echo "unknown stage $stage: generate, exact, refine, train or optimize" >&2; exit 1 ;;
+        echo "unknown stage $stage: generate, exact, refine, train, optimize or best" >&2; exit 1 ;;
     esac
 done
 

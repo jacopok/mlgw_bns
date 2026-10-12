@@ -437,6 +437,26 @@ def mlp_config_from_trial(
     return config.with_steps(steps, n_train)
 
 
+def study_mlp_config(
+    filename: str, steps: int, n_train: int, number: Optional[int] = None
+) -> tuple:
+    """The :class:`~mlgw_bns.jax_mlp.MLPConfig` of trial ``number`` (by
+    default the best one) of the perceptron study in the journal
+    ``filename``, as :func:`mlp_config_from_trial` made it (its seed too),
+    for ``steps`` steps on ``n_train`` samples; and the trial.
+
+    From the trial's parameters, not its ``command_line``, which rounds
+    them: a perceptron trained again with these is the trial's own."""
+    study = read_study(filename)
+    trial = study.best_trial if number is None else study.trials[number]
+    if trial.state != optuna.trial.TrialState.COMPLETE:
+        raise ValueError(f"{filename}: trial {trial.number} is {trial.state.name.lower()}")
+    config = mlp_config_from_trial(optuna.trial.FixedTrial(trial.params), steps, n_train)
+    if trial.user_attrs.get("seed", config.seed) != config.seed:
+        raise ValueError(f"{filename}: trial {trial.number} had seed {trial.user_attrs['seed']}, not {config.seed}")
+    return config, trial
+
+
 def _params_digest(trial: optuna.Trial) -> bytes:
     return hashlib.blake2b(repr(sorted(trial.params.items())).encode(), digest_size=8).digest()
 

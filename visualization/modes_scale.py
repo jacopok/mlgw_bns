@@ -21,6 +21,11 @@ waveforms (:mod:`mlgw_bns.modes_dataset`), made and trained on in SLURM jobs
     python $M train data/train --n 262144 --pca-size 32768 --out runs/mlp_262144/model \
         --mlp --mlp-steps 200000 --checkpoint runs/mlp_262144/checkpoint
     python $M validate data/validation --model runs/krr_65536/model --out runs/validate_krr_65536.npz
+    # each mode's perceptron of the best trial of its hyperparameter study, where it
+    # does better than kernel ridge on the first 16384 (on the study's objective)
+    python $M train data/train --n 262144 --pca-size 32768 --out runs/best/model \
+        --from-study studies/mlp_n262144 --mlp-steps 200000 --checkpoint runs/best/checkpoint \
+        --krr-reference 16384 --reference-set data/validation
     # how big and fast the models are (on this machine), and a table of all of it
     python $M timing runs/*/model
     python $M summary runs
@@ -54,10 +59,11 @@ import optuna
 
 from mlgw_bns.data_management import Residuals
 from mlgw_bns.higher_order_modes import Mode
+from mlgw_bns.hyperparameter_optimization import mlp_command_line, study_mlp_config
 from mlgw_bns.jax_mlp import TrainingInterrupted
 from mlgw_bns.model import Model
 from mlgw_bns.model_validation import stored_waveform_mismatches
-from mlgw_bns.mode_model import ParametersWithExtrinsic
+from mlgw_bns.mode_model import NN_KINDS, ParametersWithExtrinsic
 from mlgw_bns.modes_dataset import (
     HOM7_MODES,
     ModesDatasetConfig,
@@ -67,7 +73,7 @@ from mlgw_bns.modes_dataset import (
     stored_size,
 )
 from mlgw_bns.neural_network import Hyperparameters, JaxMLPNetwork, KernelRidgeNetwork
-from mlgw_bns.sharding import EXIT_REQUEUE, Stopped, save_arrays, save_json, stop_on_signals
+from mlgw_bns.sharding import EXIT_REQUEUE, Stopped, save_arrays, save_json, stop_on_signals, write_atomically
 
 sys.path.insert(0, os.path.dirname(__file__))
 from precession_regression_study import (  # noqa: E402
@@ -77,6 +83,7 @@ from precession_regression_study import (  # noqa: E402
     mlp_config,
     mlp_trial,
     open_optimization,
+    report_best,
     report_studies,
     spent,
 )
@@ -91,6 +98,12 @@ TIMING_FREQUENCIES = np.geomspace(5.0, 2048.0, 1024)
 
 def seconds(hours):
     return None if hours is None else 3600.0 * hours
+
+
+def parse_trial(text: str) -> tuple:
+    name, _, number = text.partition("=")
+    parse_mode(name)
+    return name, int(number)
 
 
 def parse_mode(text: str) -> tuple:
@@ -163,7 +176,26 @@ def pca(args) -> None:
 def train(args) -> int:
     dataset = ShardedModesDataset(args.dataset)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    if args.mlp:
+    sizes = None
+    if args.from_study:
+        if not args.mlp_steps:
+            raise SystemExit("--from-study: give the --mlp-steps of the study")
+        modes = [Mode(*m) for m in args.modes] if args.modes else dataset.modes
+        choices = {mode: study_choice(args, dataset, mode) for mode in modes}
+        # those of the other modes, made by other jobs, for the model once all are there
+        for mode in dataset.modes:
+            if mode not in choices and os.path.exists(choice_name(args.out, mode)):
+                with open(choice_name(args.out, mode)) as file:
+                    choices[mode] = json.load(file)
+        nn_kind = {mode: NN_KINDS[choice["kind"]] for mode, choice in choices.items()}
+        sizes = {mode: choice["krr"]["n"] for mode, choice in choices.items() if nn_kind[mode] is KernelRidgeNetwork}
+
+        def hyperparameters(mode, n):
+            if nn_kind[mode] is KernelRidgeNetwork:
+                return Hyperparameters.default_kernel_ridge(n, mode=mode)
+            config, _ = study_mlp_config(study_journal(args, mode), args.mlp_steps, n, choices[mode]["trial"])
+            return Hyperparameters.default_jax_mlp(n, config, args.mlp_loss)
+    elif args.mlp:
         config = mlp_config(args)
         if args.mlp_steps:
             config = config.with_steps(args.mlp_steps, args.n)
@@ -184,9 +216,7 @@ def train(args) -> int:
     try:
         model = dataset.train(
             args.n, args.out, nn_kind=nn_kind, hyperparameters=hyperparameters,
-            pca_size=args.pca_size, modes=args.modes,
-            # kernel ridge is not checkpointed (job.sh asks for a checkpoint whatever the regressor)
-            checkpoint=args.checkpoint if args.mlp else None,
+            pca_size=args.pca_size, modes=args.modes, sizes=sizes, checkpoint=args.checkpoint,
         )
     except (TrainingInterrupted, Stopped) as error:
         logging.info("stopped: %s", error)
@@ -196,7 +226,8 @@ def train(args) -> int:
         return 0
     save_json(args.out + ".json", {
         "dataset": os.path.abspath(args.dataset), "n": args.n, "pca_size": args.pca_size or args.n,
-        "kind": nn_kind.__name__, "seconds": time.time() - start,
+        "kind": {mode_name(m): k.__name__ for m, k in nn_kind.items()} if sizes is not None else nn_kind.__name__,
+        "seconds": time.time() - start,
         "arguments": {k: v for k, v in vars(args).items() if k != "run"},
     })
     print(f"{args.out}: trained on {args.n} waveforms")
@@ -206,6 +237,52 @@ def train(args) -> int:
             dataset=args.validate, model=args.out, n=args.validate_n, out=out, jobs=args.jobs,
         ))
     return 0
+
+
+def choice_name(base: str, mode: Mode) -> str:
+    return f"{base}_{mode_name(mode)}.choice.json"
+
+
+def study_journal(args, mode: Mode) -> str:
+    return os.path.join(args.from_study, f"{mode_name(mode)}.journal")
+
+
+def study_choice(args, dataset: ShardedModesDataset, mode: Mode) -> dict:
+    """The regressor of ``mode`` in a ``train --from-study``: the perceptron
+    of the best trial of the mode's study (``--trial`` another), or, with
+    ``--krr-reference K``, kernel ridge on the first K waveforms if it does
+    as well on the study's objective (:func:`regression_error` on
+    ``--reference-set``); kernel ridge chosen is saved as the mode's
+    regressor. Made once, then read from ``{out}_l2_m2.choice.json``: the
+    study may have a new best trial when a training is resumed."""
+    path = choice_name(args.out, mode)
+    if os.path.exists(path):
+        with open(path) as file:
+            return json.load(file)
+    name = mode_name(mode)
+    config, trial = study_mlp_config(study_journal(args, mode), args.mlp_steps, args.n, args.trial.get(name))
+    choice = {
+        "study": os.path.abspath(study_journal(args, mode)), "trial": trial.number, "value": trial.value,
+        "command_line": mlp_command_line(config), "kind": JaxMLPNetwork.__name__,
+    }
+    if args.krr_reference:
+        if not args.reference_set:
+            raise SystemExit("--krr-reference: give the --reference-set (the study's validation set)")
+        model = dataset.model(args.out, nn_kind=KernelRidgeNetwork)
+        mode_model = model.mode_models[mode]
+        mode_model.pca_data = dataset.principal_components(args.pca_size or args.n)[mode]
+        start = time.time()
+        parameters, reduced, weights = dataset.reduced(model, mode, args.krr_reference)
+        nn = mode_model.fit_nn(mode_model.default_hyperparameters(args.krr_reference), parameters, reduced, weights)
+        targets = validation_targets(model, mode, ShardedModesDataset(args.reference_set), args.reference_n)
+        choice["krr"] = {"n": args.krr_reference, "value": regression_error(mode_model, nn, *targets)}
+        logging.info("%s: kernel ridge on %i, %.3f; trial %i of the study, %.3f (%.0f s)", name,
+                     args.krr_reference, choice["krr"]["value"], trial.number, trial.value, time.time() - start)
+        if choice["krr"]["value"] <= trial.value:
+            choice["kind"] = KernelRidgeNetwork.__name__
+            write_atomically(mode_model.filename_nn, lambda file: nn.save(file))  # type: ignore[arg-type]
+    save_json(path, choice)
+    return choice
 
 
 def default_validation_name(base: str) -> str:
@@ -260,6 +337,31 @@ def reconstructed(mode_model, reduced: np.ndarray) -> Residuals:
     )
 
 
+def validation_targets(model: Model, mode: Mode, validation: ShardedModesDataset, n: Optional[int]) -> tuple:
+    """The parameters of the first ``n`` waveforms of ``validation``, the
+    residuals of ``mode`` of their principal components in the ``model``'s
+    basis, and their power weights: what :func:`regression_error` compares
+    with."""
+    mode_model = model.mode_models[mode]
+    parameters, reduced, weights = validation.reduced(model, mode, n)
+    return parameters, reconstructed(mode_model, reduced), weights
+
+
+def regression_error(mode_model, nn, parameters: np.ndarray, truth: Residuals, weights) -> float:
+    """The objective of the hyperparameter studies: the log10 of the mean
+    square difference (:meth:`HyperparameterOptimization.residuals_difference
+    <mlgw_bns.hyperparameter_optimization.HyperparameterOptimization.residuals_difference>`,
+    power-weighted for the modes trained so) of the residuals ``truth``
+    (:func:`validation_targets`) from those of the principal components
+    predicted by ``nn``."""
+    from mlgw_bns.hyperparameter_optimization import HyperparameterOptimization
+
+    predicted = nn.predict(parameters) / mode_model.pca_data.eigenvalues ** nn.hyper.pc_exponent
+    return float(np.log10(HyperparameterOptimization.residuals_difference(
+        truth, reconstructed(mode_model, predicted), weights
+    )))
+
+
 def optimize(args) -> int:
     """A worker of the hyperparameter study of the regressor of one mode
     (``<study>/l2_m2.journal``): the error of a trial is the mean square
@@ -269,11 +371,7 @@ def optimize(args) -> int:
     validation set from its predicted principal components and from its
     true ones: the error of the regression alone, without the truncation of
     the principal components, which is the same in every trial."""
-    from mlgw_bns.hyperparameter_optimization import (
-        HyperparameterOptimization,
-        StopRequested,
-        run_worker,
-    )
+    from mlgw_bns.hyperparameter_optimization import StopRequested, run_worker
 
     if (status := in_parallel(args)) is not None:
         return status
@@ -296,10 +394,9 @@ def optimize(args) -> int:
     mode_model.pca_data = dataset.principal_components(args.pca_size or args.n)[mode]
     start = time.time()
     parameters, reduced, weights = dataset.reduced(model, mode, args.n)
-    validation_parameters, validation_reduced, validation_weights = validation.reduced(model, mode, args.validate_n)
-    truth = reconstructed(mode_model, validation_reduced)
+    targets = validation_targets(model, mode, validation, args.validate_n)
     logging.info("%s: %i training and %i validation waveforms read in %.0f s", name, len(parameters),
-                 len(validation_parameters), time.time() - start)
+                 len(targets[0]), time.time() - start)
     checkpoints = os.path.join(args.study, "checkpoints", name)
     os.makedirs(checkpoints, exist_ok=True)
 
@@ -318,13 +415,9 @@ def optimize(args) -> int:
             raise
         if checkpoint is not None and os.path.exists(checkpoint):
             os.remove(checkpoint)
-        predicted = nn.predict(validation_parameters) / mode_model.pca_data.eigenvalues ** hyper.pc_exponent
-        error = HyperparameterOptimization.residuals_difference(
-            truth, reconstructed(mode_model, predicted), validation_weights
-        )
         if args.kind == "mlp":
             trial.set_user_attr("weights", int(sum(w.size + b.size for w, b in nn.network.weights)))
-        return float(np.log10(error))
+        return regression_error(mode_model, nn, *targets)
 
     return 0 if run_worker(study, objective, args.hours, stop, stale_minutes=args.stale_minutes) else EXIT_REQUEUE
 
@@ -522,6 +615,15 @@ def main() -> int:
     add_mlp_arguments(command)
     command.add_argument("--mlp-steps", type=int, help="train for about this many steps (sets the epochs)")
     command.add_argument("--checkpoint", help="base filename of the perceptrons' checkpoints")
+    command.add_argument("--from-study", help="each mode's perceptron of the best trial of its study in this "
+                         "directory (l2_m2.journal and so on), instead of the --mlp options")
+    command.add_argument("--trial", nargs="+", default=[], metavar="MODE=NUMBER", type=parse_trial,
+                         help="other trials than the best, e.g. l2_m1=12")
+    command.add_argument("--krr-reference", type=int, metavar="K",
+                         help="with --from-study: kernel ridge on the first K waveforms for the modes "
+                              "where it does as well as the perceptron, on the study's objective")
+    command.add_argument("--reference-set", help="the validation set of the study, to compare on")
+    command.add_argument("--reference-n", type=int, help="its first this many (default: all, as the study)")
     command.add_argument("--validate", help="then validate on this dataset")
     command.add_argument("--validate-n", type=int, help="its first this many waveforms (default: all)")
     command.add_argument("--validate-out", help="default: validate_<run>.npz next to the run's directory")
@@ -541,6 +643,10 @@ def main() -> int:
     command.add_argument("study", nargs="+", help="directories")
     command.add_argument("--top", type=int, default=10)
     command.set_defaults(run=report_studies)
+
+    command = commands.add_parser("best", help="the best trial of each study in a directory: mode, number, value")
+    command.add_argument("study", help="directory")
+    command.set_defaults(run=report_best)
 
     command = commands.add_parser("validate", help="mismatches of a model on a validation set")
     command.add_argument("dataset")
@@ -567,6 +673,8 @@ def main() -> int:
     command.set_defaults(run=summary)
 
     args = parser.parse_args()
+    if getattr(args, "command", None) == "train":
+        args.trial = dict(args.trial)
     if getattr(args, "command", None) == "validate" and args.out is None:
         args.out = default_validation_name(args.model)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

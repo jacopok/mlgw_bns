@@ -126,6 +126,16 @@ stages() {
     done
 }
 
+# option NAME OPTIONS...: the value of the option NAME among OPTIONS (as
+# "--n 262144"), empty if it is not there
+option() {
+    local name="$1"; shift
+    while [[ $# -gt 0 ]]; do
+        [[ "$1" == "$name" ]] && { echo "${2:-}"; return 0; }
+        shift
+    done
+}
+
 # the batch of a perceptron's training on N samples: 128, growing with the
 # training set to 1024
 mlp_batch() {
