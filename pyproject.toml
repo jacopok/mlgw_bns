@@ -88,6 +88,12 @@ build-backend = "hatchling.build"
  
 [tool.hatch.build.targets.wheel]
 packages = ["mlgw_bns"]
+# the regressors of the pretrained models are downloaded on first use
+# (mlgw_bns/model_files.py), not shipped
+exclude = ["mlgw_bns/data/*_nn.pkl"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["mlgw_bns/data/*_nn.pkl"]
  
 [tool.isort]
 profile = "black"

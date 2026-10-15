@@ -303,12 +303,17 @@ Choose the model from `runs/summary.md` (accuracy, size and evaluation
 time against the size of the training set) and from the end-to-end
 validations, `teob/krr_<N>_*` and the `logs/modes-teob_krr_<N>-*.log` (their per-mode and
 full-waveform mismatches, with and without the time and phase optimised).
-The size matters: the model is in the wheel, and PyPI takes 100 MB a file
-unless asked for more; a kernel ridge model is ~130 MB at $2^{16}$, half
-that at $2^{15}$. Then ship it, as `default_hom`:
+Size counts less than it would: the regressors (~130 MB for kernel ridge
+at $2^{16}$, half that at $2^{15}$) are not in the wheel but downloaded on
+first use ({mod}`mlgw_bns.model_files`); it is still a download for every
+user, and memory and evaluation time grow with it. Then ship it, as
+`default_hom`, and publish its regressors where its manifest says:
 
 ```bash
 RUN=visualization/modes_scale/release/runs/krr_32768
 for file in $RUN/model_l*; do cp "$file" "mlgw_bns/data/default_hom_${file##*/model_}"; done
 uv run pytest      # the accuracy thresholds of the tests may need recalibrating
+python -m mlgw_bns.model_files manifest default_hom \
+    --url https://github.com/jacopok/mlgw_bns/releases/download/default_hom-v2.0.0/
+gh release create default_hom-v2.0.0 mlgw_bns/data/default_hom_*_nn.pkl
 ```

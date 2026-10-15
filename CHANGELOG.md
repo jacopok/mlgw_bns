@@ -196,6 +196,14 @@ loaded, and the waveforms are referenced differently in time and phase.
     validates a model against stored waveforms without calling TEOBResumS.
     `slurm/modes/release.env.example` trains and validates the shipped
     model.
+- The regressors of the pretrained model (`data/default_hom_*_nn.pkl`) are
+    no longer in the package (1.5 MB instead of ~50 MB): `Model.default_for_testing`
+    downloads them on first use, checks them against the SHA-256 of the
+    shipped manifest `data/default_hom_files.json`, and caches them
+    (`$MLGW_BNS_CACHE`, else `~/.cache/mlgw_bns`); in a checkout of the
+    repository the files there are used. `python -m mlgw_bns.model_files
+    download` fills the cache beforehand, for machines without internet
+    access (`mlgw_bns.model_files`).
 - `neural_network.JaxMLPNetwork`, a JAX perceptron (`mlgw_bns.jax_mlp`) as
     the regressor of a mode, also in the batched evaluation; and
     hyperparameter studies of the regressors shared by workers on many

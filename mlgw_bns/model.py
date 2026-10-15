@@ -46,6 +46,7 @@ from .data_management import (
     reference_gauge,
 )
 from .dataset_generation import Dataset
+from .model_files import model_file
 from .progress import joblib_progress
 from .higher_order_modes import (
     Mode,
@@ -479,10 +480,11 @@ class Model:
     ) -> "Model":
         """Load a pretrained :class:`Model` shipped with the package.
 
-        The metadata/arrays/nn streams of every mode are read from the
-        package resources
-        (:data:`PRETRAINED_MODEL_FOLDER`). This is the quickest way to get
-        a usable model without training one.
+        The metadata and arrays of every mode are read from the package
+        resources (:data:`PRETRAINED_MODEL_FOLDER`); the regressors, too
+        heavy to ship, are downloaded the first time and cached (see
+        :mod:`mlgw_bns.model_files`). This is the quickest way to get a
+        usable model without training one.
 
         Parameters
         ----------
@@ -531,7 +533,7 @@ class Model:
                 streams=(
                     files(__name__).joinpath(mode_model.filename_metadata).open("rb"),
                     files(__name__).joinpath(mode_model.filename_arrays).open("rb"),
-                    files(__name__).joinpath(mode_model.filename_nn).open("rb"),
+                    open(model_file(model_name, mode_model.filename_nn), "rb"),
                 )
             )
 
