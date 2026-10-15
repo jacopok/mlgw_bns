@@ -41,3 +41,22 @@ def test_pca_in_model(generated_mode_model):
     pca_data = generated_mode_model.pca_data
 
     assert isinstance(pca_data, PrincipalComponentData)
+
+
+def test_streamed_covariance_gives_the_principal_components_of_the_svd():
+    """The PCA accumulated over chunks of rows (CovarianceAccumulator) is the
+    one fitted on all of them at once by an SVD: the same eigenvalues and
+    mean, and the same eigenvectors but for their signs."""
+    from mlgw_bns.principal_component_analysis import CovarianceAccumulator
+
+    rng = np.random.default_rng(0)
+    # a decaying spectrum about a large mean
+    data = 5.0 + rng.normal(size=(600, 12)) @ np.diag(np.geomspace(1, 1e-3, 12)) @ rng.normal(size=(12, 12))
+    expected = PrincipalComponentAnalysisModel(6).fit(data)
+    accumulator = CovarianceAccumulator()
+    for chunk in np.array_split(data, 7):
+        accumulator.add(chunk)
+    eigenvectors, eigenvalues, mean = accumulator.principal_components(6)
+    assert np.allclose(eigenvalues, expected.eigenvalues, rtol=1e-9)
+    assert np.allclose(mean, expected.mean, rtol=1e-12)
+    assert np.allclose(np.abs(np.sum(eigenvectors * expected.eigenvectors, axis=0)), 1.0, atol=1e-9)

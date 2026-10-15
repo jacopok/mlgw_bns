@@ -42,6 +42,7 @@ from .data_management import (
     ParameterRanges,
     Residuals,
     re_reference,
+    REFERENCE_WINDOW,
     reference_gauge,
 )
 from .dataset_generation import Dataset
@@ -590,16 +591,8 @@ class Model:
             )
         self._batched_cache.clear()
 
-        # Per-mode downsampling indices first: each still trains on its own
-        # (small) EOB waveform sweep -- see the plan's Step C.
         if training_downsampling_dataset_size is not None:
-            for mode in self.modes:
-                mode_model = self.mode_models[mode]
-                logging.info("Training the downsampling for mode %s", mode)
-                mode_model.downsampling_training.n_jobs = n_jobs
-                mode_model.downsampling_indices = mode_model.downsampling_training.train(
-                    training_downsampling_dataset_size
-                )
+            self.train_downsampling(training_downsampling_dataset_size, n_jobs=n_jobs)
 
         # One shared multi-mode EOB sweep feeds the PCA and NN training of
         # every mode, instead of one sweep per (mode, stage).
@@ -620,6 +613,26 @@ class Model:
                 ),
                 n_jobs=n_jobs,
             )
+
+    def train_downsampling(self, training_downsampling_dataset_size: int = 64, n_jobs: int = 1) -> None:
+        """Train the downsampling indices of every mode, the first step of
+        :meth:`generate`: each on its own (small) EOB waveform sweep.
+
+        Parameters
+        ----------
+        training_downsampling_dataset_size : int
+            Waveforms of each sweep. Defaults to 64.
+        n_jobs : int
+            Worker processes of the sweeps; sequential (``1``) by default.
+        """
+        for mode in self.modes:
+            mode_model = self.mode_models[mode]
+            logging.info("Training the downsampling for mode %s", mode)
+            mode_model.downsampling_training.n_jobs = n_jobs
+            mode_model.downsampling_indices = mode_model.downsampling_training.train(
+                training_downsampling_dataset_size
+            )
+        self._batched_cache.clear()
 
     def _multimode_training_residuals(
         self,
@@ -692,6 +705,7 @@ class Model:
         amplitude_reference_by_mode: Optional[dict] = None,
         progress_desc: str = "Multi-mode EOB sweep",
         n_jobs: int = 1,
+        keep_invalid: bool = False,
     ):
         r"""One EOB call per parameter point, residuals for every mode.
 
@@ -722,6 +736,10 @@ class Model:
             Number of parallel worker processes for the EOB sweep.
             Sequential (``1``) by default -- parallelism is opt-in; pass a
             higher value explicitly to use multiple workers.
+        keep_invalid
+            Keep the rows of the parameters that failed, as NaN, rather than
+            dropping them (then ``n_valid`` is ``len(params_list)``); needs
+            ``downsampling_indices_by_mode`` for every mode.
 
         Returns
         -------
@@ -742,6 +760,29 @@ class Model:
         ds_idx = downsampling_indices_by_mode or {}
         amp_ref = amplitude_reference_by_mode or {}
 
+        # The post-Newtonian baselines are needed only where the residuals
+        # are kept (all of the grid for a mode without downsampling indices),
+        # and, for the (2,2) phase, where it sets the reference: some 1000
+        # points a mode and the 30% of the grid in the reference window,
+        # rather than all of it for every mode, which used to take two thirds
+        # of the time of a waveform. Everything is elementwise but the fit
+        # of `reference_gauge`, which sees the same window: the residuals are
+        # those of the full grid, to the bit.
+        window = int(np.searchsorted(
+            frequencies_natural, frequencies_natural[0] * (1 + REFERENCE_WINDOW), side="right"
+        ))
+        everywhere = np.arange(n_points)
+        points = {}  # mode -> (amplitude points, phase points, kept phase positions in them)
+        for mode in modes:
+            if mode in ds_idx:
+                amp_indices, phi_indices = (np.asarray(i, dtype=int) for i in ds_idx[mode])
+            else:
+                amp_indices = phi_indices = everywhere
+            phase_points = (
+                np.union1d(np.arange(window), phi_indices) if mode == Mode(2, 2) else phi_indices
+            )
+            points[mode] = (amp_indices, phase_points, np.searchsorted(phase_points, phi_indices))
+
         def _one(params):
             try:
                 waveforms = generator.all_modes_amplitude_phase(
@@ -760,32 +801,42 @@ class Model:
                     return None
                 pn_gen = pn_generators[mode]
                 reference = amp_ref.get(mode)
+                amp_points, phase_points, _ = points[mode]
                 amp_pn = pn_gen.post_newtonian_amplitude(
-                    params if reference is None else reference, f_eob
+                    params if reference is None else reference, f_eob[amp_points]
                 )
-                phi_pn = pn_gen.post_newtonian_phase(params, f_eob)
-                raw[mode] = (f_eob, amp_eob / amp_pn, phi_eob - phi_pn)
-            # Every mode referenced to the (2,2) of the same waveform at f0,
-            # on the full grid; see `reference_gauge` and `re_reference`.
+                phi_pn = pn_gen.post_newtonian_phase(params, f_eob[phase_points])
+                raw[mode] = (
+                    f_eob[phase_points],
+                    amp_eob[amp_points] / amp_pn,
+                    phi_eob[phase_points] - phi_pn,
+                )
+            # Every mode referenced to the (2,2) of the same waveform at f0;
+            # see `reference_gauge` and `re_reference`.
             f_22, _, phi_22 = raw[Mode(2, 2)]
             value, slope = reference_gauge(f_22, phi_22)
+            f0 = float(frequencies_natural[0])
             out = {}
             for mode in modes:
-                f_eob, amp_res, phi_res = raw[mode]
-                phi_res = re_reference(f_eob, phi_res, mode.m, value, slope)
-                if mode in ds_idx:
-                    amp_indices, phi_indices = ds_idx[mode]
-                    amp_res = amp_res[amp_indices]
-                    phi_res = phi_res[phi_indices]
+                f_phase, amp_res, phi_res = raw[mode]
+                phi_res = re_reference(f_phase, phi_res, mode.m, value, slope, f0=f0)
                 out[mode] = (
                     np.asarray(amp_res, dtype=float),
-                    np.asarray(phi_res, dtype=float),
+                    np.asarray(phi_res[points[mode][2]], dtype=float),
                 )
             return out
 
         with joblib_progress(progress_desc, len(params_list)):
             results = Parallel(n_jobs=n_jobs)(delayed(_one)(p) for p in params_list)
 
+        if keep_invalid:
+            missing = {
+                mode: tuple(
+                    np.full(len(indices), np.nan) for indices in ds_idx[mode]
+                )
+                for mode in modes
+            }
+            results = [missing if r is None else r for r in results]
         keep = [i for i, r in enumerate(results) if r is not None]
         parameter_array = np.array(
             [params_list[i].array for i in keep], dtype=float
@@ -872,6 +923,91 @@ class Model:
         :meth:`ModeModel.merger_reference`."""
         mode_model = self.mode_models[Mode(2, 2)]
         return mode_model.merger_reference(params.intrinsic(mode_model.dataset))
+
+    def _mode_amplitudes_and_phases(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        source: str,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        r"""Amplitude and phase of every mode, from the requested source.
+
+        This is the one place where the per-mode
+        :math:`A_{\ell m}(f), \phi_{\ell m}(f)` are gathered; the
+        polarization builders (:meth:`_hpc_waveform`,
+        :meth:`_hpc_waveform_per_mode`, :meth:`get_teob_modes_dict`) all go
+        through it, so that they
+        cannot drift apart in their conventions.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate, in Hz.
+        params : ParametersWithExtrinsic
+            Source parameters.
+        source : str
+            Where the amplitude and phase come from:
+
+            * ``"surrogate"``: the trained :class:`ModeModel` networks,
+              referenced to the merger (see :meth:`merger_reference`);
+            * ``"post_newtonian"``: the TaylorF2-style expressions of
+              :mod:`~mlgw_bns.pn_modes`, in their own reference;
+            * ``"eob"``: TEOBResumS, through :meth:`teob_modes_amp_phase`,
+              referenced to the merger as the surrogate is.
+
+          Note that none of the three depends on the inclination: these
+          are the multipoles, which the caller is expected to weight by
+          the spin-weighted spherical harmonics itself.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            ``(amplitudes, phases)``, each of shape
+            ``(len(self.modes), len(frequencies))`` and ordered like
+            :attr:`modes`.
+
+        Raises
+        ------
+        ValueError
+            If ``source`` is not one of the three accepted values.
+        """
+        if source == "eob":
+            modes_amp_phase = self.teob_modes_amp_phase(frequencies, params)
+            return (
+                np.stack([modes_amp_phase[mode][0] for mode in self.modes]),
+                np.stack([modes_amp_phase[mode][1] for mode in self.modes]),
+            )
+        if source not in ("surrogate", "post_newtonian"):
+            raise ValueError(
+                f"Unknown amplitude/phase source {source!r}: expected one of "
+                "'surrogate', 'post_newtonian', 'eob'."
+            )
+
+        amps_list: list[np.ndarray] = []
+        phases_list: list[np.ndarray] = []
+        if source == "post_newtonian":
+            parameters_intrinsic = params.intrinsic(self.dataset)
+        else:
+            merger_reference = self.merger_reference(params)
+
+        for mode in self.modes:
+            if source == "post_newtonian":
+                amp = _post_newtonian_amplitudes_by_mode[mode](
+                    parameters_intrinsic,
+                    frequencies * params.mass_sum_seconds,
+                )
+                phase = _post_newtonian_phases_by_mode[mode](
+                    parameters_intrinsic,
+                    frequencies * params.mass_sum_seconds,
+                )
+            else:
+                amp, phase = self.mode_models[mode].predict_amplitude_phase(
+                    frequencies, params, merger_reference=merger_reference
+                )
+            amps_list.append(amp)
+            phases_list.append(phase)
+
+        return np.stack(amps_list), np.stack(phases_list)
 
     def predict_amplitude_phase_mode(
         self,
@@ -1129,34 +1265,13 @@ class Model:
             iota=inclination,
         )
 
-        amps_list: list[np.ndarray] = []
-        phases_list: list[np.ndarray] = []
-        dataset = self.dataset
-        if use_pn:
-            parameters_intrinsic = params.intrinsic(dataset)
-        else:
-            merger_reference = self.merger_reference(params)
-
-        for mode in self.modes:
-            if use_pn:
-                amp = _post_newtonian_amplitudes_by_mode[mode](
-                    parameters_intrinsic,
-                    frequencies * params.mass_sum_seconds,
-                )
-                phase = _post_newtonian_phases_by_mode[mode](
-                    parameters_intrinsic,
-                    frequencies * params.mass_sum_seconds,
-                )
-            else:
-                amp, phase = self.mode_models[mode].predict_amplitude_phase(
-                    frequencies, params, merger_reference=merger_reference
-                )
-            amps_list.append(amp)
-            phases_list.append(phase)
-
-        amp_arr = np.stack(amps_list)
-        cosphi_arr = np.cos(np.stack(phases_list))
-        sinphi_arr = np.sin(np.stack(phases_list))
+        amp_arr, phase_arr = self._mode_amplitudes_and_phases(
+            frequencies=frequencies,
+            params=params,
+            source="post_newtonian" if use_pn else "surrogate",
+        )
+        cosphi_arr = np.cos(phase_arr)
+        sinphi_arr = np.sin(phase_arr)
         coeffs = _build_mode_coeffs(
             self.modes,
             list(range(len(self.modes))),
@@ -1324,9 +1439,11 @@ class Model:
             phi=0.0,
             iota=inclination,
         )
-        modes_amp_phase = self.teob_modes_amp_phase(frequencies, params)
-        amp_arr = np.stack([modes_amp_phase[mode][0] for mode in self.modes])
-        phase_arr = np.stack([modes_amp_phase[mode][1] for mode in self.modes])
+        amp_arr, phase_arr = self._mode_amplitudes_and_phases(
+            frequencies=frequencies,
+            params=params,
+            source="eob",
+        )
         cosphi_arr = np.cos(phase_arr)
         sinphi_arr = np.sin(phase_arr)
         coeffs = _build_mode_coeffs(

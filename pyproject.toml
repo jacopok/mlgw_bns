@@ -11,7 +11,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "numpy>=2.2.3,<3", # for all kinds of array manipulation
-    "optuna>=4.9.0,<5", # for optimization of hyperparameters
+    "optuna>=5.0.0,<6", # for optimization of hyperparameters
     "scikit-learn>=1.9.0,<2", # provides the neural networks
     "h5py>=3.16.0,<4", # for management of h5 files
     "numba>=0.67.0", # acceleration of numerical computations
@@ -79,6 +79,7 @@ dev = [
     "coveralls>=4.0.1",
     "pytest-profiling>=1.8.1",
     "matplotlib>=3.10.0",
+    "optuna-dashboard>=0.21.0", # visualization/studies_dashboard.py
 ]
  
 [build-system]
@@ -90,3 +91,9 @@ packages = ["mlgw_bns"]
  
 [tool.isort]
 profile = "black"
+
+[tool.uv.sources]
+# the fork's initial-spa-fix branch: the public TEOBResumS aborts on some of
+# the waveforms of the training sets
+teobresums = { git = "https://github.com/jacopok/teobresums", branch = "initial-spa-fix", subdirectory = "Python" }
+

@@ -70,6 +70,13 @@ loaded, and the waveforms are referenced differently in time and phase.
     single-mode mismatches use it.
 - `Model.generate` has no reference pre-pass (and no `reference_*`
     arguments): one EOB sweep fewer.
+- `Model.generate` evaluates the post-Newtonian baselines only at the
+    downsampling nodes that are kept (and the (2,2) phase in the reference
+    window), rather than on the whole grid for every mode: 1.06 to 0.40 s
+    a training waveform, with residuals identical to the bit.
+- TEOBResumS (a development dependency) is installed from the
+    `initial-spa-fix` branch of `github.com/jacopok/teobresums`: the public
+    release aborts on some of the training waveforms. Optuna 5 is required.
 - `Dataset.generate_residuals` has no `flatten_phase` argument: the
     residuals of a single mode are referenced to their own value and slope
     at `f0`. `PrincipalComponentTraining` takes no predictors.
@@ -178,6 +185,21 @@ loaded, and the waveforms are referenced differently in time and phase.
 - Out-of-range rows come back as NaN instead of raising, so that one bad row
     does not abort a batch; `BatchedSurrogate.valid` gives the mask.
 - `Model.parameter_ranges`, whose setter applies new ranges to every mode.
+- Training at scale, on a SLURM cluster (`slurm/modes`,
+    `visualization/modes_scale.py`; see the "Training at scale" guide):
+    training sets in shards on disk made by any number of jobs
+    (`mlgw_bns.sharding`, `mlgw_bns.modes_dataset.ShardedModesDataset`),
+    principal components accumulated a shard at a time
+    (`principal_component_analysis.CovarianceAccumulator`),
+    `ModeModel.fit_nn` and `Model.train_downsampling` split out of the
+    training, and `model_validation.stored_waveform_mismatches`, which
+    validates a model against stored waveforms without calling TEOBResumS.
+    `slurm/modes/release.env.example` trains and validates the shipped
+    model.
+- `neural_network.JaxMLPNetwork`, a JAX perceptron (`mlgw_bns.jax_mlp`) as
+    the regressor of a mode, also in the batched evaluation; and
+    hyperparameter studies of the regressors shared by workers on many
+    nodes (`hyperparameter_optimization.run_worker`, journal storage).
 
 ### Known issues
 

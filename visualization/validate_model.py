@@ -38,7 +38,12 @@ Run with: python visualization/validate_model.py
 import logging
 import os
 import pickle
+import shutil
 import sys
+
+if not sys.stderr.isatty():
+    # Logged to a file: a progress line a minute, not a carriage return a step.
+    os.environ.setdefault("TQDM_MININTERVAL", "60")
 from time import perf_counter
 from typing import Optional
 
@@ -62,7 +67,8 @@ logging.basicConfig(level=logging.WARNING)
 #: don't each have to opt in.
 plt.rcParams.update(
     {
-        "text.usetex": True,
+        # where there is LaTeX (not on every cluster node)
+        "text.usetex": shutil.which("latex") is not None,
         "font.family": "serif",
     }
 )
@@ -1692,6 +1698,16 @@ if __name__ == "__main__":
     )
 
     report_weighted_mismatches(mismatches_by_mode, power_fractions, full_mismatches)
+    np.savez(
+        f"{OUTPUT_PREFIX}_mismatches.npz",
+        full=np.asarray(full_mismatches),
+        full_no_optimisation=np.asarray(full_mismatches_no_opt),
+        **{
+            f"{name} l{mode.l}_m{mode.m}": np.asarray(values)
+            for mode, pair in mismatches_by_mode.items()
+            for name, values in zip(("optimised", "regressed"), pair)
+        },
+    )
     plot_mismatches(
         mismatches_by_mode, full_mismatches, full_mismatches_no_opt, power_fractions
     )

@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import dataclasses
 import datetime
+import hashlib
 import logging
-from typing import Callable, ClassVar, Optional
+import os
+import signal
+import socket
+import subprocess
+import threading
+import time
+import warnings
+from typing import Callable, ClassVar, Optional, Sequence
 
 import joblib  # type: ignore
 import numpy as np
@@ -10,8 +19,10 @@ import optuna
 from optuna.visualization import plot_parallel_coordinate, plot_param_importances
 
 from .data_management import Residuals
+from .jax_mlp import MLPConfig, TrainingInterrupted
 from .mode_model import Hyperparameters, ModeModel
 from .neural_network import KernelRidgeNetwork, mode_key, save_kernel_ridge_default
+from .sharding import EXIT_REQUEUE, Stopped
 
 
 class HyperparameterOptimization:
@@ -195,7 +206,9 @@ class HyperparameterOptimization:
         return float(np.log10(accuracy))
 
     @staticmethod
-    def residuals_difference(residuals_1: Residuals, residuals_2: Residuals) -> float:
+    def residuals_difference(
+        residuals_1: Residuals, residuals_2: Residuals, weights: Optional[np.ndarray] = None
+    ) -> float:
         """Compare two sets of :class:`Residuals`.
 
         Parameters
@@ -204,6 +217,11 @@ class HyperparameterOptimization:
             First set of residuals to be compared.
         residuals_2 : Residuals
             Second set of residuals to be compared.
+        weights : np.ndarray, optional
+            Of each waveform in the average (uniform by default), such as
+            the power weights the regressors of some modes are trained with
+            (:meth:`ModeModel._training_power_weights
+            <mlgw_bns.mode_model.ModeModel._training_power_weights>`).
 
         Returns
         -------
@@ -218,6 +236,10 @@ class HyperparameterOptimization:
         phi_square_differences = (
             np.abs(residuals_1.phase_residuals - residuals_2.phase_residuals) ** 2
         )
+        if weights is not None:
+            weights = np.asarray(weights, dtype=float) / np.mean(weights)
+            amp_square_differences = amp_square_differences * weights[:, np.newaxis]
+            phi_square_differences = phi_square_differences * weights[:, np.newaxis]
 
         return (
             np.average(amp_square_differences) + np.average(phi_square_differences)
@@ -340,3 +362,499 @@ class HyperparameterOptimization:
         )
         # Trial.datetime_complete (and _start) are defined as optional in the
         # FrozenTrial type, but here they will always be set
+
+
+# -- studies shared by many workers (SLURM) -------------------------------------
+#
+# The optimization of regressors trained on large sharded training sets
+# (:mod:`mlgw_bns.modes_dataset`), by any
+# number of worker processes on any number of nodes: the study is kept in an
+# optuna journal file on a filesystem they all see (no database server), each
+# worker reads the training and validation sets once and then asks the study
+# for trials until it is stopped (or a budget of trial-hours is spent); the
+# workers of a node are started together by :func:`run_in_parallel`. A worker asked to stop (the
+# walltime near) abandons the trial it is running to a retry, which resumes
+# from the checkpoint of its perceptron; a worker killed outright leaves a
+# trial whose heartbeat stops, and which the next worker to start retries.
+
+#: The perceptrons' hyperparameters searched by :func:`mlp_config_from_trial`:
+#: name -> (low, high, log) of a float or int, or the choices of a categorical.
+MLP_SEARCH_SPACE: dict = {
+    "depth": (2, 8, False),
+    "width": (64, 1024, True),
+    "activation": ("gelu", "silu", "tanh"),
+    "learning_rate": (1e-4, 3e-3, True),
+    # the final learning rate, as a fraction of the first
+    "final_rate_ratio": (1e-4, 1e-1, True),
+    "warmup": (0.0, 0.1, False),
+    "clip_norm": (1e-2, 1e2, True),
+    "log2_batch": (7, 12, False),
+    "weight_decay": (1e-8, 1e-2, True),
+}
+
+
+def _suggest(trial: optuna.Trial, name: str):
+    space = MLP_SEARCH_SPACE[name]
+    if isinstance(space[0], str):
+        return trial.suggest_categorical(name, list(space))
+    low, high, log = space
+    if isinstance(low, int) and isinstance(high, int):
+        return trial.suggest_int(name, low, high, log=log)
+    return trial.suggest_float(name, low, high, log=log)
+
+
+def mlp_config_from_trial(
+    trial: optuna.Trial, steps: int, n_train: int, base: Optional[MLPConfig] = None
+) -> MLPConfig:
+    """A :class:`~mlgw_bns.jax_mlp.MLPConfig` sampled from ``trial`` over
+    :data:`MLP_SEARCH_SPACE` (layers of equal width), the others of ``base``
+    (the defaults), trained for about ``steps`` steps on ``n_train`` samples
+    (:meth:`~mlgw_bns.jax_mlp.MLPConfig.with_steps`): the number of steps
+    is fixed in a study, since it sets the cost of a trial and the
+    schedule of the learning rate.
+
+    The seed (of the initialization, the held-out split and the batches) is
+    a function of the parameters (:func:`trial_seed`): it differs from
+    trial to trial, as it must, since how well a perceptron trains varies
+    with its seed by as much as with its hyperparameters (a study with one
+    seed would favour the configurations lucky with it); and it is the same
+    for a retry of a trial, which resumes from its checkpoint."""
+    base = MLPConfig() if base is None else base
+    rate = _suggest(trial, "learning_rate")
+    config = dataclasses.replace(
+        base,
+        hidden=(_suggest(trial, "width"),) * _suggest(trial, "depth"),
+        activation=_suggest(trial, "activation"),
+        learning_rate=rate,
+        final_learning_rate=rate * _suggest(trial, "final_rate_ratio"),
+        warmup=_suggest(trial, "warmup"),
+        clip_norm=_suggest(trial, "clip_norm"),
+        batch_size=2 ** _suggest(trial, "log2_batch"),
+        weight_decay=_suggest(trial, "weight_decay"),
+        seed=trial_seed(trial),
+    )
+    trial.set_user_attr("seed", config.seed)
+    return config.with_steps(steps, n_train)
+
+
+def study_mlp_config(
+    filename: str, steps: int, n_train: int, number: Optional[int] = None
+) -> tuple:
+    """The :class:`~mlgw_bns.jax_mlp.MLPConfig` of trial ``number`` (by
+    default the best one) of the perceptron study in the journal
+    ``filename``, as :func:`mlp_config_from_trial` made it (its seed too),
+    for ``steps`` steps on ``n_train`` samples; and the trial.
+
+    From the trial's parameters, not its ``command_line``, which rounds
+    them: a perceptron trained again with these is the trial's own."""
+    study = read_study(filename)
+    trial = study.best_trial if number is None else study.trials[number]
+    if trial.state != optuna.trial.TrialState.COMPLETE:
+        raise ValueError(f"{filename}: trial {trial.number} is {trial.state.name.lower()}")
+    config = mlp_config_from_trial(optuna.trial.FixedTrial(trial.params), steps, n_train)
+    if trial.user_attrs.get("seed", config.seed) != config.seed:
+        raise ValueError(f"{filename}: trial {trial.number} had seed {trial.user_attrs['seed']}, not {config.seed}")
+    return config, trial
+
+
+def _params_digest(trial: optuna.Trial) -> bytes:
+    return hashlib.blake2b(repr(sorted(trial.params.items())).encode(), digest_size=8).digest()
+
+
+def trial_seed(trial: optuna.Trial) -> int:
+    """A seed for ``trial``, from the parameters it has sampled so far."""
+    return int.from_bytes(_params_digest(trial)[:4], "little") & 0x7FFFFFFF
+
+
+def mlp_command_line(config: MLPConfig) -> str:
+    """The options of ``modes_scale.py train`` training a perceptron of this configuration (with
+    ``--mlp-steps`` for its number of epochs)."""
+    return " ".join([
+        "--mlp --mlp-hidden", " ".join(str(h) for h in config.hidden),
+        f"--mlp-activation {config.activation} --mlp-rate {config.learning_rate:.3g}",
+        f"--mlp-final-rate {config.final_learning_rate:.3g} --mlp-batch {config.batch_size}",
+        f"--mlp-warmup {config.warmup:.3g} --mlp-clip-norm {config.clip_norm:.3g}",
+        f"--mlp-weight-decay {config.weight_decay:.3g} --mlp-seed {config.seed}",
+    ])
+
+
+def open_study(
+    filename: str,
+    study_name: str = "study",
+    pruner: Optional[optuna.pruners.BasePruner] = None,
+    fixed: Optional[dict] = None,
+    seed: Optional[int] = None,
+    sampler: str = "tpe",
+    metric: Optional[str] = None,
+) -> optuna.Study:
+    """The study ``study_name`` (minimizing one objective, named ``metric``)
+    kept in the optuna journal ``filename``, made if not there. Its trials
+    are sampled by multivariate TPE (``sampler="tpe"``; with the "constant
+    liar", so that workers running at once do not all try the same) or by a
+    Gaussian process (``"gp"``: its acquisition integrating over the
+    outcomes of the trials running; it learns from the completed trials
+    only, not the pruned ones, and needs torch), with the parameters in
+    ``fixed`` held to their values."""
+    from optuna.storages import JournalStorage
+    from optuna.storages.journal import JournalFileBackend
+
+    os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
+        if sampler == "tpe":
+            chosen: optuna.samplers.BaseSampler = optuna.samplers.TPESampler(
+                multivariate=True, constant_liar=True, seed=seed
+            )
+        elif sampler == "gp":
+            chosen = optuna.samplers.GPSampler(seed=seed)
+        else:
+            raise ValueError(f"unknown sampler {sampler!r}: tpe or gp")
+        if fixed:
+            chosen = optuna.samplers.PartialFixedSampler(fixed, chosen)
+    study = optuna.create_study(
+        storage=JournalStorage(JournalFileBackend(filename)),
+        study_name=study_name,
+        direction="minimize",
+        pruner=pruner if pruner is not None else optuna.pruners.NopPruner(),
+        sampler=chosen,
+        load_if_exists=True,
+    )
+    if metric is not None and study.metric_names != [metric]:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
+            study.set_metric_names([metric])
+    return study
+
+
+def read_study(filename: str) -> optuna.Study:
+    """The study kept in the optuna journal ``filename`` (its only one), read
+    without writing to it or taking its lock: of studies running, or copied
+    from the cluster at any time (the journal is appended to, line by line,
+    and a last line not written in full is left out)."""
+    from optuna.storages import JournalStorage
+    from optuna.storages.journal import JournalFileBackend
+
+    storage = JournalStorage(JournalFileBackend(filename))
+    (summary,) = storage.get_all_studies()
+    return optuna.load_study(study_name=summary.study_name, storage=storage)
+
+
+def pruner_settings(kind: str, start: Optional[float] = None, reduction: int = 3) -> dict:
+    """The settings of :func:`make_pruner`, with the defaults filled in."""
+    if kind == "none":
+        return {"kind": kind}
+    if kind == "median":
+        return {"kind": kind, "start": 0.2 if start is None else start}
+    if kind == "halving":
+        return {"kind": kind, "start": 0.1 if start is None else start, "reduction": reduction}
+    raise ValueError(f"unknown pruner {kind!r}: none, median or halving")
+
+
+def make_pruner(kind: str, steps: int, start: Optional[float] = None, reduction: int = 3) -> optuna.pruners.BasePruner:
+    """``"none"``; ``"median"``: a trial whose best held-out loss is worse
+    than the median of the others' at the same step, after the first
+    ``start`` (default a fifth) of the steps; ``"halving"``: successive
+    halving, the trials compared after ``start`` (default a tenth) of the
+    steps, then ``reduction`` times as many and so on, the best
+    1 / ``reduction`` kept each time."""
+    settings = pruner_settings(kind, start, reduction)
+    if kind == "none":
+        return optuna.pruners.NopPruner()
+    first = max(int(settings["start"] * steps), 1)
+    if kind == "median":
+        return optuna.pruners.MedianPruner(n_startup_trials=8, n_warmup_steps=first)
+    return optuna.pruners.SuccessiveHalvingPruner(min_resource=first, reduction_factor=reduction)
+
+
+# successive halving keeps the values of the trials at each rung (as system
+# attributes "completed_rung_<i>"), which before the settings were kept were
+# those of its only settings then
+_LEGACY_HALVING = {"kind": "halving", "start": 0.1, "reduction": 3}
+
+
+def check_pruner_settings(study: optuna.Study, settings: dict) -> None:
+    """Keep ``settings`` (:func:`pruner_settings`) in ``study``, or raise
+    ValueError if it was run with others: successive halving compares a
+    trial with the others at the same rung, which with other settings are
+    at other steps."""
+    kept = study.user_attrs.get("pruner")
+    if kept is None and any("completed_rung_0" in t.system_attrs for t in study.get_trials(deepcopy=False)):
+        kept = _LEGACY_HALVING
+    if kept is None:
+        study.set_user_attr("pruner", settings)
+    elif kept != settings:
+        raise ValueError(
+            f"{study.study_name} was run with the pruner {kept}, not {settings}: use these, or another study"
+        )
+
+
+def _value(trial: optuna.trial.FrozenTrial) -> float:
+    return np.inf if trial.value is None else trial.value
+
+
+def enqueue_best(study: optuna.Study, source: optuna.Study, number: int) -> int:
+    """Enqueue the parameters of the ``number`` best trials of ``source``
+    (another study, e.g. on fewer training samples) in ``study``, for its
+    workers to try first; how many were not tried or enqueued there yet."""
+    tried = {tuple(sorted(t.params.items())) for t in study.get_trials(deepcopy=False)}
+    tried |= {
+        tuple(sorted(_enqueued(t).items()))
+        for t in study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.WAITING,))
+    }
+    done = [t for t in source.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))]
+    added = 0
+    for trial in sorted(done, key=_value)[:number]:
+        if tuple(sorted(trial.params.items())) not in tried:
+            _enqueue(study, trial.params, enqueued_from=f"{source.study_name}#{trial.number}")
+            added += 1
+    return added
+
+
+def trial_hours(study: optuna.Study) -> float:
+    """The hours the finished trials of ``study`` took, summed: what the
+    budget of :func:`run_worker` counts."""
+    seconds = sum(
+        (t.datetime_complete - t.datetime_start).total_seconds()
+        for t in study.get_trials(deepcopy=False)
+        if t.state.is_finished() and t.datetime_start is not None and t.datetime_complete is not None
+    )
+    return seconds / 3600.0
+
+
+def checkpoint_name(directory: str, trial: optuna.Trial) -> str:
+    """The checkpoint of a trial's perceptron: named by its parameters, so
+    that a retry of the trial (same parameters) resumes from it."""
+    return os.path.join(directory, f"trial-{_params_digest(trial).hex()}.joblib")
+
+
+class StopRequested:
+    """``SIGTERM`` and ``SIGUSR1`` (which SLURM sends before the walltime)
+    noted rather than acted on at once, since the study's journal must not
+    be interrupted mid-write: the worker stops between trials, or inside
+    one through :meth:`check` (a perceptron with a checkpoint handles them
+    itself while it trains)."""
+
+    def __init__(self):
+        self.signal: Optional[int] = None
+        for number in (signal.SIGTERM, signal.SIGUSR1):
+            signal.signal(number, self._note)
+
+    def _note(self, signum, _frame) -> None:
+        self.signal = signum
+
+    def __bool__(self) -> bool:
+        return self.signal is not None
+
+    def check(self) -> None:
+        if self.signal is not None:
+            raise Stopped(f"signal {self.signal}")
+
+
+def pruning_progress(
+    trial: optuna.Trial, stop: StopRequested, steps: Optional[int] = None
+) -> Callable[[int, float], None]:
+    """A ``progress`` of :meth:`JaxMLP.fit <mlgw_bns.jax_mlp.JaxMLP.fit>`
+    reporting the best held-out loss to ``trial`` (in log10), pruning it if
+    its study's pruner says so (not in the last 5% of its ``steps``, its
+    training as good as done), and stopping on a signal."""
+    last = np.inf if steps is None else 0.95 * steps
+
+    def progress(step: int, best_loss: float) -> None:
+        stop.check()
+        trial.report(float(np.log10(best_loss)), step)
+        if step < last and trial.should_prune():
+            raise optuna.TrialPruned(f"pruned at step {step}")
+
+    return progress
+
+
+def _enqueue(study: optuna.Study, params: dict, **user_attrs) -> None:
+    """Enqueue a trial of ``params`` in ``study``, with ``user_attrs``, and
+    the parameters themselves (as the user attribute ``enqueued``: optuna
+    keeps them where only it can read them)."""
+    study.enqueue_trial(params, user_attrs={**user_attrs, "enqueued": params})
+
+
+def _enqueued(trial: optuna.trial.FrozenTrial) -> dict:
+    """The parameters ``trial`` was enqueued with (:func:`_enqueue`)."""
+    return dict(trial.user_attrs.get("enqueued", {}))
+
+
+def _retry(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+    """Enqueue ``trial`` again: the parameters it sampled, and those it was
+    enqueued with (if it stopped before sampling them)."""
+    _enqueue(study, {**_enqueued(trial), **trial.params}, retry_of=trial.number)
+
+
+def recover_stale_trials(study: optuna.Study, stale_seconds: float) -> int:
+    """Fail the running trials of ``study`` whose heartbeat stopped more
+    than ``stale_seconds`` ago (their worker died), and enqueue them again;
+    how many."""
+    now = time.time()
+    recovered = 0
+    for trial in study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.RUNNING,)):
+        beat = trial.user_attrs.get("heartbeat")
+        if beat is None and trial.datetime_start is not None:
+            beat = trial.datetime_start.timestamp()
+        if beat is None or now - beat < stale_seconds:
+            continue
+        try:
+            study._storage.set_trial_state_values(trial._trial_id, optuna.trial.TrialState.FAIL)
+        except optuna.exceptions.UpdateFinishedTrialError:
+            continue  # another worker got there first
+        _retry(study, trial)
+        recovered += 1
+        logging.info("trial %i of %s: no heartbeat for %.0f s, enqueued again", trial.number, study.study_name, now - beat)
+    return recovered
+
+
+class _Heartbeat:
+    """Sets the user attribute ``heartbeat`` (the time) of a running trial
+    every ``seconds``, in a thread, until stopped."""
+
+    def __init__(self, trial: optuna.Trial, seconds: float):
+        self.trial, self.seconds = trial, seconds
+        self.done = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        while True:
+            try:
+                self.trial.set_user_attr("heartbeat", time.time())
+            except Exception as error:  # the trial finished meanwhile
+                logging.debug("heartbeat: %s", error)
+            if self.done.wait(self.seconds):
+                return
+
+    def __enter__(self) -> "_Heartbeat":
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_) -> None:
+        self.done.set()
+        self.thread.join()
+
+
+def run_worker(
+    study: optuna.Study,
+    objective: Callable[[optuna.Trial, StopRequested], float],
+    hours: Optional[float] = None,
+    stop: Optional[StopRequested] = None,
+    stale_minutes: float = 30.0,
+    heartbeat_seconds: float = 60.0,
+    max_failures: int = 3,
+) -> bool:
+    """Run trials of ``study`` until the trials of all its workers have
+    taken ``hours`` (:func:`trial_hours`; ``None``: until stopped); whether
+    that budget is spent (otherwise the worker was asked to stop, and the
+    trial it was running enqueued again).
+
+    ``objective(trial, stop)`` gives the value of a trial, or raises
+    :class:`optuna.TrialPruned`; :class:`~mlgw_bns.sharding.Stopped` or
+    :class:`~mlgw_bns.jax_mlp.TrainingInterrupted` when stopped (see
+    :class:`StopRequested`). A trial raising anything else fails; after
+    ``max_failures`` in a row the worker gives up (raises it).
+    """
+    stop = StopRequested() if stop is None else stop
+    recover_stale_trials(study, 60.0 * stale_minutes)
+    worker = f"{socket.gethostname()}:{os.getpid()}"
+    job = os.environ.get("SLURM_JOB_ID")
+    failures = 0
+    while True:
+        spent = trial_hours(study)
+        if hours is not None and spent >= hours:
+            logging.info("%s: %.3g of %.3g hours of trials spent", study.study_name, spent, hours)
+            return True
+        if stop:
+            return False
+        trial = study.ask()
+        trial.set_user_attr("worker", worker if job is None else f"{worker} job {job}")
+        start = time.time()
+        try:
+            with _Heartbeat(trial, heartbeat_seconds):
+                value = objective(trial, stop)
+        except optuna.TrialPruned as pruned:
+            logging.info("trial %i: %s after %.0f s", trial.number, pruned, time.time() - start)
+            study.tell(trial, state=optuna.trial.TrialState.PRUNED)
+            failures = 0
+        except (Stopped, TrainingInterrupted) as error:
+            logging.info("trial %i stopped (%s): enqueued again", trial.number, error)
+            study.tell(trial, state=optuna.trial.TrialState.FAIL)
+            _retry(study, study.get_trials(deepcopy=False)[trial.number])
+            return False
+        except Exception:
+            logging.exception("trial %i failed", trial.number)
+            study.tell(trial, state=optuna.trial.TrialState.FAIL)
+            failures += 1
+            if failures >= max_failures:
+                raise
+        else:
+            study.tell(trial, value)
+            failures = 0
+            best = study.best_trial
+            logging.info(
+                "trial %i: %.4g in %.0f s (best: trial %i, %.4g)",
+                trial.number, value, time.time() - start, best.number, best.value,
+            )
+
+
+def run_in_parallel(command: Sequence[str], workers: int) -> int:
+    """Run ``workers`` copies of ``command`` at once, each on its share of
+    the CPUs of this process (its affinity, and as many threads), with
+    ``SIGUSR1`` and ``SIGTERM`` forwarded to them; the exit status: the first
+    of theirs other than 0 and ``EXIT_REQUEUE``, else ``EXIT_REQUEUE`` if one
+    stopped so, else 0."""
+    pinned = hasattr(os, "sched_getaffinity")
+    cpus = sorted(os.sched_getaffinity(0)) if pinned else list(range(os.cpu_count() or 1))
+    shares = [[int(c) for c in share] for share in np.array_split(cpus, workers)]
+    processes: list = []
+    received: list = []
+
+    def forward(signum, _frame) -> None:
+        received.append(signum)
+        for process in processes:
+            if process.poll() is None:
+                process.send_signal(signum)
+
+    previous = {s: signal.signal(s, forward) for s in (signal.SIGUSR1, signal.SIGTERM)}
+    try:
+        for share in shares:
+            threads = str(max(len(share), 1))
+            env = dict(
+                os.environ, OMP_NUM_THREADS=threads, MKL_NUM_THREADS=threads, OPENBLAS_NUM_THREADS=threads,
+                XLA_PYTHON_CLIENT_PREALLOCATE="false",  # workers sharing a GPU
+            )
+            setaffinity = (lambda share=share: os.sched_setaffinity(0, share)) if pinned and share else None
+            processes.append(subprocess.Popen(list(command), env=env, preexec_fn=setaffinity))
+            for signum in received:  # arrived while the others started
+                processes[-1].send_signal(signum)
+        codes = [process.wait() for process in processes]
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
+    logging.info("workers exited with %s", codes)
+    return next((c for c in codes if c not in (0, EXIT_REQUEUE)), EXIT_REQUEUE if EXIT_REQUEUE in codes else 0)
+
+
+def study_report(study: optuna.Study, top: int = 10) -> str:
+    """The best ``top`` trials of ``study``, their parameters and user
+    attributes, how many trials ended how, and the importance of each
+    parameter (PED-ANOVA: how much more often its values among the best
+    trials fall where they do than among all)."""
+    trials = study.get_trials(deepcopy=False)
+    counts = {state.name.lower(): 0 for state in optuna.trial.TrialState}
+    for trial in trials:
+        counts[trial.state.name.lower()] += 1
+    lines = [
+        f"{study.study_name}: {len(trials)} trials ("
+        + ", ".join(f"{n} {state}" for state, n in counts.items() if n)
+        + f"), {trial_hours(study):.3g} hours"
+    ]
+    done = sorted((t for t in trials if t.state == optuna.trial.TrialState.COMPLETE), key=_value)
+    for trial in done[:top]:
+        attrs = {k: v for k, v in trial.user_attrs.items() if k not in ("heartbeat", "worker", "enqueued")}
+        lines.append(f"  #{trial.number}: {trial.value:.4g}  {trial.params}  {attrs}")
+    if len(done) >= 10:
+        importances = optuna.importance.get_param_importances(study)
+        lines.append("  importance: " + ", ".join(f"{name} {value:.2f}" for name, value in importances.items()))
+    return "\n".join(lines)
