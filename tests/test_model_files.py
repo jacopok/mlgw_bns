@@ -14,7 +14,7 @@ def test_manifest_matches_the_packaged_files():
     manifest = model_files.read_manifest("default_hom")
     for name, expected in manifest["files"].items():
         path = model_files._data() / name
-        if path.exists():
+        if model_files._is_packaged(path):
             assert model_files.sha256(path) == expected, name
 
 
@@ -28,7 +28,8 @@ def unpackaged(tmp_path, monkeypatch):
     data.mkdir()
     manifest = model_files.read_manifest("default_hom")
     name = sorted(manifest["files"])[0]
-    shutil.copy(model_files._data() / name, published / name)
+    # the packaged file, or the one downloaded in its place of an LFS pointer
+    shutil.copy(model_files.model_file("default_hom", name), published / name)
     files = {name: manifest["files"][name]}
     (data / "default_hom_files.json").write_text(
         json.dumps({"url": published.as_uri() + "/", "files": files})
