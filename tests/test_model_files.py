@@ -48,6 +48,15 @@ def test_download_once_into_the_cache(unpackaged):
     assert model_files.model_file("default_hom", f"data/{name}") == path
 
 
+def test_lfs_pointer_is_downloaded(unpackaged):
+    """A checkout made without git-lfs has pointers in place of the files."""
+    name, expected, _ = unpackaged
+    pointer = model_files._data() / name
+    pointer.write_bytes(model_files.LFS_POINTER + b"v1\noid sha256:" + expected.encode() + b"\nsize 1\n")
+    path = model_files.model_file("default_hom", f"data/{name}")
+    assert path.parent == model_files.cache_directory()
+
+
 def test_download_checks_the_hash(unpackaged):
     name, _, published = unpackaged
     (published / name).write_bytes(b"not the regressor")

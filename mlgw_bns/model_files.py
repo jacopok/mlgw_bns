@@ -4,7 +4,8 @@ The regressors of a pretrained model (its ``*_nn.pkl`` files, tens of MB)
 are not in the package: a manifest that is,
 ``data/<model>_files.json``, gives the URL they are published at and the
 SHA-256 of each. :func:`model_file` returns the file in the package if it is
-there (a checkout of the repository), and otherwise the copy in the cache,
+there (a checkout of the repository, where they are kept in Git LFS), and
+otherwise the copy in the cache,
 downloading and checking it the first time. The cache is
 ``$MLGW_BNS_CACHE`` if set, else ``$XDG_CACHE_HOME/mlgw_bns`` (by default
 ``~/.cache/mlgw_bns``); its files are named by their hash, so the files of
@@ -88,12 +89,25 @@ def _download(url: str, target: Path, expected: str) -> None:
             os.remove(temporary)
 
 
+#: how a file kept in Git LFS starts in a checkout made without git-lfs
+LFS_POINTER = b"version https://git-lfs.github.com/spec/"
+
+
+def _is_packaged(path: Path) -> bool:
+    """Whether ``path`` is there, and not a Git LFS pointer in its place."""
+    if not path.exists():
+        return False
+    with open(path, "rb") as file:
+        return file.read(len(LFS_POINTER)) != LFS_POINTER
+
+
 def model_file(model_name: str, filename: str) -> Path:
     """The path of ``filename`` (as ``data/default_hom_l2_m2_nn.pkl``) of a
-    pretrained model: in the package if it is there, else in the cache,
-    downloaded the first time."""
+    pretrained model: in the package if it is there (and not a Git LFS
+    pointer, in a checkout without git-lfs), else in the cache, downloaded
+    the first time."""
     packaged = _data() / Path(filename).name
-    if packaged.exists():
+    if _is_packaged(packaged):
         return packaged
     manifest = read_manifest(model_name)
     name = packaged.name
