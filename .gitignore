@@ -114,3 +114,5 @@ visualization/merger_conventions.npz
 /visualization/modes_scale/
 /visualization/studies_dashboard/
 /slurm/*/cluster.env
+
+visualization/*
