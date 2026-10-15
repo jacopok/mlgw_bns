@@ -510,6 +510,7 @@ class ValidateModel:
         waveform_array_1: FDWaveforms,
         waveform_array_2: FDWaveforms,
         parameters_set: Optional[ParameterSet] = None,
+        disable_tqdm: bool = False,
     ) -> List[float]:
         """Compute the mismatches between each waveform pair in two arrays.
 
@@ -522,6 +523,8 @@ class ValidateModel:
         parameters_set : ParameterSet, optional
                 Unused; kept for API consistency with
                 :meth:`full_waveform_mismatch_array`.
+        disable_tqdm : bool
+                Whether to disable the progress bar. Defaults to ``False``.
 
         Returns
         -------
@@ -529,7 +532,7 @@ class ValidateModel:
                 Mismatches between the waveforms, in order.
         """
         return self._mismatch_array_internal(
-            waveform_array_1, waveform_array_2, disable_tqdm=False
+            waveform_array_1, waveform_array_2, disable_tqdm=disable_tqdm
         )
 
     def full_waveform_mismatch_array(

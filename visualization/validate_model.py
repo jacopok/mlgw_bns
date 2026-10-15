@@ -50,6 +50,10 @@ import pickle
 import sys
 from typing import Optional
 
+if not sys.stderr.isatty():
+    # Logged to a file: a progress line a minute, not a carriage return a step.
+    os.environ.setdefault("TQDM_MININTERVAL", "60")
+
 import matplotlib
 import numpy as np
 import matplotlib.pyplot as plt
@@ -137,6 +141,10 @@ PRECESSING_MAX_DELTA_T = 2e-3
 #: Precessing binaries of :func:`twisted_mismatch_vs_power_by_mode`, and how
 #: many go through the JAX predictor at once.
 N_TWISTED_WAVEFORMS = 400
+#: Take the precession angles from this
+#: :class:`~mlgw_bns.precession_regression.PrecessionRegressor` instead of
+#: integrating them (``--precession-regressor``).
+PRECESSION_REGRESSOR = None
 JAX_CHUNK = 50
 
 #: Low-frequency floor for the full-waveform validation, in Hz. Below the
@@ -513,7 +521,10 @@ def optimised_mismatches(validator: ValidateModel, parameter_set):
     predicted_waveforms = validator.merger_referenced(
         validator.predicted_waveforms(parameter_set)
     )
-    return validator.mismatch_array(true_waveforms, predicted_waveforms), parameter_set
+    return (
+        validator.mismatch_array(true_waveforms, predicted_waveforms, disable_tqdm=True),
+        parameter_set,
+    )
 
 
 def per_mode_mismatches(model: Model) -> dict:
@@ -1015,7 +1026,7 @@ def twisted_mismatch_vs_power_by_mode(
 
     print("  surrogate: JAX predictor, one co-precessing multipole at a time")
     surrogate = {
-        key: jax_strains(jax.jit(precessing.jax_predict(modes=[key])), params, antennas, frequencies)
+        key: jax_strains(jax.jit(precessing.jax_predict(modes=[key], precession_regressor=PRECESSION_REGRESSOR)), params, antennas, frequencies)
         for key in tqdm(keys, unit="multipole")
     }
 
@@ -1197,7 +1208,7 @@ def precessing_full_waveform_mismatches(model: Model, n_waveforms: int) -> tuple
         binary.reference_phase = precessing.teob_reference_phase(binary, *run["start"])
         params.append(binary)
     strains = jax_strains(
-        jax.jit(precessing.jax_predict()), params, [binary[3] for binary, _ in kept],
+        jax.jit(precessing.jax_predict(precession_regressor=PRECESSION_REGRESSOR)), params, [binary[3] for binary, _ in kept],
         frequencies,
     )
 
@@ -1909,7 +1920,17 @@ if __name__ == "__main__":
             "couple of hundred is enough to compare two models' medians"
         ),
     )
+    parser.add_argument(
+        "--precession-regressor",
+        default=None,
+        help="a PrecessionRegressor (.joblib) giving the precession angles, instead of integrating them",
+    )
     args = parser.parse_args()
+
+    if args.precession_regressor is not None:
+        from mlgw_bns.precession_regression import PrecessionRegressor
+
+        PRECESSION_REGRESSOR = PrecessionRegressor.load(args.precession_regressor)
 
     if args.n_mismatches is not None:
         N_MISMATCH_WAVEFORMS = args.n_mismatches

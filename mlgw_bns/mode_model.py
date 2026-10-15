@@ -827,12 +827,10 @@ class ModeModel:
             filename_nn: Union[IO[bytes], str]
 
             stream_meta, h5_source, filename_nn = streams
-            ignore_warnings = True
         else:
             stream_meta = None
             h5_source = self.filename_arrays
             filename_nn = self.filename_nn
-            ignore_warnings = False
 
         # Read-only open: supports many parallel workers (ProcessPool) on the same
         # file. Append mode ("a") takes a write lock and fails on NFS / multi-proc.
@@ -841,7 +839,7 @@ class ModeModel:
             self.downsampling_indices = DownsamplingIndices.from_file(file_arrays)
             self.pca_data = PrincipalComponentData.from_file(file_arrays)
             self.training_parameters = ParameterSet.from_file(
-                file_arrays, ignore_warnings=ignore_warnings
+                file_arrays, ignore_warnings=True
             )
             if self.downsampling_indices is None or self.pca_data is None:
                 raise FileNotFoundError
@@ -849,7 +847,7 @@ class ModeModel:
             self.dataset = self._make_dataset()
 
             self.training_dataset = Residuals.from_file(
-                file_arrays, ignore_warnings=ignore_warnings
+                file_arrays, ignore_warnings=True
             )
 
         try:
