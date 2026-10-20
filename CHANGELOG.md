@@ -259,8 +259,8 @@ loaded, and the waveforms are referenced differently in time and phase.
     (`mlgw_bns.batched_precession`) is a pure JAX function of `N` binaries,
     which can be jitted, vmapped and differentiated. It integrates the
     precession against the orbital frequency with fixed DOP853 steps and
-    matches `PrecessingModel.predict_numpy` to mismatches of 1e-11--3e-10; ~75 ms
-    a waveform alone, ~20 ms in a batch of 64 (CPU), against ~20 s for the
+    matches `PrecessingModel.predict_numpy` to mismatches of 1e-11--3e-10; ~20 ms
+    a waveform, alone or in a batch of 64 (CPU), against ~25 s for the
     numpy path and ~0.13 s for TEOBResumS. `PrecessingModel.jax_predict_modes`
     (`batched_precession.precessing_mode_components`) returns the
     co-precessing multipoles and their twist coefficients separately, for
