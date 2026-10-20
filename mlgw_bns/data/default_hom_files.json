@@ -1,12 +1,12 @@
 {
-  "url": "https://github.com/jacopok/mlgw_bns/releases/download/default_hom-interim/",
+  "url": "https://github.com/jacopok/mlgw_bns/releases/download/default_hom-v2.0.0/",
   "files": {
-    "default_hom_l2_m1_nn.pkl": "81b86513fadf24d3ca840fa7c909c943a5c6083edb1dbbf4369c8cb26d4457f5",
-    "default_hom_l2_m2_nn.pkl": "ef9342c98e88ddfa7a4d6b28e5e082d6fe9585540351735e63a0bb358706669e",
-    "default_hom_l3_m1_nn.pkl": "ab24626dd5cc38f2d1efd2f7b47f9aae099a498f9dea6a7d2f637d2f3de3e8ba",
-    "default_hom_l3_m2_nn.pkl": "0786b372373f8bfc2dead492b7d0724f9bf8ffeb2dcf8f4ca9f09f1561d33c70",
-    "default_hom_l3_m3_nn.pkl": "0b01b416e2bde9570fc4e4c941d15d6ec93990a57c3dbb78f6dbc4d89455c71a",
-    "default_hom_l4_m3_nn.pkl": "81207ce9f083e2376c17f0eb698ecba3504c11defb8ba8c093fce652059563da",
-    "default_hom_l4_m4_nn.pkl": "1cc523c6681582b26c0f179afdb4755752d4f5c85646ecd141ee9f97182294fb"
+    "default_hom_l2_m1_nn.pkl": "c10538b0e522a3cde79ac18ad8894c4fb459570f114360f7b517f6e6cee003b9",
+    "default_hom_l2_m2_nn.pkl": "87afb1d17958dcdd4c095050ec8557c5ad17d69ab0d3b97738d8f8b4a81f9a9a",
+    "default_hom_l3_m1_nn.pkl": "f3ba8f1a48f1ee830c50b870febbc6e6d316b9e6cfc53381dc660be14d486a4c",
+    "default_hom_l3_m2_nn.pkl": "0e7211db2fc360280e1e3f1975359a0bc04e55ad118741997b3a6b4c8605e602",
+    "default_hom_l3_m3_nn.pkl": "6f72df17fb193050ac29fd34b5d0c4cbf8f9b3a8513cc311dd53fc9edd1686b8",
+    "default_hom_l4_m3_nn.pkl": "38283abff12fbf73b6703d5005c5a9e68269ea006a1387aa103dbb9e2f89bd4e",
+    "default_hom_l4_m4_nn.pkl": "9ca12567890993c5f94f569ca04cc091d18cacf63c79a50853b4b83ea3e18b10"
   }
 }

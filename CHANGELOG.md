@@ -82,19 +82,31 @@ loaded, and the waveforms are referenced differently in time and phase.
 - `Dataset.generate_residuals` has no `flatten_phase` argument: the
     residuals of a single mode are referenced to their own value and slope
     at `f0`. `PrincipalComponentTraining` takes no predictors.
-- The packaged `default_hom` model is an **interim** one, trained with the
-    public TEOBResumS (tidal deformabilities up to 5000) on 8192 waveforms,
-    in the new format; it is to be replaced by a retrain before release.
-    Against the same TEOBResumS (16 binaries, total mass 2.8, inclination
-    1), the full-waveform mismatch maximised over time and phase is 6.8e-8
-    median and 4.0e-6 worst (1.5--3.7e-7 median at total masses 2.2--3.6).
-    With nothing maximised --- the model's own merger time and coalescence
-    phase --- it is 1.1e-3 median and 3.7e-2 worst: over 64 held-out
-    binaries the merger time agrees with TEOBResumS's to 2.4e-5 s and the
-    coalescence phase to 0.13 rad (90th percentiles;
-    `visualization/phase_reference_study.py merger`). These are not
-    comparable with the 1.0 model's test values, which were measured
-    against a different TEOBResumS than it was trained with.
+- **Two pretrained models are shipped** (`MODELS_AVAILABLE`), both
+    retrained in the new format with `KernelRidgeNetwork` regressors on
+    16384 waveforms from the TEOBResumS fork, with the same ranges of
+    mass, mass ratio and spins as before:
+
+    | model | tidal deformabilities | full-waveform mismatch, median / 90% | merger time error, median / 90% |
+    |-------|-----------------------|--------------------------------------|---------------------------------|
+    | `default_hom` (the default) | 5--2000 | 2.5e-8 / 4.6e-7 | 1.4 / 8.7 us |
+    | `default_hom_lambda12000` | 5--12000 | 9.1e-7 / 9.8e-6 | 36 / 132 us |
+
+    (mismatches optimised over time and phase on 16384 held-out waveforms,
+    `visualization/modes_scale.py`; merger-time errors against TEOBResumS
+    on 96 binaries below 2000 and 5000 respectively,
+    `visualization/merger_reference_by_size.py`). At the same number of
+    waveforms, a narrower range of tidal deformabilities is sampled more
+    densely, and the merger time and coalescence phase the model predicts
+    are what this limits (`visualization/merger_reference_range.py`).
+    Kernel ridge regression at 16384 waveforms is fast to evaluate, which
+    is why a narrower range rather than a larger training set is shipped.
+    Load the wide one with
+    `Model.default_for_testing("default_hom_lambda12000")`. The regressor
+    files of a model are those named `<model>_l<l>_m<m>_nn.pkl`, so that
+    one model's name can prefix another's. These are not comparable with
+    the 1.0 model's test values, which were measured against a different
+    TEOBResumS than it was trained with.
 
 - `KernelRidgeNetwork` chooses its regularization per principal component
     (`Hyperparameters.kernel_alpha_selection = "loo"`, the new default): each

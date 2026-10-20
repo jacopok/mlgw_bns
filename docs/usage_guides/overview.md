@@ -115,16 +115,22 @@ the band), which is the right one only for the $(2,2)$.
 
 ### The parameter ranges for a new model
 
-These may change as the package is updated. For the pretrained model shipped
-with the package the current ranges are
+These may change as the package is updated. For the default pretrained
+model shipped with the package, `default_hom`, the current ranges are
 
 - `total_mass`: between 2 and 4 solar masses
 - `mass_ratio`: between 1 and 3
-- `lambda_1` (tidal polarizability of the larger star): between 5 and 12000
-- `lambda_2`: between 5 and 12000
+- `lambda_1` (tidal polarizability of the larger star): between 5 and 2000
+- `lambda_2`: between 5 and 2000
 - `chi_1` (aligned spin of the larger star): between -0.5 and 0.5
 - `chi_2`: between -0.5 and 0.5
 - frequencies: between 5 and 2048 Hz
+
+The other one, `default_hom_lambda12000`
+(`Model.default_for_testing("default_hom_lambda12000")`), covers tidal
+polarizabilities up to 12000 with the same training-set size, so with less
+accurate waveforms: its median mismatch is ~40 times higher, and its merger
+time ~25 times less accurate (tens of microseconds).
 
 A freshly-created `Model` uses narrower defaults instead (`lambda_1` and
 `lambda_2` between 5 and 5000), set by
@@ -136,7 +142,7 @@ The ranges actually in effect can be checked, once a `Model` object is
 initialized as described before, by looking at the ranges of any of its modes:
 ```python
 >>> print(model.mode_models[Mode(2, 2)].parameter_ranges)
-ParameterRanges(mass_range=(2.0, 4.0), q_range=(1.0, 3.0), lambda1_range=(5.0, 12000.0), lambda2_range=(5.0, 12000.0), chi1_range=(-0.5, 0.5), chi2_range=(-0.5, 0.5))
+ParameterRanges(mass_range=(2.0, 4.0), q_range=(1.0, 3.0), lambda1_range=(5.0, 2000.0), lambda2_range=(5.0, 2000.0), chi1_range=(-0.5, 0.5), chi2_range=(-0.5, 0.5))
 ```
 for the first six,
 ```python

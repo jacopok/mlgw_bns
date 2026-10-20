@@ -15,21 +15,13 @@ from mlgw_bns.model import (
 from mlgw_bns.mode_model import ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 
-# The packaged default model is trained with lambda up to 12000, but the
-# PyPI-released TEOBResumS (unlike the locally patched one) crashes on
-# root-bracketing for some high-q, high-Lambda combinations. These tests
-# only need ground-truth EOB waveforms to validate against, so they draw
-# from a narrower, crash-free slice of the model's own parameter space
-# rather than its full training range.
-REDUCED_TEOB_SAFE_RANGES = ParameterRanges(
-    q_range=(1.0, 3.0), lambda1_range=(5.0, 5000.0), lambda2_range=(5.0, 5000.0)
-)
-
-
 def reduced_range_parameter_generator(model, seed):
+    """Parameters over the model's own range (the TEOBResumS fork of the
+    development dependencies, unlike the public release, runs on all of
+    it)."""
     dataset = model.dataset
     return dataset.parameter_generator_class(
-        parameter_ranges=REDUCED_TEOB_SAFE_RANGES, dataset=dataset, seed=seed
+        parameter_ranges=model.parameter_ranges, dataset=dataset, seed=seed
     )
 
 

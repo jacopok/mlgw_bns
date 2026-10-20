@@ -23,7 +23,7 @@ release)::
 
     python -m mlgw_bns.model_files manifest default_hom \
         --url https://github.com/jacopok/mlgw_bns/releases/download/default_hom-v2.0.0/
-    gh release create default_hom-v2.0.0 mlgw_bns/data/default_hom_*_nn.pkl
+    gh release create default_hom-v2.0.0 mlgw_bns/data/default_hom*_nn.pkl
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Optional
 
 #: the files of a model that are downloaded instead of shipped
-HEAVY_PATTERN = "{model}_*_nn.pkl"
+HEAVY_PATTERN = "{model}_l[0-9]_m[0-9]_nn.pkl"
 
 
 def _data() -> Path:

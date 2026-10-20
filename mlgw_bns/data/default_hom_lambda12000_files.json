@@ -1,0 +1,12 @@
+{
+  "url": "https://github.com/jacopok/mlgw_bns/releases/download/default_hom-v2.0.0/",
+  "files": {
+    "default_hom_lambda12000_l2_m1_nn.pkl": "1f2bf003c1d91e1b8998fea5de77ca6915bc80151a8206a36df5746d60a30fd8",
+    "default_hom_lambda12000_l2_m2_nn.pkl": "dfad9f409d600790960010ed66dc5130173c484da3550db84c33a12edcaf6e87",
+    "default_hom_lambda12000_l3_m1_nn.pkl": "0457097fd89879df20d7d8f03e6e10f137cc766d7590cd9e297eb870883fd143",
+    "default_hom_lambda12000_l3_m2_nn.pkl": "9e8be41d0c5f20109deaa28a6a149d1a0faa4b1094dad83ab2e89bc6a9889554",
+    "default_hom_lambda12000_l3_m3_nn.pkl": "b34f9f4d3b395180c97b73058cec83d3ea2ee9ff3efac7a02634d7924a61629a",
+    "default_hom_lambda12000_l4_m3_nn.pkl": "e944d7f8668824685c4a174c01d6e1ff1d29f1a60a890d0e2dc1a348867500c3",
+    "default_hom_lambda12000_l4_m4_nn.pkl": "b6b6dd3bd8bccbd2a53abea91bd4911c7c2d6c2fb17f115611235ffa2a2c931d"
+  }
+}

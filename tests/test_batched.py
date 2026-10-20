@@ -24,7 +24,7 @@ FREQUENCIES = np.geomspace(1.5, 3000.0, 240)
 SINGLE_ROW_RTOL = 1e-7
 
 
-def random_rows(n, seed, lambda_max=5000.0):
+def random_rows(n, seed, lambda_max=2000.0):
     rng = np.random.default_rng(seed)
     intrinsic = np.column_stack(
         [
@@ -302,9 +302,7 @@ def test_mode_subset_model(default_model):
 
 
 def test_matches_teobresums(default_model):
-    """The batched modes against the EOB ground truth, with tidal
-    deformabilities up to 5000 (the public TEOBResumS release fails on
-    some higher ones)."""
+    """The batched modes against the EOB ground truth."""
     from mlgw_bns.model_validation import ValidateModel
 
     validator = ValidateModel(default_model.mode_models[Mode(2, 2)])

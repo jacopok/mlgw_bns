@@ -72,7 +72,7 @@ if TYPE_CHECKING:
 PRETRAINED_MODEL_FOLDER = "data/"
 
 #: Names of the pretrained models shipped with the package.
-MODELS_AVAILABLE = ["default_hom"]
+MODELS_AVAILABLE = ["default_hom", "default_hom_lambda12000"]
 
 #: Modes covered by the pretrained models.
 DEFAULT_MODES = [
