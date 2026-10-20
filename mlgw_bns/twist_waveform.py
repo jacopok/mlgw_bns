@@ -1,4 +1,3 @@
-#!/usr/bin/python3
 """
 Standalone reproduction of the TEOBResumS waveform "twisting" procedure.
 
@@ -15,9 +14,8 @@ with the D-matrix built out of Wigner-d functions d^l_{m,n}(beta) and the
 usual m=<0 symmetry of the co-precessing multipoles,
 H_{l,-n} = (-1)^l H_{l,n}^*.
 
-This script reimplements, line for line, the algebra of:
+This module reimplements, line for line, the algebra of:
 
-  - wigner_d_function()   in C/src/SpecialFuns.c
   - rmap_twist()          in C/src/TEOBResumSUtils.c
   - twist_hlm_TD()        in C/src/TEOBResumSWaveform.c
   - compute_hpc()         in C/src/TEOBResumSWaveform.c  (bonus: h+, hx)
@@ -33,63 +31,27 @@ EOBPars->spin_flx == SPIN_FLX_PN (default) branch:
   - eob_mrg_momg()        in C/src/TEOBResumSFits.c       (stop frequency)
 
 
+(The Wigner d-function and the spin-weighted spherical harmonics of
+C/src/SpecialFuns.c live in mlgw_bns.special_func, which is shared with
+the rest of the package.)
+
 Convention (matches the C code throughout):
     h_{l,m} = A_{l,m} * exp(-i * phi_{l,m}),   phi_{l,m} increasing in time.
+
+For the surrogate-facing, frequency-domain use of all this --- taking
+the aligned-spin mlgw_bns multipoles as the co-precessing ones and
+twisting them into a full precessing waveform --- see
+mlgw_bns.precessing_model.
 """
 
 import math
+
 import numpy as np
-from scipy.integrate import solve_ivp, cumulative_trapezoid
+from scipy.integrate import solve_ivp  # type: ignore
+
+from .special_func import spinsphericalharm, wigner_d_function
 
 _EULER_GAMMA = 0.5772156649015328606065121  # matches EulerGamma in TEOBResumS.h
-
-
-# ---------------------------------------------------------------------------
-# Special functions (C/src/SpecialFuns.c)
-# ---------------------------------------------------------------------------
-
-def fact(n):
-    """Factorial, n!. Mirrors fact() in C/src/SpecialFuns.c."""
-    if n < 0:
-        raise ValueError("computing a negative factorial")
-    return math.factorial(n)
-
-
-def wigner_d_function(l, m, s, angle):
-    """
-    Wigner d-function d^l_{m,s}(angle), Eq. (II.8) of arXiv:0709.0093.
-    Mirrors wigner_d_function() in C/src/SpecialFuns.c exactly.
-
-    `angle` may be a scalar or a numpy array (radians).
-    """
-    angle = np.asarray(angle, dtype=float)
-    costheta = np.cos(angle * 0.5)
-    sintheta = np.sin(angle * 0.5)
-    norm = math.sqrt(fact(l + m) * fact(l - m) * fact(l + s) * fact(l - s))
-    ki = max(0, m - s)
-    kf = min(l + m, l - s)
-    dWig = np.zeros_like(costheta)
-    for k in range(ki, kf + 1):
-        div = 1.0 / (fact(k) * fact(l + m - k) * fact(l - s - k) * fact(s - m + k))
-        dWig = dWig + div * ((-1.0) ** k) * (costheta ** (2 * l + m - s - 2 * k)) \
-                                          * (sintheta ** (2 * k + s - m))
-    return norm * dWig
-
-
-def spin_weighted_spherical_harmonic(s, l, m, phi, iota):
-    """
-    Spin-weighted spherical harmonic _sY_lm(phi, iota), Eq. (II.7) of
-    arXiv:0709.0093. Mirrors spinsphericalharm() in C/src/SpecialFuns.c.
-
-    Returns (real part, imaginary part).
-    """
-    if l < 0 or m < -l or m > l:
-        raise ValueError("wrong (l,m) inside spin_weighted_spherical_harmonic")
-    c = ((-1.0) ** (-s)) * math.sqrt((2.0 * l + 1.0) / (4.0 * math.pi))
-    dWigner = c * wigner_d_function(l, m, -s, iota)
-    rY = math.cos(m * phi) * dWigner
-    iY = math.sin(m * phi) * dWigner
-    return rY, iY
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +74,8 @@ def complex_to_amp_phase(h):
 # The twist itself  (C/src/TEOBResumSWaveform.c: twist_hlm_TD)
 # ---------------------------------------------------------------------------
 
-def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial):
+def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial,
+                include_positive_n=True, include_negative_n=True, xp=np):
     """
     Twist co-precessing multipoles into the inertial frame.
 
@@ -122,11 +85,23 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial):
         Co-precessing multipoles for n = 1 .. l (m>0 only; the m<0
         co-precessing multipoles are reconstructed from the standard
         symmetry H_{l,-n} = (-1)^l H_{l,n}^*, exactly as the C code does).
-        h = A*exp(-i*phi) convention. All arrays share the same time grid.
+        h = A*exp(-i*phi) convention. All arrays share the same grid.
     alpha, beta, gamma : ndarray
-        Euler angles (radians) on that same time grid.
+        Euler angles (radians) on that same grid.
     lm_inertial : iterable of (l, m), m > 0
         Inertial-frame multipoles to produce.
+    include_positive_n, include_negative_n : bool
+        Whether to include, in the sum over the co-precessing index n,
+        the n>0 multipoles and their n<0 partners respectively. Both
+        default to True, which is what the time-domain twist of the C
+        code does. Splitting the two halves apart is what lets the same
+        routine be used in the frequency domain, where the n>0 and n<0
+        co-precessing multipoles have their support at opposite signs of
+        the frequency and so must be twisted separately --- see
+        :func:`~mlgw_bns.precessing_model.twist_modes_frequency_domain`.
+    xp : module
+        Array namespace, ``numpy`` (default) or ``jax.numpy``; the arrays
+        may then have any (common) shape.
 
     Returns
     -------
@@ -134,10 +109,9 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial):
         Twisted inertial multipoles for m>0, m<0 (keyed by the negative m)
         and m=0 respectively, h = A*exp(-i*phi) convention.
     """
-    alpha = np.asarray(alpha, dtype=float)
-    beta = np.asarray(beta, dtype=float)
-    gamma = np.asarray(gamma, dtype=float)
-    size = alpha.size
+    alpha = xp.asarray(alpha, dtype=float)
+    beta = xp.asarray(beta, dtype=float)
+    gamma = xp.asarray(gamma, dtype=float)
 
     hTlm, hTlm_neg, hTl0 = {}, {}, {}
     m0_done_for_ell = set()
@@ -149,8 +123,8 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial):
             if q == 2 and ell in m0_done_for_ell:
                 continue
 
-            sumr = np.zeros(size)
-            sumi = np.zeros(size)
+            sumr = xp.zeros_like(alpha)
+            sumi = xp.zeros_like(alpha)
 
             for n in range(1, ell + 1):
                 if (ell, n) not in hlm_coprec:
@@ -158,25 +132,27 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial):
 
                 real, imag = hlm_coprec[(ell, n)].real, hlm_coprec[(ell, n)].imag
 
-                cosng = np.cos(n * gamma)
-                sinng = np.sin(n * gamma)
+                cosng = xp.cos(n * gamma)
+                sinng = xp.sin(n * gamma)
 
                 # d^l_{n,emm}(-beta) and d^l_{-n,emm}(-beta)
-                dl_mn = wigner_d_function(ell, n, emm, -beta)
-                dl_mnn = wigner_d_function(ell, -n, emm, -beta)
+                dl_mn = wigner_d_function(ell, n, emm, -beta, xp=xp)
+                dl_mnn = wigner_d_function(ell, -n, emm, -beta, xp=xp)
 
                 # n>0 co-precessing multipole
                 hln_real_p, hln_imag_p = real, imag
                 # n<0 co-precessing multipole via H_{l,-n} = (-1)^l H_{l,n}^*
                 hln_real_n, hln_imag_n = eps * real, -eps * imag
 
-                sumr += dl_mn * (cosng * hln_real_p - sinng * hln_imag_p) \
-                      + dl_mnn * (cosng * hln_real_n + sinng * hln_imag_n)
-                sumi += dl_mn * (sinng * hln_real_p + cosng * hln_imag_p) \
-                      + dl_mnn * (-sinng * hln_real_n + cosng * hln_imag_n)
+                if include_positive_n:
+                    sumr += dl_mn * (cosng * hln_real_p - sinng * hln_imag_p)
+                    sumi += dl_mn * (sinng * hln_real_p + cosng * hln_imag_p)
+                if include_negative_n:
+                    sumr += dl_mnn * (cosng * hln_real_n + sinng * hln_imag_n)
+                    sumi += dl_mnn * (-sinng * hln_real_n + cosng * hln_imag_n)
 
-            hTlm_real = sumr * np.cos(emm * alpha) + sumi * np.sin(emm * alpha)
-            hTlm_imag = -sumr * np.sin(emm * alpha) + sumi * np.cos(emm * alpha)
+            hTlm_real = sumr * xp.cos(emm * alpha) + sumi * xp.sin(emm * alpha)
+            hTlm_imag = -sumr * xp.sin(emm * alpha) + sumi * xp.cos(emm * alpha)
             h_out = hTlm_real + 1j * hTlm_imag
 
             if q == 0:
@@ -197,22 +173,23 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial):
 #  C/src/TEOBResumSFits.c: eob_mrg_momg)
 # ---------------------------------------------------------------------------
 
-def nu_to_X1(nu):
+def nu_to_X1(nu, xp=np):
     """Mass fraction M1/M from the symmetric mass ratio nu. Mirrors
-    nu_to_X1() in C/src/TEOBResumSUtils.c."""
-    if nu < 0.0 or nu > 0.25:
+    nu_to_X1() in C/src/TEOBResumSUtils.c. ``xp`` is the array namespace,
+    ``numpy`` (default) or ``jax.numpy``, as for the functions below."""
+    if xp is np and np.any((np.asarray(nu) < 0.0) | (np.asarray(nu) > 0.25)):
         raise ValueError("symmetric mass ratio must be 0 <= nu <= 1/4")
-    return 0.5 * (1.0 + math.sqrt(1.0 - 4.0 * nu))
+    return 0.5 * (1.0 + xp.sqrt(1.0 - 4.0 * nu))
 
 
-def eob_mrg_momg(nu, X1, X2, chi1, chi2):
+def eob_mrg_momg(nu, X1, X2, chi1, chi2, xp=np):
     """
     NR fit for M*Omega_orb at merger. Mirrors eob_mrg_momg() in
     C/src/TEOBResumSFits.c. `chi1`, `chi2` are the (z-component,
     dimensionless) spins of the two bodies.
     """
     nu2 = nu * nu
-    X12 = math.sqrt(1.0 - 4.0 * nu)
+    X12 = xp.sqrt(1.0 - 4.0 * nu)
     a1 = X1 * chi1
     a2 = X2 * chi2
     a0 = a1 + a2
@@ -226,64 +203,46 @@ def eob_mrg_momg(nu, X1, X2, chi1, chi2):
             / (1.0 + ((-0.83053 + b2 * X12) / (1.0 + b3 * X12)) * Shat))
 
 
-def alpha_initial_condition(q, chi1x, chi1y, chi1z, chi2x, chi2y, chi2z, f0):
+def alpha_initial_condition(q, chi1x, chi1y, chi1z, chi2x, chi2y, chi2z, f0, xp=np):
     """
     NLO initial value of the alpha (and, per the C code, gamma) Euler
     angle. Eq. A5 of arXiv:2111.03675. Mirrors alpha_initial_condition()
     in C/src/TEOBResumSDynamics.c. Geometric units (G=c=M=1); `f0` is the
     initial GW (2,2) frequency (so that the initial M*Omega_orb = pi*f0).
     """
-    v = (math.pi * f0) ** (1.0 / 3.0)
+    v = (np.pi * f0) ** (1.0 / 3.0)
     alpha_x_NLO = (-3.0 * q * (chi1y + chi2y * q) * (chi1z + chi2z * q) * v
                    + q * (chi1y * (4.0 + 3.0 * q) + chi2y * q * (3.0 + 4.0 * q)))
     alpha_y_NLO = (3.0 * q * (chi1x + chi2x * q) * (chi1z + chi2z * q) * v
                    - q * (chi1x * (4.0 + 3.0 * q) + chi2x * q * (3.0 + 4.0 * q)))
-    return math.atan2(alpha_y_NLO, alpha_x_NLO)
+    return xp.arctan2(alpha_y_NLO, alpha_x_NLO)
 
 
-def _pn_spin_precession_rhs(nu, q, y):
+def tidal_flux_coefficient(nu, lambda_1, lambda_2, xp=np):
     """
-    RHS of the PN spin-precession ODE system, EOBPars->spin_flx ==
-    SPIN_FLX_PN branch: N4LO spin-orbit + spin-spin precession of SA, SB,
-    Lhat (arXiv:2005.05338), and 3.5PN energy-balance frequency evolution
-    (Eq. A1 of arXiv:1307.4418). Mirrors the SPIN_FLX_PN branch of
-    eob_spin_dyn_rhs_PN() in C/src/TEOBResumSDynamics.c *exactly*,
-    including which higher-order (4PN+) coefficients it computes but never
-    actually adds to the sum (the C code's `for (i=2;i<8;i++)` loop caps
-    the frequency evolution at 3.5PN even though a[8..11]/b[8..11] and
-    beta8A/B are computed) -- those unused terms are simply omitted here.
+    Coefficient of the leading-order (5PN) tidal term TEOBResumS adds to
+    the PN dOmega/dt of its spin dynamics for a BNS: Eq. A21 of
+    arXiv:1402.5156, `a10_tidal` in eob_spin_dyn_rhs_PN(). `lambda_1` is
+    the heavier body's quadrupolar tidal polarizability (LambdaAl2).
+    """
+    MA = nu_to_X1(nu, xp)
+    MB = 1.0 - MA
+    return (6.0 * MA ** 4 * (12.0 - 11.0 * MA) * lambda_1
+            + 6.0 * MB ** 4 * (12.0 - 11.0 * MB) * lambda_2)
 
-    State y = [SAx,SAy,SAz, SBx,SBy,SBz, Lx,Ly,Lz, gamma, Momega].
-    (alpha, beta are NOT part of the integrated state here -- see the note
-    in integrate_pn_spin_precession().)
+
+def _spin_orbit_coefficients(nu, q, xp=np):
+    """
+    Coefficients of :math:`v^5`, :math:`v^7`, :math:`v^9` in the
+    frequencies at which the two spins precess about Lhat (the N4LO
+    spin-orbit part of Eq. (4) of arXiv:2005.05338), as ``(v5_cA, v5_cB,
+    v7_cA, v7_cB, v9_cA, v9_cB)``; ``q = MA / MB >= 1``. The frequency of
+    spin A is ``v5 v5_cA - 1.5 v6 (SA / q + SB).Lh + v7 v7_cA + v9 v9_cA``,
+    plus the spin-spin ``0.5 v6 SB``; see :func:`_pn_precession_derivatives`.
     """
     nu2, nu3 = nu * nu, nu ** 3
-    Pi = math.pi
-    Pi2 = Pi * Pi
-    oothree = 1.0 / 3.0
-    eleven_o_three = 11.0 / 3.0
-
-    MA = nu_to_X1(nu)
-    MB = 1.0 - MA
-    dm = MA - MB
-    ma_o_mb = MA / MB
-    mb_o_ma = MB / MA
-
-    SA = np.asarray(y[0:3], dtype=float)
-    SB = np.asarray(y[3:6], dtype=float)
-    Lh = np.asarray(y[6:9], dtype=float)
-    omg = y[10]
-
-    lnomg = math.log(omg)
-    v = omg ** oothree
-    v2, v3 = v * v, v ** 3
-    v5, v6, v7, v9 = v ** 5, v ** 6, v ** 7, v ** 9
-
-    qSAB = SA / q + SB
-    SABq = SA + SB * q
-    qSABLh = np.dot(qSAB, Lh)
-    SABqLh = np.dot(SABq, Lh)
-
+    MA = nu_to_X1(nu, xp)
+    dm = MA - (1.0 - MA)
     v5_cA = nu * (2.0 + 1.5 / q)
     v5_cB = nu * (2.0 + 1.5 * q)
     v7_cA = 0.5625 + 1.25 * nu - 0.041666666666666664 * nu2 + dm * (-0.5625 + 0.625 * nu)
@@ -292,63 +251,45 @@ def _pn_spin_precession_rhs(nu, q, y):
              + dm * (-0.84375 + 4.875 * nu - 0.15625 * nu2))
     v9_cB = (0.84375 + 0.1875 * nu - 3.28125 * nu2 - 0.02083333333333 * nu3
              - dm * (-0.84375 + 4.875 * nu - 0.15625 * nu2))
+    return v5_cA, v5_cB, v7_cA, v7_cB, v9_cA, v9_cB
 
-    csA = -0.25 * (3.0 + 1.0 / MA)
-    csB = -0.25 * (3.0 + 1.0 / MB)
-    csAL = -0.08333333333333333 * (1.0 + 27.0 / MA)
-    csBL = -0.08333333333333333 * (1.0 + 27.0 / MB)
 
-    L2PN_v2 = 1.5 + 0.1666666666666667 * nu
-    L2PN_v4 = 3.375 - 2.375 * nu + 0.041666666666666664 * nu2
+def orbital_angular_momentum(nu, omg):
+    r"""
+    The 2PN orbital angular momentum :math:`|L| / M^2` at the orbital
+    frequency ``omg`` :math:`= M \Omega`: :math:`\nu / v` times the
+    ``L2PN`` factor that Eq. (4c) of arXiv:2005.05338 divides by.
+    """
+    v = omg ** (1.0 / 3.0)
+    return nu / v * _orbital_angular_momentum_factor(nu, v)
+
+
+def _orbital_angular_momentum_factor(nu, v):
+    """L2PN: the 2PN orbital angular momentum in units of the Newtonian nu / v."""
+    v2 = v * v
     v4 = v2 * v2
+    return (1.0 + v2 * (1.5 + 0.1666666666666667 * nu)
+            + v4 * (3.375 - 2.375 * nu + 0.041666666666666664 * nu * nu))
 
-    OmgANLO  = (v5 * v5_cA - 1.5 * v6 * qSABLh) * Lh + 0.5 * v6 * SB
-    OmgBNLO  = (v5 * v5_cB - 1.5 * v6 * SABqLh) * Lh + 0.5 * v6 * SA
-    OmgANNLO = OmgANLO + v7 * v7_cA * Lh
-    OmgBNNLO = OmgBNLO + v7 * v7_cB * Lh
-    OmgAN4LO = OmgANNLO + v9 * v9_cA * Lh
-    OmgBN4LO = OmgBNNLO + v9 * v9_cB * Lh
 
-    SdotANLO  = np.cross(OmgANLO,  SA)
-    SdotANNLO = np.cross(OmgANNLO, SA)
-    SdotAN4LO = np.cross(OmgAN4LO, SA)
-    SdotBNLO  = np.cross(OmgBNLO,  SB)
-    SdotBNNLO = np.cross(OmgBNNLO, SB)
-    SdotBN4LO = np.cross(OmgBN4LO, SB)
+def _orbital_frequency_rate(nu, omg, SAdotLh, SBdotLh, SAdotSB, SA2, SB2,
+                            a10_tidal=0.0, xp=np):
+    """
+    The PN energy-balance dOmega/dt of the spin dynamics, and its 2PN
+    truncation: ``(domg, domg_leading)`` of :func:`_pn_precession_derivatives`,
+    from the scalar products of the spins and Lhat. ``omg`` may be an array.
+    """
+    nu2, nu3 = nu * nu, nu ** 3
+    Pi = math.pi
+    Pi2 = Pi * Pi
+    oothree = 1.0 / 3.0
+    eleven_o_three = 11.0 / 3.0
 
-    dSA = SdotAN4LO
-    dSB = SdotBN4LO
-
-    L2PN = 1.0 + v2 * L2PN_v2 + v4 * L2PN_v4
-    v_o_nu = v / nu
-
-    SALh = np.dot(SA, Lh)
-    SBLh = np.dot(SB, Lh)
-    dSBNLOSA  = np.dot(SdotBNLO,  SA)
-    dSANLOSB  = np.dot(SdotANLO,  SB)
-    dSANNLOLh = np.dot(SdotANNLO, Lh)
-    dSBNNLOLh = np.dot(SdotBNNLO, Lh)
-
-    # Eq. (4c) of arXiv:2005.05338
-    LNdotN4LO = (
-        v_o_nu * (-SdotAN4LO - SdotBN4LO)
-        - v3 * (csA * SdotANNLO + csB * SdotBNNLO)
-        - v3 * (csAL * (-v_o_nu * (SdotANLO + SdotBNLO) * SALh
-                         + Lh * (-v_o_nu * dSBNLOSA + dSANNLOLh))
-                + csBL * (-v_o_nu * (SdotBNLO + SdotANLO) * SBLh
-                          + Lh * (-v_o_nu * dSANLOSB + dSBNNLOLh)))
-    ) / L2PN
-
-    # Eq. (7) of arXiv:2005.05338 -- keep only the component perp. to Lh
-    LNdotN4LOLh = np.dot(LNdotN4LO, Lh)
-    dLh = LNdotN4LO - LNdotN4LOLh * Lh
-
-    # dot{gamma} = + dot{alpha} * cos(beta), with cos(beta) = Lh_z
-    div = Lh[0] ** 2 + Lh[1] ** 2
-    if div == 0.0:
-        dgamma = 0.0
-    else:
-        dgamma = Lh[2] * (Lh[0] * dLh[1] - Lh[1] * dLh[0]) / div
+    MA = nu_to_X1(nu, xp)
+    MB = 1.0 - MA
+    ma_o_mb = MA / MB
+    mb_o_ma = MB / MA
+    lnomg = xp.log(omg)
 
     # --- Eq. (A1) of arXiv:1307.4418: PN energy-balance domega/dt (3.5PN) ---
     sigma4_SASB      =  247.0 / (48.0 * nu)
@@ -380,11 +321,6 @@ def _pn_spin_precession_rhs(nu, q, y):
                   + nu * (451.0 / 48 * Pi2 - 56198689.0 / 217728) + nu2 * 541.0 / 896 - nu3 * 5605.0 / 2592)
     a7_nobeta  = -4415.0 / 4032 * Pi + 358675.0 / 6048 * Pi * nu + 91495.0 / 1512 * Pi * nu2
 
-    SAdotLh, SBdotLh = SALh, SBLh
-    SAdotSB = np.dot(SA, SB)
-    SA2 = np.dot(SA, SA)
-    SB2 = np.dot(SB, SB)
-
     sigma4 = (sigma4_SASB * SAdotSB + sigma4_SALh_SBLh * SAdotLh * SBdotLh
               + sigma4_SA2 * SA2 + sigma4_SALh2 * SAdotLh ** 2
               + sigma4_SB2 * SB2 + sigma4_SBLh2 * SBdotLh ** 2)
@@ -408,17 +344,228 @@ def _pn_spin_precession_rhs(nu, q, y):
     for i in range(2, 8):
         domg += (a[i] + b[i] * lnomg) * omg ** (i * oothree)
     domg += 1.0
+    domg += a10_tidal * omg ** (10.0 * oothree)
     domg *= a[0] * omg ** eleven_o_three
 
+    # Same sum truncated at 2PN (i = 2, 3, 4): Newtonian + 1PN + 1.5PN
+    # spin-orbit + 2PN spin-spin flux. See the docstring for why the
+    # frequency-domain integration divides by this rather than by domg.
+    domg_leading = 0.0
+    for i in (2, 3, 4):
+        domg_leading += (a[i] + b[i] * lnomg) * omg ** (i * oothree)
+    domg_leading += 1.0
+    domg_leading *= a[0] * omg ** eleven_o_three
+
+    return domg, domg_leading
+
+
+def _pn_precession_derivatives(nu, q, omg, SA, SB, Lh, a10_tidal=0.0, xp=np):
+    """
+    Core of the PN spin-precession ODE system, EOBPars->spin_flx ==
+    SPIN_FLX_PN branch: N4LO spin-orbit + spin-spin precession of SA, SB,
+    Lhat (arXiv:2005.05338), and 3.5PN energy-balance frequency evolution
+    (Eq. A1 of arXiv:1307.4418). Mirrors the SPIN_FLX_PN branch of
+    eob_spin_dyn_rhs_PN() in C/src/TEOBResumSDynamics.c *exactly*,
+    including which higher-order (4PN+) coefficients it computes but never
+    actually adds to the sum (the C code's `for (i=2;i<8;i++)` loop caps
+    the frequency evolution at 3.5PN even though a[8..11]/b[8..11] and
+    beta8A/B are computed) -- those unused terms are simply omitted here --
+    plus, for a BNS, the LO 5PN tidal term it does add (``a10_tidal``).
+
+    Parameters
+    ----------
+    nu, q : symmetric mass ratio and mass ratio MA/MB >= 1.
+    omg : orbital frequency M*Omega_orb.
+    SA, SB, Lh : length-3 arrays, the two spins and the unit orbital
+        angular momentum.
+    a10_tidal : float
+        See :func:`tidal_flux_coefficient`; the C code adds this LO 5PN
+        tidal term to the 3.5PN dOmega/dt whenever ``use_tidal`` is on,
+        i.e. for every BNS. Zero (the default) for black holes.
+    xp : module
+        Array namespace, ``numpy`` (default) or ``jax.numpy``. The
+        right-hand side is for one binary: the vectors have shape (3,).
+
+    Returns
+    -------
+    dSA, dSB, dLh : length-3 arrays -- the *time* derivatives dSA/dt etc.
+    dgamma : float -- dgamma/dt.
+    domg : float -- the full 3.5PN dOmega/dt.
+    domg_leading : float -- dOmega/dt truncated at 2PN, i.e. keeping only
+        the flux terms (Newtonian, 1PN, 1.5PN spin-orbit, 2PN spin-spin)
+        that enter the precession angles as functions of orbital
+        frequency at a PN order consistent with the N4LO precession
+        r.h.s. above. This is the denominator used when the system is
+        integrated against orbital frequency rather than time: dividing
+        by the *full* domg would drag the flux model's poorly-controlled
+        2.5-3.5PN behaviour -- the thing that makes alpha(t) -> alpha(f)
+        drift in the late inspiral -- back into alpha(Omega).
+    """
+    oothree = 1.0 / 3.0
+
+    MA = nu_to_X1(nu, xp)
+    MB = 1.0 - MA
+
+    SA = xp.asarray(SA, dtype=float)
+    SB = xp.asarray(SB, dtype=float)
+    Lh = xp.asarray(Lh, dtype=float)
+
+    v = omg ** oothree
+    v3 = v ** 3
+    v5, v6, v7, v9 = v ** 5, v ** 6, v ** 7, v ** 9
+
+    qSAB = SA / q + SB
+    SABq = SA + SB * q
+    qSABLh = xp.dot(qSAB, Lh)
+    SABqLh = xp.dot(SABq, Lh)
+
+    v5_cA, v5_cB, v7_cA, v7_cB, v9_cA, v9_cB = _spin_orbit_coefficients(nu, q, xp)
+
+    csA = -0.25 * (3.0 + 1.0 / MA)
+    csB = -0.25 * (3.0 + 1.0 / MB)
+    csAL = -0.08333333333333333 * (1.0 + 27.0 / MA)
+    csBL = -0.08333333333333333 * (1.0 + 27.0 / MB)
+
+    OmgANLO  = (v5 * v5_cA - 1.5 * v6 * qSABLh) * Lh + 0.5 * v6 * SB
+    OmgBNLO  = (v5 * v5_cB - 1.5 * v6 * SABqLh) * Lh + 0.5 * v6 * SA
+    OmgANNLO = OmgANLO + v7 * v7_cA * Lh
+    OmgBNNLO = OmgBNLO + v7 * v7_cB * Lh
+    OmgAN4LO = OmgANNLO + v9 * v9_cA * Lh
+    OmgBN4LO = OmgBNNLO + v9 * v9_cB * Lh
+
+    SdotANLO  = xp.cross(OmgANLO,  SA)
+    SdotANNLO = xp.cross(OmgANNLO, SA)
+    SdotAN4LO = xp.cross(OmgAN4LO, SA)
+    SdotBNLO  = xp.cross(OmgBNLO,  SB)
+    SdotBNNLO = xp.cross(OmgBNNLO, SB)
+    SdotBN4LO = xp.cross(OmgBN4LO, SB)
+
+    dSA = SdotAN4LO
+    dSB = SdotBN4LO
+
+    L2PN = _orbital_angular_momentum_factor(nu, v)
+    v_o_nu = v / nu
+
+    SALh = xp.dot(SA, Lh)
+    SBLh = xp.dot(SB, Lh)
+    dSBNLOSA  = xp.dot(SdotBNLO,  SA)
+    dSANLOSB  = xp.dot(SdotANLO,  SB)
+    dSANNLOLh = xp.dot(SdotANNLO, Lh)
+    dSBNNLOLh = xp.dot(SdotBNNLO, Lh)
+
+    # Eq. (4c) of arXiv:2005.05338
+    LNdotN4LO = (
+        v_o_nu * (-SdotAN4LO - SdotBN4LO)
+        - v3 * (csA * SdotANNLO + csB * SdotBNNLO)
+        - v3 * (csAL * (-v_o_nu * (SdotANLO + SdotBNLO) * SALh
+                         + Lh * (-v_o_nu * dSBNLOSA + dSANNLOLh))
+                + csBL * (-v_o_nu * (SdotBNLO + SdotANLO) * SBLh
+                          + Lh * (-v_o_nu * dSANLOSB + dSBNNLOLh)))
+    ) / L2PN
+
+    # Eq. (7) of arXiv:2005.05338 -- keep only the component perp. to Lh
+    LNdotN4LOLh = xp.dot(LNdotN4LO, Lh)
+    dLh = LNdotN4LO - LNdotN4LOLh * Lh
+
+    # dot{gamma} = + dot{alpha} * cos(beta), with cos(beta) = Lh_z
+    div = Lh[0] ** 2 + Lh[1] ** 2
+    if xp is np:
+        dgamma = 0.0 if div == 0.0 else Lh[2] * (Lh[0] * dLh[1] - Lh[1] * dLh[0]) / div
+    else:
+        on_axis = div == 0.0
+        dgamma = xp.where(
+            on_axis,
+            0.0,
+            Lh[2] * (Lh[0] * dLh[1] - Lh[1] * dLh[0]) / xp.where(on_axis, 1.0, div),
+        )
+
+    SAdotSB = xp.dot(SA, SB)
+    SA2 = xp.dot(SA, SA)
+    SB2 = xp.dot(SB, SB)
+    domg, domg_leading = _orbital_frequency_rate(
+        nu, omg, SALh, SBLh, SAdotSB, SA2, SB2, a10_tidal, xp=xp
+    )
+
+    return dSA, dSB, dLh, dgamma, domg, domg_leading
+
+
+def _pn_spin_precession_rhs(nu, q, y, a10_tidal=0.0):
+    """
+    Time-domain r.h.s. of the PN spin-precession system.
+
+    State y = [SAx,SAy,SAz, SBx,SBy,SBz, Lx,Ly,Lz, gamma, Momega].
+    (alpha, beta are NOT part of the integrated state here -- see the note
+    in integrate_pn_spin_precession().)
+    """
+    dSA, dSB, dLh, dgamma, domg, _ = _pn_precession_derivatives(
+        nu, q, y[10], y[0:3], y[3:6], y[6:9], a10_tidal
+    )
     return np.concatenate([dSA, dSB, dLh, [dgamma, domg]])
 
 
-def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step=None):
+def _pn_spin_precession_rhs_vs_frequency(nu, q, omg, y, omega_dot=None):
+    r"""
+    R.h.s. of the same system with the orbital frequency
+    :math:`M \Omega_{\rm orb}` as the independent variable instead of
+    time: :math:`\mathrm{d}y/\mathrm{d}\Omega = (\mathrm{d}y/\mathrm{d}t)
+    / \dot\Omega`, with :math:`\dot\Omega` truncated at 2PN
+    (``domg_leading``). This is the orbit-averaged / frequency-domain
+    formulation used by the ``precession`` package and by PhenomX's MSA:
+    the Euler angles come out as functions of orbital frequency directly,
+    with no dependence on the 2.5-3.5PN flux terms that make the
+    time-domain :math:`\alpha(t) \to \alpha(f)` map drift.
+
+    State y = [SAx,SAy,SAz, SBx,SBy,SBz, Lx,Ly,Lz, gamma, t]; the last
+    component integrates dt/dMomega = 1/omega_dot so the angles keep a
+    time axis. ``omega_dot`` is a callable Momega -> dMomega/dt; when
+    None the 2PN-truncated PN flux ``domg_leading`` is used.
+    """
+    dSA, dSB, dLh, dgamma, _, domg_leading = _pn_precession_derivatives(
+        nu, q, omg, y[0:3], y[3:6], y[6:9]
+    )
+    rate = domg_leading if omega_dot is None else float(omega_dot(omg))
+    inv = 1.0 / rate
+    return np.concatenate([dSA * inv, dSB * inv, dLh * inv, [dgamma * inv, inv]])
+
+
+def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step=None,
+                                 refinement=32, rtol=1.0e-9, atol=1.0e-11,
+                                 independent_variable="time", omega_dot=None,
+                                 f_start=None, lambdas=(0.0, 0.0)):
     """
     Integrate the closed PN spin-precession ODE system that TEOBResumS
     solves in eob_spin_dyn()/eob_spin_dyn_integrate() for
     EOBPars->use_spins == MODE_SPINS_GENERIC, EOBPars->project_spins == 0
     (the default) and EOBPars->spin_flx == SPIN_FLX_PN (the default).
+
+    ``independent_variable`` selects what the system is marched against:
+
+    * ``"time"`` (default) reproduces TEOBResumS' ``SPIN_FLX_PN`` branch
+      -- state ``[SA, SB, Lh, gamma, Momega]``, ``Momega`` advanced by
+      the 3.5PN energy-balance flux. The Euler angles are accurate as
+      functions of time, but the orbital frequency they end up labelled
+      with drifts from the true one through the late inspiral, because
+      the PN flux runs fast there. In the C code this is why, once the
+      spin dynamics reaches the EOB band, TEOBResumS stops using the PN
+      flux and drives ``Momega`` from the EOB dynamics instead (the
+      ``SPIN_FLX_EOB`` hand-off in ``eob_spin_dyn_integrate``). ``'t'``
+      in the returned dict is the integration time.
+    * ``"orbital_frequency"`` marches against ``Momega`` itself --
+      ``dy/dMomega = (dy/dt) / omega_dot``. This is what reproduces the
+      ``SPIN_FLX_EOB`` hand-off: pass ``omega_dot`` as a callable
+      ``Momega -> dMomega/dt`` taken from an accurate (EOB / surrogate)
+      ``(2,2)`` phase and the angles come out both integrated along and
+      labelled by the true orbital frequency. With ``omega_dot=None`` the
+      2PN-truncated PN flux ``domg_leading`` is used instead, which on
+      its own barely differs from the ``"time"`` result. ``'t'`` is
+      reconstructed by quadrature of ``dt/dMomega`` alongside the angles.
+
+    omega_dot : callable or None
+        Only used when ``independent_variable == "orbital_frequency"``.
+        ``omega_dot(Momega) -> dMomega/dt`` in geometric units; supplies
+        the orbital-frequency evolution the precession is marched along,
+        in place of the PN flux. Must be positive and defined over
+        ``[pi*f0, omg_stop]``.
 
     Note on alpha, beta: in the C code these are formally ODE state
     variables, but their r.h.s. is identically zero (see the "alpha and
@@ -436,14 +583,48 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
     chi1vec, chi2vec : length-3 sequences
         Dimensionless spin vectors of body 1 (mass fraction MA) and body 2
         (mass fraction MB).
-    f0 : initial GW (2,2) frequency, M*f0 in geometric units (so the
-         initial M*Omega_orb = pi*f0, matching EOBPars->initial_frequency).
+    f0 : reference GW (2,2) frequency, M*f0 in geometric units (so the
+         reference M*Omega_orb = pi*f0, matching EOBPars->initial_frequency):
+         where ``chi1vec``, ``chi2vec`` are given and Lhat = z.
+    lambdas : (float, float)
+        Quadrupolar tidal polarizabilities of bodies 1 and 2, entering the
+        ``"time"`` branch's dOmega/dt through the LO 5PN tidal term (see
+        :func:`tidal_flux_coefficient`), as in TEOBResumS for a BNS.
+        Leaving it out on a BNS makes Momega(t) run slow through the late
+        inspiral: the angles, labelled by Momega, drift from TEOBResumS'
+        by ~0.1 rad by 400 Hz.
+    f_start : float or None
+        GW (2,2) frequency, geometric units, to start the returned angles
+        from. When below ``f0`` the system is also integrated *backwards*
+        from the reference state down to it, as TEOBResumS does
+        (``eob_spin_dyn_integrate_backwards``) when its EOB dynamics
+        starts below ``initial_frequency``; the spins keep their meaning
+        at ``f0``. ``None`` (default) or ``>= f0``: start at ``f0``.
     t_max : safety cutoff on the integration time (geometric units, M=1).
+    refinement : int
+        Number of sub-intervals each accepted step of the integrator is
+        split into, using its dense output, before the angles are
+        returned. The integrator is accurate but takes long steps --- a
+        whole inspiral can be covered in a couple of hundred of them ---
+        and the returned arrays are meant to be *interpolated*, so the
+        grid has to resolve the precession, not merely carry it. Without
+        this the angles are perfectly accurate at the returned points
+        and visibly wrong between them. Costs only polynomial
+        evaluations, no extra right-hand sides.
+    rtol, atol : float
+        Tolerances passed to the integrator.
+    independent_variable : {"time", "orbital_frequency"}
+        What the system is marched against; see the discussion above.
+    omega_dot : callable or None
+        Orbital-frequency rate for the ``"orbital_frequency"`` branch;
+        see above.
 
     Returns
     -------
     dict with keys 't', 'alpha', 'beta', 'gamma', 'Momega', 'SA', 'SB', 'Lh'
-    (ndarrays; SA/SB/Lh have shape (N,3)).
+    (ndarrays; SA/SB/Lh have shape (N,3)). In the ``"orbital_frequency"``
+    branch ``'Momega'`` is the (exact) integration grid and ``'t'`` its
+    quadrature; in the ``"time"`` branch it is the reverse.
     """
     MA = nu_to_X1(nu)
     MB = 1.0 - MA
@@ -458,37 +639,88 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
     gamma0 = alpha_initial_condition(q, *chi1vec, *chi2vec, f0)  # == alpha0 in the C code
     Momg0 = math.pi * f0
 
-    y0 = np.concatenate([SA0, SB0, Lh0, [gamma0, Momg0]])
-
     omg_stop = 1.1 * eob_mrg_momg(nu, MA, MB, chi1vec[2], chi2vec[2])
+    max_step = max_step if max_step is not None else np.inf
 
-    def rhs(t, y):
-        return _pn_spin_precession_rhs(nu, q, y)
+    backwards = f_start is not None and f_start < f0
+    Momg_start = math.pi * f_start if backwards else None
 
-    def event_reach_merger(t, y):
-        return y[10] - omg_stop
-    event_reach_merger.terminal = True
-    event_reach_merger.direction = 1
+    if independent_variable == "time":
+        y0 = np.concatenate([SA0, SB0, Lh0, [gamma0, Momg0]])
 
-    def event_domega_negative(t, y):
-        return _pn_spin_precession_rhs(nu, q, y)[10]
-    event_domega_negative.terminal = True
-    event_domega_negative.direction = -1
+        a10_tidal = tidal_flux_coefficient(nu, *lambdas)
 
-    sol = solve_ivp(rhs, (0.0, t_max), y0, method="DOP853",
-                     rtol=1.0e-11, atol=1.0e-13,
-                     events=[event_reach_merger, event_domega_negative],
-                     max_step=(max_step if max_step is not None else np.inf))
+        def rhs(t, y):
+            return _pn_spin_precession_rhs(nu, q, y, a10_tidal)
 
-    if not sol.success:
-        raise RuntimeError(f"PN spin-precession integration failed: {sol.message}")
+        def event_reach_merger(t, y):
+            return y[10] - omg_stop
+        event_reach_merger.terminal = True
+        event_reach_merger.direction = 1
 
-    t = sol.t
-    SA, SB, Lh = sol.y[0:3].T, sol.y[3:6].T, sol.y[6:9].T
-    gamma, Momega = sol.y[9], sol.y[10]
+        def event_domega_negative(t, y):
+            return _pn_spin_precession_rhs(nu, q, y, a10_tidal)[10]
+        event_domega_negative.terminal = True
+        event_domega_negative.direction = -1
+
+        def event_reach_start(t, y):
+            return y[10] - Momg_start
+        event_reach_start.terminal = True
+
+        forward = ((0.0, t_max), [event_reach_merger, event_domega_negative])
+        backward = ((0.0, -t_max), [event_reach_start])
+        independent = None
+    elif independent_variable == "orbital_frequency":
+        y0 = np.concatenate([SA0, SB0, Lh0, [gamma0, 0.0]])
+
+        def rhs(omg, y):
+            return _pn_spin_precession_rhs_vs_frequency(nu, q, omg, y, omega_dot)
+
+        forward = ((Momg0, omg_stop), None)
+        backward = ((Momg0, Momg_start), None)
+        independent = "Momega"
+    else:
+        raise ValueError(
+            "independent_variable must be 'time' or 'orbital_frequency', "
+            f"got {independent_variable!r}"
+        )
+
+    def solve(span, events):
+        sol = solve_ivp(rhs, span, y0, method="DOP853", rtol=rtol, atol=atol,
+                        events=events, dense_output=True, max_step=max_step)
+        if not sol.success:
+            raise RuntimeError(
+                f"PN spin-precession integration failed: {sol.message}")
+        if refinement > 1 and sol.t.size > 1:
+            steps = np.diff(sol.t)[:, np.newaxis]
+            offsets = np.arange(refinement)[np.newaxis, :] / refinement
+            grid = np.append((sol.t[:-1, np.newaxis] + steps * offsets).ravel(),
+                             sol.t[-1])
+            return grid, sol.sol(grid)
+        return sol.t, sol.y
+
+    grid, y = solve(*forward)
+    if backwards:
+        # the backward leg runs from the reference point downwards: reverse
+        # it and drop its first sample, the reference point itself
+        grid_back, y_back = solve(*backward)
+        grid = np.concatenate([grid_back[:0:-1], grid])
+        y = np.concatenate([y_back[:, :0:-1], y], axis=1)
+
+    SA, SB, Lh = y[0:3].T, y[3:6].T, y[6:9].T
+    gamma = y[9]
+
+    if independent is None:
+        t, Momega = grid, y[10]
+    else:
+        t, Momega = y[10], grid
 
     alpha = np.arctan2(Lh[:, 1], Lh[:, 0])
     beta = np.arccos(np.clip(Lh[:, 2], -1.0, 1.0))
+    # alpha is undefined where Lhat = z exactly, at the reference point
+    # (atan2(0, 0) = 0): take the next sample's, as the C code does
+    reference = np.flatnonzero((Lh[:, 0] == 0.0) & (Lh[:, 1] == 0.0))
+    alpha[reference] = alpha[np.minimum(reference + 1, alpha.size - 1)]
 
     return {"t": t, "alpha": alpha, "beta": beta, "gamma": gamma,
             "Momega": Momega, "SA": SA, "SB": SB, "Lh": Lh}
@@ -501,10 +733,18 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
 
 def compute_hpc(hTlm, hTlm_neg, hTl0, phi, iota):
     """
-    Combine twisted inertial multipoles into h+, hx for a given reference
-    phase `phi` and inclination `iota`, mirroring compute_hpc() in the
+    Combine twisted inertial multipoles into h+, hx for a given azimuth
+    `phi` and inclination `iota`, mirroring compute_hpc() in the
     "generic spins" (precessing) branch: no +m/-m symmetry is assumed,
     m<0 and m=0 multipoles are used directly.
+
+    `phi` is the azimuth of the line of sight, entering the harmonics as
+    exp(i m phi). TEOBResumS parametrises the same freedom through its
+    `coalescence_angle` parameter, with phi = pi/2 - coalescence_angle,
+    so its default of 0 corresponds to phi = pi/2. With that
+    identification this function reproduces the C code's h+ and hx to
+    machine precision; see
+    visualization/validate_twist_against_teob.py.
 
     Returns h = h+ - i*hx as a complex ndarray.
     """
@@ -512,114 +752,20 @@ def compute_hpc(hTlm, hTlm_neg, hTl0, phi, iota):
     h = np.zeros(size, dtype=complex)
 
     for (l, m), hlm in hTlm.items():
-        rY, iY = spin_weighted_spherical_harmonic(-2, l, m, phi, iota)
+        rY, iY = spinsphericalharm(-2, l, m, phi, iota)
         Y = rY + 1j * iY
         h += hlm * Y
 
     for (l, mneg), hlm in hTlm_neg.items():
-        rY, iY = spin_weighted_spherical_harmonic(-2, l, mneg, phi, iota)
+        rY, iY = spinsphericalharm(-2, l, mneg, phi, iota)
         Y = rY + 1j * iY
         h += hlm * Y
 
     for (l, _), hlm in hTl0.items():
-        rY, iY = spin_weighted_spherical_harmonic(-2, l, 0, phi, iota)
+        rY, iY = spinsphericalharm(-2, l, 0, phi, iota)
         Y = rY + 1j * iY
         h += hlm * Y
 
-    # h = h+ - i*hx  ==  sumr - i*sumi  (see compute_hpc in the C code)
-    return h.real - 1j * h.imag
-
-
-# ---------------------------------------------------------------------------
-# Self-test
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-
-    t = np.linspace(0.0, 100.0, 2000)
-
-    # Synthetic co-precessing (2,2) and (2,1) multipoles.
-    amp22 = 1.0 - 0.2 * np.exp(-t / 50.0)
-    phi22 = 0.05 * t + 0.01 * t ** 2
-    amp21 = 0.1 * amp22
-    phi21 = phi22  # arbitrary toy relation
-
-    hlm_coprec = {
-        (2, 2): amp_phase_to_complex(amp22, phi22),
-        (2, 1): amp_phase_to_complex(amp21, phi21),
-    }
-
-    # --- Sanity check 1: beta = 0 must reduce the twist to a pure
-    #     z-rotation, i.e. amplitude unchanged and
-    #     phi_out = phi_in + m*(alpha-gamma). ---
-    alpha = 0.3 * np.sin(0.02 * t)
-    gamma = 0.2 * np.cos(0.03 * t)
-    beta = np.zeros_like(t)
-
-    hTlm, hTlm_neg, hTl0 = twist_modes(hlm_coprec, alpha, beta, gamma,
-                                        lm_inertial=[(2, 2), (2, 1)])
-
-    for (l, m) in [(2, 2), (2, 1)]:
-        a_in, p_in = amp22 if m == 2 else amp21, phi22 if m == 2 else phi21
-        a_out, p_out = complex_to_amp_phase(hTlm[(l, m)])
-        expected_phase = p_in + m * (alpha - gamma)
-        assert np.allclose(a_out, a_in, atol=1e-10), f"amplitude mismatch for mode {(l,m)}"
-        assert np.allclose(np.angle(np.exp(1j * (p_out - expected_phase))), 0.0, atol=1e-8), \
-            f"phase mismatch for mode {(l,m)}"
-    print("beta=0 sanity check passed.")
-
-    # --- Sanity check 2: a generic precession must conserve, at every
-    #     time, the total power sum_m |h_{l,m}|^2 across the twist,
-    #     since Wigner-D rotations are unitary. ---
-    beta = 0.4 + 0.1 * np.sin(0.05 * t)
-    hTlm, hTlm_neg, hTl0 = twist_modes(hlm_coprec, alpha, beta, gamma,
-                                        lm_inertial=[(2, 2), (2, 1)])
-
-    power_in = amp22 ** 2 + amp21 ** 2 \
-             + amp22 ** 2 + amp21 ** 2  # (2,2)&(2,-2), (2,1)&(2,-1) co-precessing partners
-    power_out = sum(np.abs(h) ** 2 for h in hTlm.values()) \
-              + sum(np.abs(h) ** 2 for h in hTlm_neg.values()) \
-              + sum(np.abs(h) ** 2 for h in hTl0.values())
-    assert np.allclose(power_in, power_out, rtol=1e-8), "power not conserved by the twist"
-    print("power-conservation sanity check passed.")
-
-    # --- h+, hx reconstruction demo ---
-    h = compute_hpc(hTlm, hTlm_neg, hTl0, phi=0.4, iota=0.7)
-    print(f"h+(t=0) = {h.real[0]:.6e},  hx(t=0) = {-h.imag[0]:.6e}")
-
-    # -----------------------------------------------------------------
-    # PN spin-precession dynamics
-    # -----------------------------------------------------------------
-
-    nu = 0.2222222222222222  # q = 2
-    f0 = 0.01                # M*f0
-
-    # --- Sanity check 3: zero spins must give a trivial, non-precessing
-    #     solution: Lhat stuck at (0,0,1) (beta==0) and gamma constant
-    #     for all time (no torque acts on it), throughout the inspiral. ---
-    sol0 = integrate_pn_spin_precession(nu, (0., 0., 0.), (0., 0., 0.), f0)
-    assert np.allclose(sol0["beta"], 0.0, atol=1e-12), "beta != 0 for a non-spinning binary"
-    assert np.allclose(sol0["Lh"], np.array([0., 0., 1.]), atol=1e-12), "Lhat drifted for a non-spinning binary"
-    assert np.allclose(sol0["gamma"], sol0["gamma"][0], atol=1e-12), "gamma is not constant for a non-spinning binary"
-    assert np.all(np.diff(sol0["Momega"]) > 0), "Momega is not monotonically increasing"
-    print(f"non-spinning PN sanity check passed "
-          f"(integrated to M*Omega = {sol0['Momega'][-1]:.4f} at t = {sol0['t'][-1]:.1f} M).")
-
-    # --- Full pipeline demo: PN precession -> Euler angles -> twist ->
-    #     h+, hx, for a generic precessing configuration. Uses a toy
-    #     (leading-order, non-EOB) co-precessing waveform model just to
-    #     exercise compute_hpc() end to end -- NOT a physical TEOBResumS
-    #     amplitude/phase model (see module docstring). ---
-    sol = integrate_pn_spin_precession(nu, (0.5, 0.3, 0.2), (-0.2, 0.1, 0.4), f0)
-    print(f"precessing PN sanity check: integrated {sol['t'].size} steps to "
-          f"M*Omega = {sol['Momega'][-1]:.4f} at t = {sol['t'][-1]:.1f} M, "
-          f"beta range = [{sol['beta'].min():.3f}, {sol['beta'].max():.3f}] rad.")
-
-    amp22_pn = 4.0 * nu * (sol["Momega"] * 2.0) ** (2.0 / 3.0)  # leading-order quadrupole amplitude
-    phi22_pn = 2.0 * cumulative_trapezoid(sol["Momega"], sol["t"], initial=0.0)
-    hlm_coprec_pn = {(2, 2): amp_phase_to_complex(amp22_pn, phi22_pn)}
-
-    hTlm, hTlm_neg, hTl0 = twist_modes(hlm_coprec_pn, sol["alpha"], sol["beta"], sol["gamma"],
-                                        lm_inertial=[(2, 2)])
-    h = compute_hpc(hTlm, hTlm_neg, hTl0, phi=0.0, iota=0.5)
-    print(f"full pipeline demo: |h(t=0)| = {abs(h[0]):.6e}, |h(t=-1)| = {abs(h[-1]):.6e}")
+    # compute_hpc() in the C code sets hplus = sumr and hcross = -sumi,
+    # so h+ - i*hx is the sum itself
+    return h

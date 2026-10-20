@@ -937,8 +937,8 @@ class Model:
         This is the one place where the per-mode
         :math:`A_{\ell m}(f), \phi_{\ell m}(f)` are gathered; the
         polarization builders (:meth:`_hpc_waveform`,
-        :meth:`_hpc_waveform_per_mode`, :meth:`get_teob_modes_dict`) all go
-        through it, so that they
+        :meth:`_hpc_waveform_per_mode`, :meth:`get_teob_modes_dict`,
+        :meth:`coprecessing_modes_dict`) all go through it, so that they
         cannot drift apart in their conventions.
 
         Parameters
@@ -1010,6 +1010,89 @@ class Model:
             phases_list.append(phase)
 
         return np.stack(amps_list), np.stack(phases_list)
+
+    def coprecessing_modes_dict(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        source: str = "surrogate",
+    ) -> dict[tuple[int, int], np.ndarray]:
+        r"""Per-mode frequency-domain multipoles, with no sky projection.
+
+        Returns the multipoles :math:`\tilde{h}_{\ell m}(f)` themselves
+        --- what :meth:`predict_modes_dict` returns *before* it is
+        weighted by :math:`{}_{-2}Y_{\ell m}(\iota, \varphi)`:
+
+        .. math::
+            \tilde{h}_{\ell m}(f) = \frac{1}{\eta}
+                A_{\ell m}(f) e^{i \phi_{\ell m}(f)} \,.
+
+        For an aligned-spin binary --- which is all this surrogate models
+        --- these *are* the co-precessing-frame multipoles, which is what
+        makes them the natural input to the precessing twist of
+        :mod:`~mlgw_bns.precessing_model`.
+
+        Only :math:`m > 0` multipoles are returned: with the
+        :math:`\tilde{h}(f) = \int h(t) e^{2 \pi i f t} \mathrm{d}t`
+        convention used throughout, the :math:`m < 0` multipoles of an
+        inspiralling binary have their support at :math:`f < 0` and so
+        vanish on the positive-frequency grid, being recoverable there
+        from :math:`h_{\ell, -m} = (-1)^\ell h_{\ell m}^*`.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate the multipoles, in Hz.
+        params : ParametersWithExtrinsic
+            Source parameters. The inclination it carries is *not* used.
+        source : str
+            ``"surrogate"`` (default), ``"post_newtonian"`` or ``"eob"``;
+            see :meth:`_mode_amplitudes_and_phases`.
+
+        Returns
+        -------
+        dict[tuple[int, int], np.ndarray]
+            Mapping ``(l, m) -> h_lm(f)``, one complex array per mode.
+        """
+        return {
+            key: amplitude * np.exp(1j * phase)
+            for key, (amplitude, phase) in self.coprecessing_amplitudes_and_phases(
+                frequencies, params, source=source
+            ).items()
+        }
+
+    def coprecessing_amplitudes_and_phases(
+        self,
+        frequencies: np.ndarray,
+        params: ParametersWithExtrinsic,
+        source: str = "surrogate",
+    ) -> dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]:
+        r"""The multipoles of :meth:`coprecessing_modes_dict`, as amplitude and phase.
+
+        :math:`A_{\ell m}(f) / \eta` and :math:`\phi_{\ell m}(f)`
+        separately. The phase is the model's own continuous one: on a
+        grid as sparse as the model's, recovering it from the complex
+        multipole with ``np.unwrap(np.angle(...))`` is aliased wherever
+        the phase advances by more than :math:`\pi` between samples ---
+        throughout the inspiral of a BNS.
+
+        Parameters are those of :meth:`coprecessing_modes_dict`.
+
+        Returns
+        -------
+        dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]
+            Mapping ``(l, m) -> (amplitude, phase)``.
+        """
+        amp_arr, phase_arr = self._mode_amplitudes_and_phases(
+            frequencies=frequencies,
+            params=params,
+            source=source,
+        )
+        eta = params.intrinsic(self.dataset).eta
+        return {
+            (mode.l, mode.m): (amp_arr[i] / eta, phase_arr[i])
+            for i, mode in enumerate(self.modes)
+        }
 
     def predict_amplitude_phase_mode(
         self,

@@ -2,9 +2,11 @@ r"""Shared special functions and small numerical helpers.
 
 The Wigner :math:`d` and spin-weighted spherical harmonic
 implementations here are the single source of truth for the whole
-package: :mod:`~mlgw_bns.model` uses them to project the modes onto
-the observer's sky, and :mod:`~mlgw_bns.higher_order_modes` uses them
-for the :math:`s=-2` specialisation. They mirror ``wigner_d_function()``
+package: :mod:`~mlgw_bns.model` uses them to project the co-precessing
+modes onto the observer's sky, :mod:`~mlgw_bns.higher_order_modes` uses
+them for the :math:`s=-2` specialisation, and
+:mod:`~mlgw_bns.twist_waveform` uses them to build the Wigner-:math:`D`
+matrices of the precessing twist. They mirror ``wigner_d_function()``
 and ``spinsphericalharm()`` in TEOBResumS' ``C/src/SpecialFuns.c``.
 
 Both accept either a scalar angle or a numpy array of angles, and run on
