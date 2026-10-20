@@ -64,7 +64,6 @@ from mlgw_bns.mode_model import ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 from mlgw_bns.model import Model, _build_mode_coeffs
 from mlgw_bns.precessing_model import PrecessingModel, PrecessingParametersWithExtrinsic
-from mlgw_bns.taylorf2 import SUN_MASS_SECONDS
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -168,12 +167,6 @@ N_PRECESSING_WAVEFORMS = 100
 PRECESSING_MAX_IN_PLANE_SPIN = 0.5
 PRECESSING_REFERENCE_FREQUENCY_HZ = 9.5
 PRECESSING_MIN_FREQUENCY_HZ = 21.0
-#: TEOBResumS' frequency-domain twist leaves spurious ~2 pi steps in its
-#: alpha (``unwrap_HM`` in ``prolong_euler_angles_FD``, see
-#: ``visualization/teob_alpha_unwrap_bug.md``), and its cubic spline of alpha
-#: rings across each: the bins where any multipole reads alpha within this
-#: many spline intervals of a step are masked out of the comparison.
-ALPHA_STEP_MARGIN = 6
 
 
 def load_model(filename: str = None) -> Model:
@@ -1535,23 +1528,24 @@ def teob_precessing_polarizations(
     frequencies: np.ndarray,
 ) -> tuple:
     r"""TEOBResumS' own precessing :math:`\tilde{h}_+, \tilde{h}_\times` at
-    ``frequencies``, in the mlgw_bns Fourier convention, and a mask of the
-    bins glitched by its alpha steps (see ``ALPHA_STEP_MARGIN``), as in
+    ``frequencies``, in the mlgw_bns Fourier convention, as in
     ``docs/examples/precessing_vs_teobresums.py``: the model's co-precessing
     multipoles twisted into every inertial one up to :math:`\ell = 4`, the
     spins imposed where TEOBResumS' frequency-domain path imposes them (0.95
     times its ``initial_frequency``). Sets ``params.reference_phase`` to the
     one that reproduces the run (:meth:`PrecessingModel.teob_reference_phase`).
-    """
-    import tempfile
 
+    Needs the fork of TEOBResumS ``pyproject.toml`` installs: the public one
+    leaves spurious ~2 pi steps in alpha (``unwrap_HM`` in
+    ``prolong_euler_angles_FD``, see ``visualization/teob_alpha_unwrap_bug.md``)
+    that glitch the polarizations around them.
+    """
     from EOBRun_module import EOBRunPy
 
     from mlgw_bns.higher_order_modes import mode_to_k
 
     initial_frequency = params.reference_frequency_hz / 0.95
     largest_l = max(mode.l for mode in model.modes)
-    output_dir = tempfile.TemporaryDirectory()
     _, hp_re, hp_im, hc_re, hc_im, _, hlm, dynamics = EOBRunPy(dict(
         M=params.total_mass,
         q=params.mass_ratio,
@@ -1575,25 +1569,7 @@ def teob_precessing_polarizations(
         arg_out="yes",
         use_mode_lm=sorted(mode_to_k(mode) for mode in model.modes),
         use_mode_lm_inertial=list(range(mode_to_k(Mode(largest_l, largest_l)) + 1)),
-        output_dynamics="yes",
-        output_dir=output_dir.name,
     ))
-    with output_dir:
-        path = os.path.join(output_dir.name, "dynspin.txt")
-        # not written without in-plane spins, when nothing is twisted
-        dynspin = np.loadtxt(path) if os.path.exists(path) else np.zeros((0, 14))
-    # alpha as twist_hlm_FD splines it, against M Omega
-    momega, alpha = dynspin[:, 13], dynspin[:, 10]
-    steps = np.flatnonzero(np.abs(np.diff(alpha)) > np.pi)
-    glitched = np.zeros(len(frequencies), dtype=bool)
-    # the co-precessing (l, m) multipole reads the angles at the orbital
-    # frequency f / m, so at M Omega = 2 pi f M / m
-    momega_of_f = 2 * np.pi * np.asarray(frequencies) * params.total_mass * SUN_MASS_SECONDS
-    for step in steps:
-        low = momega[max(step - ALPHA_STEP_MARGIN, 0)]
-        high = momega[min(step + 1 + ALPHA_STEP_MARGIN, len(momega) - 1)]
-        for m in {mode.m for mode in model.modes}:
-            glitched |= (momega_of_f / m >= low) & (momega_of_f / m <= high)
     params.reference_phase = precessing.teob_reference_phase(
         params,
         start_momega=dynamics["MOmega"][0],
@@ -1603,7 +1579,7 @@ def teob_precessing_polarizations(
     # mlgw_bns' Fourier transform is the complex conjugate of TEOBResumS'
     hp = np.conj(np.asarray(hp_re) + 1j * np.asarray(hp_im))[1:]
     hc = np.conj(np.asarray(hc_re) + 1j * np.asarray(hc_im))[1:]
-    return hp, hc, glitched
+    return hp, hc
 
 
 def precessing_mismatches(
@@ -1627,17 +1603,11 @@ def precessing_mismatches(
       :math:`h_+` and :math:`h_\times`, which the optimised one is not, but
       also to the error of the regressed merger time.
 
-    Both leave out the bins TEOBResumS' alpha steps glitch
-    (``ALPHA_STEP_MARGIN``), a few percent of them; the optimised mismatch
-    over every bin is kept too (``*_all_bins``).
-
     Returns
     -------
     dict
         ``{"plus": [...], "cross": [...], "plus_no_optimisation": [...],
-        "cross_no_optimisation": [...], "plus_all_bins": [...],
-        "cross_all_bins": [...], "glitched_fraction": [...],
-        "beta_max": [...], "params": [...]}``, one entry per binary;
+        "cross_no_optimisation": [...], "beta_max": [...], "params": [...]}``, one entry per binary;
         ``beta_max`` is the largest opening angle of the precession cone
         over the band.
     """
@@ -1656,9 +1626,9 @@ def precessing_mismatches(
     grid = grid[(grid >= PRECESSING_MIN_FREQUENCY_HZ) & (grid < grid[-1])]
     weight = np.gradient(grid) / validator.psd_at_frequencies(grid)
 
-    def unoptimised(truth: np.ndarray, ours: np.ndarray, keep: np.ndarray) -> float:
+    def unoptimised(truth: np.ndarray, ours: np.ndarray) -> float:
         def product(a, b):
-            return np.sum((np.conj(a) * b * weight)[keep]).real
+            return np.sum(np.conj(a) * b * weight).real
 
         return 1 - product(truth, ours) / np.sqrt(
             product(truth, truth) * product(ours, ours)
@@ -1666,24 +1636,17 @@ def precessing_mismatches(
 
     result: dict = {key: [] for key in (
         "plus", "cross", "plus_no_optimisation", "cross_no_optimisation",
-        "plus_all_bins", "cross_all_bins", "glitched_fraction", "beta_max", "params",
+        "beta_max", "params",
     )}
     for seed in tqdm(range(n_waveforms), unit="waveform"):
         params = random_precessing_parameters(model, seed)
-        hp_teob, hc_teob, glitched = teob_precessing_polarizations(
-            model, precessing, params, grid
-        )
-        keep = ~glitched
+        hp_teob, hc_teob = teob_precessing_polarizations(model, precessing, params, grid)
         hp, hc = (np.asarray(h[0]) for h in predict(*batch_arguments([params], grid)))
         for name, truth, ours in (("plus", hp_teob, hp), ("cross", hc_teob, hc)):
-            result[name].append(validator.mismatch(
-                truth[keep], ours[keep], frequencies=grid[keep], max_delta_t=1e-3
-            ))
-            result[f"{name}_all_bins"].append(
+            result[name].append(
                 validator.mismatch(truth, ours, frequencies=grid, max_delta_t=1e-3)
             )
-            result[f"{name}_no_optimisation"].append(unoptimised(truth, ours, keep))
-        result["glitched_fraction"].append(float(glitched.mean()))
+            result[f"{name}_no_optimisation"].append(unoptimised(truth, ours))
         # the direction of L at the integration's nodes
         l_hat = np.asarray(angles(
             batch_arguments([params], grid)[0], params.total_mass,
@@ -1694,17 +1657,7 @@ def precessing_mismatches(
         )
         result["params"].append(params)
 
-    print(
-        "  bins masked around TEOBResumS' alpha steps: median "
-        f"{np.median(result['glitched_fraction']):.1%}, at most "
-        f"{np.max(result['glitched_fraction']):.1%}"
-    )
     for name in ("plus", "cross"):
-        print(
-            f"  h_{name}, all bins: optimised median "
-            f"{np.median(result[name + '_all_bins']):.3e}, worst "
-            f"{np.max(result[name + '_all_bins']):.3e}"
-        )
         print(
             f"  h_{name}: optimised median {np.median(result[name]):.3e}, "
             f"worst {np.max(result[name]):.3e}; not optimised median "
@@ -1945,14 +1898,13 @@ def plot_precessing_mismatches(data: dict) -> None:
     fig, (ax_kde, ax_beta) = plt.subplots(1, 2, figsize=(13, 4.8))
 
     values = np.concatenate([
-        data[key] for key in data if key not in ("params", "beta_max", "glitched_fraction")
+        data[key] for key in data if key not in ("params", "beta_max")
     ])
     grid = np.linspace(np.log10(values.min()) - 0.5, np.log10(values.max()) + 0.5, 400)
     for name, color in (("plus", "C0"), ("cross", "C1")):
         label = r"$h_+$" if name == "plus" else r"$h_\times$"
         for suffix, style, what in (
             ("", "-", "optimised"),
-            ("_all_bins", ":", "optimised, alpha-step bins kept"),
             ("_no_optimisation", "--", "not optimised"),
         ):
             log_values = np.log10(data[name + suffix])

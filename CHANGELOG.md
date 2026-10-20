@@ -298,7 +298,9 @@ loaded, and the waveforms are referenced differently in time and phase.
     are wrong on the few frequency bins around each (up to ~4e-3 of
     mismatch): `prolong_euler_angles_FD` unwraps `alpha` with `unwrap_HM`
     rather than `unwrap_euler`. A defect of the reference, not of
-    `PrecessingModel` (reported upstream).
+    `PrecessingModel` (reported upstream), and fixed in the fork of
+    TEOBResumS the development dependencies install, which the validation
+    now needs: it no longer masks those bins.
 ## [1.0.1] - 2026-09-21
 
 ### Fixed
