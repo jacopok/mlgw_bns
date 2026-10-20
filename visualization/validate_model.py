@@ -2,15 +2,16 @@ r"""Validate a trained :class:`Model` (as produced by
 ``make_default_dataset.py``), both mode-by-mode and for the full
 multi-mode waveform reconstruction.
 
-Three things are produced:
+Five things are produced:
 
 1. **mlgw-EOB residuals**, per mode: the fractional amplitude error
    ``2 (A_mlgw - A_EOB) / (|A_mlgw| + |A_EOB|)`` (bounded through the
    odd-m amplitude nodes), and two views of the phase error --- one with
    both phases referenced to their own merger (nothing removed
-   afterwards), one with the best-fit linear-in-frequency term removed by
-   least squares. If the first phase row is much larger than the second,
-   the surrogate's merger time or coalescence phase is off.
+   afterwards), one with a single time shift and coalescence phase per
+   waveform removed from all its modes at once. If the first phase row is
+   much larger than the second, the surrogate's merger time or coalescence
+   phase is off.
 2. **Per-mode mismatches**, via :class:`ValidateModel`, in the same two
    configurations: residual time and phase optimised (``optimised``),
    and both referenced to their own merger with nothing optimised
@@ -26,6 +27,9 @@ Three things are produced:
    (:meth:`Model.predict_modes_dict`) against the EOB ground truth
    (:meth:`Model.get_teob_modes_dict`), marginalising over both a
    time shift and a reference azimuthal phase.
+4. **Precessing mismatches** of :class:`PrecessingModel` against
+   TEOBResumS' own precessing :math:`h_+` and :math:`h_\times`.
+5. **Prediction wall-clock times**, aligned and precessing, numpy and JAX.
 
 The per-mode and full-waveform comparisons reference both the surrogate
 and the EOB ground truth to the merger (the tangent to the (2,2) phase at
@@ -59,6 +63,8 @@ from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.mode_model import ParametersWithExtrinsic
 from mlgw_bns.model_validation import ValidateModel
 from mlgw_bns.model import Model, _build_mode_coeffs
+from mlgw_bns.precessing_model import PrecessingModel, PrecessingParametersWithExtrinsic
+from mlgw_bns.taylorf2 import SUN_MASS_SECONDS
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -150,6 +156,24 @@ TIMING_EPOCHS = 5
 #: its per-call cost scales ~linearly with this, and 128 already averages
 #: the per-waveform time far better than repeating the call would.
 TIMING_JAX_BATCH = 64
+
+#: Precessing binaries compared against TEOBResumS' own precessing
+#: polarizations (see :func:`precessing_mismatches`): the aligned draw of
+#: ``benchmark_evaluation_time.random_parameters`` plus in-plane spins up to
+#: this magnitude, given at this frequency (0.95 times TEOBResumS'
+#: ``initial_frequency``, where it imposes them), and compared above
+#: ``PRECESSING_MIN_FREQUENCY_HZ``, where every inertial multipole up to
+#: m = 4 is present in TEOBResumS' output (above m / 2 times its start).
+N_PRECESSING_WAVEFORMS = 100
+PRECESSING_MAX_IN_PLANE_SPIN = 0.5
+PRECESSING_REFERENCE_FREQUENCY_HZ = 9.5
+PRECESSING_MIN_FREQUENCY_HZ = 21.0
+#: TEOBResumS' frequency-domain twist leaves spurious ~2 pi steps in its
+#: alpha (``unwrap_HM`` in ``prolong_euler_angles_FD``, see
+#: ``visualization/teob_alpha_unwrap_bug.md``), and its cubic spline of alpha
+#: rings across each: the bins where any multipole reads alpha within this
+#: many spline intervals of a step are masked out of the comparison.
+ALPHA_STEP_MARGIN = 6
 
 
 def load_model(filename: str = None) -> Model:
@@ -270,18 +294,12 @@ def mlgw_eob_residuals(model: Model, mode: Mode, n_waveforms: int):
 
     Both waveform sets are taken in the model's own downsampled
     amplitude/phase representation; the ground truth comes from
-    :func:`batched_true_waveforms`, referenced to the merger. The two phase
-    residuals below are on the same footing as the residuals plot's rows:
-
-    * ``phase_residuals_regressed`` --- the surrogate's phase, from
-      :meth:`Model.predict_amplitude_phase_mode` (the production path,
-      referenced to the merger with the surrogate's own (2,2)), minus
-      ``phi_EOB``. Nothing is fitted: this is the error in the phase the
-      surrogate returns.
-    * ``phase_residuals_detrended`` --- ``phi_mlgw - phi_EOB`` with its
-      best-fit linear-in-frequency term removed by least squares. A purely
-      linear residual is only a time-shift error, which a mismatch
-      marginalises away; whatever is left is genuine phase-shape error.
+    :func:`batched_true_waveforms`, referenced to the merger. The phase
+    residual is the surrogate's phase, from
+    :meth:`Model.predict_amplitude_phase_mode` (the production path,
+    referenced to the merger with the surrogate's own (2,2)), minus
+    ``phi_EOB``: nothing is fitted, it is the error in the phase the
+    surrogate returns.
 
     Returns
     -------
@@ -293,10 +311,10 @@ def mlgw_eob_residuals(model: Model, mode: Mode, n_waveforms: int):
         error for small errors, but stays bounded to ``[-2, 2]`` through
         the amplitude nodes of the odd-m modes, where ``A_EOB`` passes
         through zero and a plain ratio would diverge.
-    phase_residuals_regressed : np.ndarray
+    phase_residuals : np.ndarray
         Shape ``(n_waveforms, n_phase_points)``, see above.
-    phase_residuals_detrended : np.ndarray
-        Shape ``(n_waveforms, n_phase_points)``, see above.
+    true_amplitudes : np.ndarray
+        ``A_EOB``, shape ``(n_waveforms, n_amp_points)``.
     parameter_set : ParameterSet
         The (filtered) parameters these residuals correspond to.
     """
@@ -320,26 +338,78 @@ def mlgw_eob_residuals(model: Model, mode: Mode, n_waveforms: int):
         + np.abs(true_amplitudes)
     )
 
-    phase_residuals = predicted_waveforms.phases - true_phases
-    phase_residuals_regressed = (
+    phase_residuals = (
         production_phases(model, mode, parameter_set, phase_freqs) - true_phases
     )
-
-    phase_residuals_detrended = np.empty_like(phase_residuals)
-    for j in range(len(phase_residuals)):
-        slope, intercept = np.polyfit(phase_freqs, phase_residuals[j], 1)
-        phase_residuals_detrended[j] = phase_residuals[j] - (
-            slope * phase_freqs + intercept
-        )
 
     return (
         frequencies_hz[downsampling.amplitude_indices],
         phase_freqs,
         amplitude_residuals,
-        phase_residuals_regressed,
-        phase_residuals_detrended,
+        phase_residuals,
+        true_amplitudes,
         parameter_set,
     )
+
+
+def global_alignment(residuals: dict, psd) -> dict:
+    r"""Remove one time shift and one coalescence phase from every mode of
+    each waveform.
+
+    A time shift :math:`\Delta t` moves the phase of every mode by
+    :math:`2 \pi f \Delta t`, a rotation of the orbital phase by
+    :math:`\phi_c` that of the :math:`(\ell, m)` mode by :math:`m \phi_c`;
+    these are the only phase errors the full waveform can absorb. For each
+    waveform, they are fitted by least squares to the phase residuals of
+    all modes at once: uniformly over each mode's phase nodes, each mode
+    weighted by its PSD-weighted power :math:`\int A_{\rm EOB}^2 \, df /
+    S_n`, so the fit is effectively the (2,2)'s. Weighting each node as it
+    enters the mismatch instead (by :math:`A^2 \Delta f / S_n`) pins the
+    fit to the lowest tens of hertz (to ~1 mrad there) and leaves a few
+    tenths of a radian more at a kilohertz, where the mismatch, but not
+    this plot, is nearly blind.
+
+    Parameters
+    ----------
+    residuals : dict
+        ``{mode: (amp_f, phi_f, amp_res, phi_res, true_amplitudes,
+        param_set)}``, as :func:`mlgw_eob_residuals` returns, already
+        restricted to the waveforms common to every mode, in the same order.
+    psd : callable
+        The PSD as a function of frequency in Hz.
+
+    Returns
+    -------
+    dict
+        ``{mode: phi_res - 2 pi f dt - m phi_c}`` and the fitted ``"dt"``,
+        ``"phi_c"`` arrays, one entry per waveform.
+    """
+    n_waveforms = len(next(iter(residuals.values()))[3])
+    rows = []  # per mode: design matrix, weights
+    for mode, (amp_f, phi_f, _, phi_res, true_amp, _) in residuals.items():
+        design = np.stack([2 * np.pi * phi_f, np.full_like(phi_f, mode.m)], axis=1)
+        log_amp = np.log(np.maximum(np.abs(true_amp), 1e-300))
+        amp_at_phi = np.exp(
+            np.stack([np.interp(np.log(phi_f), np.log(amp_f), row) for row in log_amp])
+        )
+        power = np.sum(amp_at_phi**2 * np.gradient(phi_f) / psd(phi_f), axis=1)
+        weights = np.repeat((power / len(phi_f))[:, None], len(phi_f), axis=1)
+        rows.append((mode, design, weights, phi_res))
+
+    dt = np.empty(n_waveforms)
+    phi_c = np.empty(n_waveforms)
+    for j in range(n_waveforms):
+        normal = sum(design.T @ (w[j, :, None] * design) for _, design, w, _ in rows)
+        rhs = sum(design.T @ (w[j] * res[j]) for _, design, w, res in rows)
+        dt[j], phi_c[j] = np.linalg.solve(normal, rhs)
+
+    aligned = {
+        mode: res - dt[:, None] * design[None, :, 0] - mode.m * phi_c[:, None]
+        for mode, design, _, res in rows
+    }
+    aligned["dt"] = dt
+    aligned["phi_c"] = phi_c
+    return aligned
 
 
 def plot_residuals(model: Model) -> dict:
@@ -353,12 +423,11 @@ def plot_residuals(model: Model) -> dict:
     2. ``phi_mlgw - phi_EOB``, both referenced to their own merger,
        nothing removed afterwards --- the error in the phase the surrogate
        returns;
-    3. ``phi_mlgw - phi_EOB`` with its best-fit linear-in-frequency term
-       removed by least squares --- genuine phase-shape error that no
-       time-and-phase alignment can absorb.
+    3. the same with one time shift and one coalescence phase per waveform
+       removed from all its modes at once (:func:`global_alignment`) ---
+       the phase error the full waveform cannot absorb.
 
-    Row 3 is row 2 with an optimal linear alignment subtracted, so it
-    lower-bounds row 2; they agree closely when the predictors are good.
+    The waveforms are those for which every mode's EOB call succeeded.
     """
     fig, axes = plt.subplots(
         3, len(MODES), figsize=(6 * len(MODES), 10), squeeze=False
@@ -367,20 +436,40 @@ def plot_residuals(model: Model) -> dict:
     cmap = matplotlib.colormaps["viridis"]
     q_min, q_max = model.dataset.parameter_ranges.q_range
 
-    residuals_by_mode = {}
+    residuals = {
+        mode: mlgw_eob_residuals(model, mode, N_RESIDUAL_WAVEFORMS) for mode in MODES
+    }
+    # keep the waveforms common to every mode, in one order
+    common = set.intersection(*(
+        {tuple(row) for row in values[5].parameter_array} for values in residuals.values()
+    ))
+    for mode, values in residuals.items():
+        keep = np.array([tuple(row) in common for row in values[5].parameter_array])
+        order = np.lexsort(values[5].parameter_array[keep].T)
+        residuals[mode] = tuple(
+            v if i < 2 else (
+                v[keep][order] if i < 5 else values[5].parameter_array[keep][order]
+            )
+            for i, v in enumerate(values)
+        )
+    parameter_array = residuals[MODES[0]][5]
+
+    psd = ValidateModel(model.mode_models[Mode(2, 2)]).psd_at_frequencies
+    aligned = global_alignment(residuals, psd)
+    print(
+        f"  global alignment over {len(parameter_array)} waveforms: "
+        f"|dt| median {np.median(np.abs(aligned['dt'])) * 1e6:.1f} us, "
+        f"|phi_c| median {np.median(np.abs(aligned['phi_c'])):.3f} rad"
+    )
 
     for i, mode in enumerate(MODES):
-        amp_f, phi_f, amp_res, phi_reg, phi_det, param_set = mlgw_eob_residuals(
-            model, mode, N_RESIDUAL_WAVEFORMS
-        )
-        residuals_by_mode[mode] = (amp_f, phi_f, amp_res, phi_reg, phi_det)
-
+        amp_f, phi_f, amp_res, phi_res, _, _ = residuals[mode]
         for j in range(len(amp_res)):
-            q = param_set.parameter_array[j, 0]
+            q = parameter_array[j, 0]
             color = cmap((q - q_min) / (q_max - q_min))
             axes[0, i].plot(amp_f, amp_res[j], color=color, alpha=0.6, linewidth=0.8)
-            axes[1, i].plot(phi_f, phi_reg[j], color=color, alpha=0.6, linewidth=0.8)
-            axes[2, i].plot(phi_f, phi_det[j], color=color, alpha=0.6, linewidth=0.8)
+            axes[1, i].plot(phi_f, phi_res[j], color=color, alpha=0.6, linewidth=0.8)
+            axes[2, i].plot(phi_f, aligned[mode][j], color=color, alpha=0.6, linewidth=0.8)
 
         axes[0, i].set_title(rf"$(\ell, m) = ({mode.l}, {mode.m})$")
         axes[0, i].set_ylim(-2.1, 2.1)
@@ -394,8 +483,8 @@ def plot_residuals(model: Model) -> dict:
         "\npredicted $\\Delta t$ + phase applied [rad]"
     )
     axes[2, 0].set_ylabel(
-        r"$\phi_{\rm mlgw} - \phi_{\rm EOB}$,"
-        "\nbest-fit linear term removed [rad]"
+        r"$\phi_{\rm mlgw} - \phi_{\rm EOB}$, one $\Delta t$ and"
+        "\n" r"$\phi_c$ per waveform removed from all modes [rad]"
     )
 
     # Every row is now a difference, so its "no error" line sits at 0.
@@ -411,7 +500,7 @@ def plot_residuals(model: Model) -> dict:
     fig.colorbar(sm, ax=axes, label="Mass ratio $q$", pad=0.02)
 
     fig.suptitle(
-        f"mlgw-EOB reconstruction residuals, {N_RESIDUAL_WAVEFORMS} waveforms "
+        f"mlgw-EOB reconstruction residuals, {len(parameter_array)} waveforms "
         "from the training distribution"
     )
 
@@ -419,7 +508,7 @@ def plot_residuals(model: Model) -> dict:
     fig.savefig(outfile, dpi=150)
     print(f"Saved plot to {outfile}")
 
-    return residuals_by_mode
+    return residuals
 
 
 def predicted_shift_mismatches(
@@ -926,7 +1015,7 @@ def _mode_bases(model: Model, params: ParametersWithExtrinsic, frequencies: np.n
 
 
 def _mode_cartesian(amp: np.ndarray, phase: np.ndarray, coeffs: np.ndarray) -> np.ndarray:
-    r"""One mode's :math:`h_+ - i h_\times` contribution, given its coefficients.
+    r"""One mode's :math:`h_+ + i h_\times` contribution, given its coefficients.
 
     ``coeffs`` (shape ``(8,)``) are the per-mode spherical-harmonic
     coefficients built by :func:`~mlgw_bns.model._build_mode_coeffs`,
@@ -945,7 +1034,7 @@ def _mode_cartesian(amp: np.ndarray, phase: np.ndarray, coeffs: np.ndarray) -> n
     h_cross = amp * (cosphi * coeffs[4] + sinphi * coeffs[5]) + 1j * amp * (
         cosphi * coeffs[6] + sinphi * coeffs[7]
     )
-    return h_plus - 1j * h_cross
+    return h_plus + 1j * h_cross
 
 
 def _mode_subset_bases_cache_path(n_waveforms: int) -> str:
@@ -1406,6 +1495,225 @@ def plot_mismatches(
     print(f"Saved plot to {outfile}")
 
 
+def random_precessing_parameters(
+    model: Model, seed: int
+) -> PrecessingParametersWithExtrinsic:
+    r"""A precessing binary: :func:`random_parameters`' intrinsic point
+    (its aligned spins become the spins' :math:`z` components), an in-plane
+    spin of magnitude uniform in ``[0, PRECESSING_MAX_IN_PLANE_SPIN]`` and
+    random direction for each body, an isotropic line of sight, and the
+    spins given at ``PRECESSING_REFERENCE_FREQUENCY_HZ``."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from benchmark_evaluation_time import random_parameters
+
+    aligned = random_parameters(model, seed)
+    rng = np.random.default_rng([seed, 1])
+
+    def spin(chi_z: float) -> tuple:
+        magnitude = rng.uniform(0.0, PRECESSING_MAX_IN_PLANE_SPIN)
+        angle = rng.uniform(0.0, 2 * np.pi)
+        return (magnitude * np.cos(angle), magnitude * np.sin(angle), chi_z)
+
+    return PrecessingParametersWithExtrinsic(
+        mass_ratio=aligned.mass_ratio,
+        lambda_1=aligned.lambda_1,
+        lambda_2=aligned.lambda_2,
+        chi_1=spin(aligned.chi_1),
+        chi_2=spin(aligned.chi_2),
+        distance_mpc=DISTANCE_MPC,
+        inclination=float(np.arccos(rng.uniform(-1.0, 1.0))),
+        azimuth=rng.uniform(0.0, 2 * np.pi),
+        total_mass=TOTAL_MASS,
+        reference_frequency_hz=PRECESSING_REFERENCE_FREQUENCY_HZ,
+    )
+
+
+def teob_precessing_polarizations(
+    model: Model,
+    precessing: PrecessingModel,
+    params: PrecessingParametersWithExtrinsic,
+    frequencies: np.ndarray,
+) -> tuple:
+    r"""TEOBResumS' own precessing :math:`\tilde{h}_+, \tilde{h}_\times` at
+    ``frequencies``, in the mlgw_bns Fourier convention, and a mask of the
+    bins glitched by its alpha steps (see ``ALPHA_STEP_MARGIN``), as in
+    ``docs/examples/precessing_vs_teobresums.py``: the model's co-precessing
+    multipoles twisted into every inertial one up to :math:`\ell = 4`, the
+    spins imposed where TEOBResumS' frequency-domain path imposes them (0.95
+    times its ``initial_frequency``). Sets ``params.reference_phase`` to the
+    one that reproduces the run (:meth:`PrecessingModel.teob_reference_phase`).
+    """
+    import tempfile
+
+    from EOBRun_module import EOBRunPy
+
+    from mlgw_bns.higher_order_modes import mode_to_k
+
+    initial_frequency = params.reference_frequency_hz / 0.95
+    largest_l = max(mode.l for mode in model.modes)
+    output_dir = tempfile.TemporaryDirectory()
+    _, hp_re, hp_im, hc_re, hc_im, _, hlm, dynamics = EOBRunPy(dict(
+        M=params.total_mass,
+        q=params.mass_ratio,
+        LambdaAl2=params.lambda_1,
+        LambdaBl2=params.lambda_2,
+        chi1x=params.chi_1[0], chi1y=params.chi_1[1], chi1z=params.chi_1[2],
+        chi2x=params.chi_2[0], chi2y=params.chi_2[1], chi2z=params.chi_2[2],
+        distance=params.distance_mpc,
+        inclination=params.inclination,
+        coalescence_angle=np.pi / 2 + params.azimuth,
+        use_spins=2,
+        domain=1,
+        initial_frequency=initial_frequency,
+        srate_interp=4096.0,
+        # TEOBResumS interpolates onto the requested grid, which must start
+        # at its initial frequency; ~0.3 s instead of minutes on a uniform one
+        interp_freqs="yes",
+        freqs=[initial_frequency, *frequencies],
+        use_geometric_units="no",
+        output_hpc="no",
+        arg_out="yes",
+        use_mode_lm=sorted(mode_to_k(mode) for mode in model.modes),
+        use_mode_lm_inertial=list(range(mode_to_k(Mode(largest_l, largest_l)) + 1)),
+        output_dynamics="yes",
+        output_dir=output_dir.name,
+    ))
+    with output_dir:
+        path = os.path.join(output_dir.name, "dynspin.txt")
+        # not written without in-plane spins, when nothing is twisted
+        dynspin = np.loadtxt(path) if os.path.exists(path) else np.zeros((0, 14))
+    # alpha as twist_hlm_FD splines it, against M Omega
+    momega, alpha = dynspin[:, 13], dynspin[:, 10]
+    steps = np.flatnonzero(np.abs(np.diff(alpha)) > np.pi)
+    glitched = np.zeros(len(frequencies), dtype=bool)
+    # the co-precessing (l, m) multipole reads the angles at the orbital
+    # frequency f / m, so at M Omega = 2 pi f M / m
+    momega_of_f = 2 * np.pi * np.asarray(frequencies) * params.total_mass * SUN_MASS_SECONDS
+    for step in steps:
+        low = momega[max(step - ALPHA_STEP_MARGIN, 0)]
+        high = momega[min(step + 1 + ALPHA_STEP_MARGIN, len(momega) - 1)]
+        for m in {mode.m for mode in model.modes}:
+            glitched |= (momega_of_f / m >= low) & (momega_of_f / m <= high)
+    params.reference_phase = precessing.teob_reference_phase(
+        params,
+        start_momega=dynamics["MOmega"][0],
+        start_orbital_phase=dynamics["phi"][0],
+        start_phase_22=hlm["1"][1][0],  # (l, m) = (2, 2)
+    )
+    # mlgw_bns' Fourier transform is the complex conjugate of TEOBResumS'
+    hp = np.conj(np.asarray(hp_re) + 1j * np.asarray(hp_im))[1:]
+    hc = np.conj(np.asarray(hc_re) + 1j * np.asarray(hc_im))[1:]
+    return hp, hc, glitched
+
+
+def precessing_mismatches(
+    model: Model, n_waveforms: int = N_PRECESSING_WAVEFORMS
+) -> dict:
+    r"""Mismatches of the precessing model's JAX predictor
+    (:meth:`PrecessingModel.jax_predict`, the one fast enough to use)
+    against TEOBResumS' precessing :math:`\tilde{h}_+` and
+    :math:`\tilde{h}_\times`.
+
+    Each polarization is compared on its own, on the validator's grid
+    between ``PRECESSING_MIN_FREQUENCY_HZ`` (where TEOBResumS has every
+    inertial multipole up to :math:`m = 4`) and the top of the trained band,
+    weighted by the validator's PSD, in two configurations:
+
+    * **optimised**: time shift and constant phase maximised over;
+    * **not optimised**: the real Wiener product as the model returns the
+      polarizations, with the orbital phase anchored to TEOBResumS' run
+      (:meth:`PrecessingModel.teob_reference_phase`) and nothing else
+      tuned. It is sensitive to the relative sign and phase of
+      :math:`h_+` and :math:`h_\times`, which the optimised one is not, but
+      also to the error of the regressed merger time.
+
+    Both leave out the bins TEOBResumS' alpha steps glitch
+    (``ALPHA_STEP_MARGIN``), a few percent of them; the optimised mismatch
+    over every bin is kept too (``*_all_bins``).
+
+    Returns
+    -------
+    dict
+        ``{"plus": [...], "cross": [...], "plus_no_optimisation": [...],
+        "cross_no_optimisation": [...], "plus_all_bins": [...],
+        "cross_all_bins": [...], "glitched_fraction": [...],
+        "beta_max": [...], "params": [...]}``, one entry per binary;
+        ``beta_max`` is the largest opening angle of the precession cone
+        over the band.
+    """
+    import jax
+
+    from dataclasses import fields
+
+    from mlgw_bns.batched_precession import TabulatedAngles, batch_arguments, precession_angles
+
+    precessing = PrecessingModel(model)
+    predict = jax.jit(precessing.jax_predict())
+    angles = jax.jit(precession_angles(model))
+    state_index = [field.name for field in fields(TabulatedAngles)].index("state")
+    validator = ValidateModel(model.mode_models[Mode(2, 2)])
+    grid = validator.frequencies
+    grid = grid[(grid >= PRECESSING_MIN_FREQUENCY_HZ) & (grid < grid[-1])]
+    weight = np.gradient(grid) / validator.psd_at_frequencies(grid)
+
+    def unoptimised(truth: np.ndarray, ours: np.ndarray, keep: np.ndarray) -> float:
+        def product(a, b):
+            return np.sum((np.conj(a) * b * weight)[keep]).real
+
+        return 1 - product(truth, ours) / np.sqrt(
+            product(truth, truth) * product(ours, ours)
+        )
+
+    result: dict = {key: [] for key in (
+        "plus", "cross", "plus_no_optimisation", "cross_no_optimisation",
+        "plus_all_bins", "cross_all_bins", "glitched_fraction", "beta_max", "params",
+    )}
+    for seed in tqdm(range(n_waveforms), unit="waveform"):
+        params = random_precessing_parameters(model, seed)
+        hp_teob, hc_teob, glitched = teob_precessing_polarizations(
+            model, precessing, params, grid
+        )
+        keep = ~glitched
+        hp, hc = (np.asarray(h[0]) for h in predict(*batch_arguments([params], grid)))
+        for name, truth, ours in (("plus", hp_teob, hp), ("cross", hc_teob, hc)):
+            result[name].append(validator.mismatch(
+                truth[keep], ours[keep], frequencies=grid[keep], max_delta_t=1e-3
+            ))
+            result[f"{name}_all_bins"].append(
+                validator.mismatch(truth, ours, frequencies=grid, max_delta_t=1e-3)
+            )
+            result[f"{name}_no_optimisation"].append(unoptimised(truth, ours, keep))
+        result["glitched_fraction"].append(float(glitched.mean()))
+        # the direction of L at the integration's nodes
+        l_hat = np.asarray(angles(
+            batch_arguments([params], grid)[0], params.total_mass,
+            params.reference_frequency_hz, float(grid[0]),
+        )[state_index])[0, :, :3]
+        result["beta_max"].append(
+            float(np.max(np.arctan2(np.hypot(l_hat[:, 0], l_hat[:, 1]), l_hat[:, 2])))
+        )
+        result["params"].append(params)
+
+    print(
+        "  bins masked around TEOBResumS' alpha steps: median "
+        f"{np.median(result['glitched_fraction']):.1%}, at most "
+        f"{np.max(result['glitched_fraction']):.1%}"
+    )
+    for name in ("plus", "cross"):
+        print(
+            f"  h_{name}, all bins: optimised median "
+            f"{np.median(result[name + '_all_bins']):.3e}, worst "
+            f"{np.max(result[name + '_all_bins']):.3e}"
+        )
+        print(
+            f"  h_{name}: optimised median {np.median(result[name]):.3e}, "
+            f"worst {np.max(result[name]):.3e}; not optimised median "
+            f"{np.median(result[name + '_no_optimisation']):.3e}, worst "
+            f"{np.max(result[name + '_no_optimisation']):.3e}"
+        )
+    return result
+
+
 def timing_benchmark(
     model: Model,
     n_points_list=TIMING_N_POINTS,
@@ -1545,6 +1853,135 @@ def timing_benchmark(
     return result
 
 
+def precessing_timing_benchmark(
+    model: Model,
+    n_points_list=TIMING_N_POINTS,
+    n_seeds: int = TIMING_SEEDS,
+    n_epochs: int = TIMING_EPOCHS,
+    jax_batch: int = TIMING_JAX_BATCH,
+) -> dict:
+    r"""Median wall-clock time per waveform of the precessing model, as
+    :func:`timing_benchmark` does for the aligned one: numpy
+    :meth:`PrecessingModel.predict_numpy` (which integrates the PN precession
+    afresh at every call) and its JAX port
+    (:meth:`PrecessingModel.jax_predict`), for one binary per call and for
+    ``jax_batch`` of them, over the same band, on :func:`random_precessing_parameters`.
+
+    Returns
+    -------
+    dict
+        ``{"n_points": [...], "precessing_numpy": [...],
+        "precessing_jax": [...], "precessing_jax_batch": [...]}``, the last
+        two omitted if JAX is unavailable.
+    """
+    precessing = PrecessingModel(model)
+    frequencies_hz = model.dataset.frequencies_hz
+    f_min = float(np.min(frequencies_hz))
+    f_max = float(np.max(frequencies_hz)) - 1
+
+    result: dict = {"n_points": list(n_points_list), "precessing_numpy": []}
+
+    def median_ms(call, n_waveforms: int = 1, epochs: int = n_epochs) -> float:
+        times_ms = []
+        for _ in range(epochs):
+            for seed in range(n_seeds):
+                start = perf_counter()
+                call(seed)
+                times_ms.append((perf_counter() - start) * 1e3 / n_waveforms)
+        return float(np.median(times_ms))
+
+    precessing.predict_numpy(
+        np.linspace(f_min, f_max, num=n_points_list[0]),
+        random_precessing_parameters(model, 0),
+    )
+    print("  numpy PrecessingModel.predict_numpy:")
+    for n_points in n_points_list:
+        freqs = np.linspace(f_min, f_max, num=n_points)
+        params = [random_precessing_parameters(model, seed) for seed in range(n_seeds)]
+        result["precessing_numpy"].append(
+            # tens of seconds a call (scipy integrates the precession from
+            # the bottom of the band every time): once per seed
+            median_ms(lambda seed: precessing.predict_numpy(freqs, params[seed]), epochs=1)
+        )
+        print(f"    n_points={n_points:>6}  median {result['precessing_numpy'][-1]:.3f} ms")
+
+    try:
+        import jax
+
+        from mlgw_bns.batched_precession import batch_arguments
+    except Exception as exc:  # pragma: no cover - environment dependent
+        logging.warning("JAX not available (%s); skipping JAX timing", exc)
+        return result
+
+    predict = jax.jit(precessing.jax_predict())
+    for key, size in (("precessing_jax", 1), ("precessing_jax_batch", jax_batch)):
+        result[key] = []
+        print(
+            "  JAX PrecessingModel.jax_predict "
+            + ("(single binary):" if size == 1 else f"(batch of {size}, per-waveform):")
+        )
+        for n_points in n_points_list:
+            freqs = np.linspace(f_min, f_max, num=n_points)
+            args = [
+                batch_arguments(
+                    [random_precessing_parameters(model, size * seed + i) for i in range(size)],
+                    freqs,
+                )
+                for seed in range(n_seeds)
+            ]
+            jax.block_until_ready(predict(*args[0]))  # compile, not timed
+            result[key].append(
+                median_ms(lambda seed: jax.block_until_ready(predict(*args[seed])), size)
+            )
+            print(f"    n_points={n_points:>6}  median {result[key][-1]:.4f} ms")
+
+    return result
+
+
+def plot_precessing_mismatches(data: dict) -> None:
+    r"""KDEs of :func:`precessing_mismatches`, optimised and not, for
+    :math:`h_+` and :math:`h_\times`, beside each binary's mismatch against
+    its largest precession opening angle."""
+    fig, (ax_kde, ax_beta) = plt.subplots(1, 2, figsize=(13, 4.8))
+
+    values = np.concatenate([
+        data[key] for key in data if key not in ("params", "beta_max", "glitched_fraction")
+    ])
+    grid = np.linspace(np.log10(values.min()) - 0.5, np.log10(values.max()) + 0.5, 400)
+    for name, color in (("plus", "C0"), ("cross", "C1")):
+        label = r"$h_+$" if name == "plus" else r"$h_\times$"
+        for suffix, style, what in (
+            ("", "-", "optimised"),
+            ("_all_bins", ":", "optimised, alpha-step bins kept"),
+            ("_no_optimisation", "--", "not optimised"),
+        ):
+            log_values = np.log10(data[name + suffix])
+            ax_kde.plot(
+                10**grid, gaussian_kde(log_values)(grid), color=color, linestyle=style,
+                label=f"{label}, {what} (median {_sci_latex(np.median(data[name + suffix]))})",
+            )
+        ax_beta.scatter(data["beta_max"], data[name], s=12, color=color, label=label)
+    ax_kde.set_xscale("log")
+    ax_kde.set_xlabel("Mismatch")
+    ax_kde.set_ylabel(r"Density [per $\log_{10}$ mismatch]")
+    ax_kde.legend(fontsize=8)
+    ax_beta.set_xlabel(r"largest opening angle $\beta$ over the band [rad]")
+    ax_beta.set_ylabel("Mismatch (optimised)")
+    ax_beta.set_yscale("log")
+    ax_beta.legend()
+    for ax in (ax_kde, ax_beta):
+        ax.grid(True, which="both", lw=0.3)
+    fig.suptitle(
+        f"Precessing model vs. TEOBResumS' precessing $h_+$, $h_\\times$, "
+        f"{len(data['plus'])} binaries, $f \\geq {PRECESSING_MIN_FREQUENCY_HZ:g}$ Hz"
+    )
+    fig.tight_layout()
+
+    outfile = f"{OUTPUT_PREFIX}_precessing_mismatches.png"
+    fig.savefig(outfile, dpi=150)
+    print(f"Saved plot to {outfile}")
+
+
 def plot_timing_benchmark(data: dict) -> None:
     r"""Log-log plot of :func:`timing_benchmark`'s per-waveform timings.
 
@@ -1562,12 +1999,19 @@ def plot_timing_benchmark(data: dict) -> None:
             n_points, data["jax_batch"], marker="o",
             label=f"JAX (jax.vmap batch of {TIMING_JAX_BATCH})",
         )
+    for key, color, label in (
+        ("precessing_numpy", "C0", "precessing, numpy"),
+        ("precessing_jax", "C1", "precessing, JAX (single binary)"),
+        ("precessing_jax_batch", "C2", f"precessing, JAX (batch of {TIMING_JAX_BATCH})"),
+    ):
+        if key in data:
+            ax.loglog(n_points, data[key], marker="s", linestyle="--", color=color, label=label)
 
     ax.set_xlabel("Number of evaluation points")
     ax.set_ylabel("Time per waveform [ms]")
     ax.grid(True, which="both", lw=0.3)
-    ax.legend()
-    fig.suptitle("Model.predict wall-clock time: numpy vs. JAX")
+    ax.legend(loc="center right", fontsize=8)
+    fig.suptitle("Prediction wall-clock time: aligned spins (solid) and precessing (dashed)")
     fig.tight_layout()
 
     outfile = f"{OUTPUT_PREFIX}_timing.png"
@@ -1673,6 +2117,7 @@ if __name__ == "__main__":
     if args.n_mismatches is not None:
         N_MISMATCH_WAVEFORMS = args.n_mismatches
         N_FULL_WAVEFORM_MISMATCHES = args.n_mismatches
+        N_PRECESSING_WAVEFORMS = args.n_mismatches
 
     OUTPUT_PREFIX = (
         args.prefix
@@ -1719,8 +2164,17 @@ if __name__ == "__main__":
     print("Computing full-waveform mismatch vs. mode subset...")
     plot_mode_subset_boxplots(mode_subset_data(model))
 
+    print("Computing precessing mismatches against TEOBResumS' precessing h_+, h_x...")
+    precessing_data = precessing_mismatches(model, N_PRECESSING_WAVEFORMS)
+    np.savez(
+        f"{OUTPUT_PREFIX}_precessing_mismatches.npz",
+        **{key: np.asarray(value) for key, value in precessing_data.items() if key != "params"},
+    )
+    plot_precessing_mismatches(precessing_data)
+
     print("Benchmarking prediction wall-clock time (numpy vs. JAX)...")
     timing_data = timing_benchmark(model)
+    timing_data.update(precessing_timing_benchmark(model))
     plot_timing_benchmark(timing_data)
 
     print("Benchmarking prediction wall-clock time with fit lines (full vs. reduced-mode vs. TEOB)...")
