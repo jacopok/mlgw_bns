@@ -1429,7 +1429,7 @@ requires-dist = [
     { name = "pytest-cases", specifier = ">=3.10.1" },
     { name = "pyyaml", specifier = ">=6.0.2,<7" },
     { name = "readthedocs-sphinx-search", marker = "extra == 'docs'", specifier = ">=0.3.2" },
-    { name = "scikit-learn", specifier = ">=1.9.1,<2" },
+    { name = "scikit-learn", specifier = "==1.9.1" },
     { name = "scipy", specifier = ">=1.16.3,<2" },
     { name = "setuptools", specifier = ">=84.0.0" },
     { name = "sortedcontainers", specifier = ">=2.4.0,<3" },

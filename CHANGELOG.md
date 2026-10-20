@@ -275,6 +275,8 @@ loaded, and the waveforms are referenced differently in time and phase.
     `SimInspiralTransformPrecessingNewInitialConditions`, agrees with it to
     1e-11.
 - `scipy` is now a declared dependency (it was used through scikit-learn's).
+- `scikit-learn` is pinned to exactly 1.9.1, the version the packaged
+  regressors are pickled with: any other version warns on every load.
 
 ### Known issues
 

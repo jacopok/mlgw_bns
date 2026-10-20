@@ -13,7 +13,7 @@ dependencies = [
     "numpy>=2.2.3,<3", # for all kinds of array manipulation
     "optuna>=5.0.0,<6", # for optimization of hyperparameters
     "scipy>=1.16.3,<2", # interpolation, integration of the precession equations
-    "scikit-learn>=1.9.1,<2", # provides the neural networks
+    "scikit-learn==1.9.1", # provides the neural networks; pinned: the shipped regressors are pickled with it
     "h5py>=3.16.0,<4", # for management of h5 files
     "numba>=0.68.0", # acceleration of numerical computations
     "joblib>=1.6.0,<2", # to save pickled objects such as neural networks
