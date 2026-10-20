@@ -43,7 +43,7 @@ BINARIES = [
 
 
 def test_jax_precessing_waveform_matches_numpy(default_model):
-    """One batch with all the binaries, against PrecessingModel.predict;
+    """One batch with all the binaries, against PrecessingModel.predict_numpy;
     the precession angles are integrated differently (see the module
     docstring), to ~3e-5 rad."""
     jax = pytest.importorskip("jax")
@@ -54,7 +54,7 @@ def test_jax_precessing_waveform_matches_numpy(default_model):
     h_plus, h_cross = predict(*batch_arguments(BINARIES, FREQUENCIES))
     validator = ValidateModel(default_model.mode_models[Mode(2, 2)])
     for i, params in enumerate(BINARIES):
-        expected = precessing.predict(FREQUENCIES, params)
+        expected = precessing.predict_numpy(FREQUENCIES, params)
         for got, want in zip((h_plus[i], h_cross[i]), expected):
             got = np.asarray(got)
             assert np.all(np.isfinite(got))
@@ -125,7 +125,7 @@ def test_mode_components_sum_to_the_waveform(default_model):
     params = BINARIES[0]
     angles = precessing.euler_angles(params, float(FREQUENCIES[0]))
     components = precessing.mode_components(FREQUENCIES, params, angles=angles)
-    expected = precessing.predict(FREQUENCIES, params, angles=angles)
+    expected = precessing.predict_numpy(FREQUENCIES, params, angles=angles)
     for index, want in enumerate(expected):
         got = sum(value[0] * value[1 + index] for value in components.values())
         np.testing.assert_allclose(got, want, rtol=0, atol=1e-12 * np.max(np.abs(want)))

@@ -1,6 +1,6 @@
 r"""Batched precessing waveforms, in JAX.
 
-:meth:`PrecessingModel.predict <mlgw_bns.precessing_model.PrecessingModel.predict>`
+:meth:`PrecessingModel.predict_numpy <mlgw_bns.precessing_model.PrecessingModel.predict_numpy>`
 for ``N`` binaries in one call, as a pure JAX function: it can be wrapped
 in :func:`jax.jit`, ``vmap``-ed and differentiated.
 :meth:`PrecessingModel.jax_predict
@@ -559,8 +559,8 @@ def precessing_waveform(
     modes: Optional[Sequence] = None,
     n_steps: int = N_STEPS,
 ) -> Callable:
-    r"""A JAX function reproducing :meth:`PrecessingModel.predict
-    <mlgw_bns.precessing_model.PrecessingModel.predict>`, batched.
+    r"""A JAX function reproducing :meth:`PrecessingModel.predict_numpy
+    <mlgw_bns.precessing_model.PrecessingModel.predict_numpy>`, batched.
 
     Returns ``predict(intrinsic, frequencies, total_mass, distance_mpc,
     inclination, azimuth, reference_phase, reference_frequency_hz,

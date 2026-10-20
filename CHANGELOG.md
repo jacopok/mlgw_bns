@@ -247,6 +247,9 @@ loaded, and the waveforms are referenced differently in time and phase.
     vectors at `reference_frequency_hz`, where the orbital phase is fixed to
     `reference_phase` (as `f_ref`, `phiRef` in LALSuite);
     `PrecessingModel.teob_reference_phase` converts TEOBResumS' phase origin.
+    `PrecessingModel.predict` evaluates the JAX predictor below (the `jax`
+    extra, and `reference_frequency_hz`, are required); the numpy
+    implementation, `PrecessingModel.predict_numpy`, is kept for testing.
     Against TEOBResumS' precessing waveforms the mismatch is the same as the
     aligned-spin one of the same binaries (7.0e-8 median, 48 binaries x 4
     lines of sight, outside TEOBResumS' `alpha` steps, see Known issues).
@@ -256,7 +259,7 @@ loaded, and the waveforms are referenced differently in time and phase.
     (`mlgw_bns.batched_precession`) is a pure JAX function of `N` binaries,
     which can be jitted, vmapped and differentiated. It integrates the
     precession against the orbital frequency with fixed DOP853 steps and
-    matches `PrecessingModel.predict` to mismatches of 1e-11--3e-10; ~75 ms
+    matches `PrecessingModel.predict_numpy` to mismatches of 1e-11--3e-10; ~75 ms
     a waveform alone, ~20 ms in a batch of 64 (CPU), against ~20 s for the
     numpy path and ~0.13 s for TEOBResumS. `PrecessingModel.jax_predict_modes`
     (`batched_precession.precessing_mode_components`) returns the

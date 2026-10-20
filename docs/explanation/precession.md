@@ -16,11 +16,14 @@ phenomenological models do, by "twisting":
 
 This page describes each step, the conventions they use, and how to
 reproduce TEOBResumS' precessing waveforms with them. The code is
-{mod}`mlgw_bns.precessing_model` (numpy, {class}`~mlgw_bns.precessing_model.PrecessingModel`)
-and {mod}`mlgw_bns.batched_precession` (JAX, batched,
-{meth}`PrecessingModel.jax_predict <mlgw_bns.precessing_model.PrecessingModel.jax_predict>`):
-the two agree to mismatches of $10^{-11}$--$10^{-10}$, and the JAX one is
-orders of magnitude faster.
+{mod}`mlgw_bns.batched_precession` (JAX, batched,
+{meth}`PrecessingModel.jax_predict <mlgw_bns.precessing_model.PrecessingModel.jax_predict>`),
+which {meth}`PrecessingModel.predict <mlgw_bns.precessing_model.PrecessingModel.predict>`
+calls for one binary, and a numpy reference implementation in
+{mod}`mlgw_bns.precessing_model`
+({meth}`PrecessingModel.predict_numpy <mlgw_bns.precessing_model.PrecessingModel.predict_numpy>`,
+~20 s a waveform, for testing only): the two agree to mismatches of
+$10^{-11}$--$10^{-10}$. The JAX path needs the `jax` extra.
 
 ## Parameters and frame
 

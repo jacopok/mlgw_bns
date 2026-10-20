@@ -874,6 +874,7 @@ class PrecessingModel:
 
     def __init__(self, model: Model) -> None:
         self.model = model
+        self._jitted_predict: Optional[Callable] = None
 
     @property
     def largest_mode_m(self) -> int:
@@ -985,7 +986,7 @@ class PrecessingModel:
     ) -> Dict[ModeKey, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         r"""Each co-precessing multipole and its twist coefficients.
 
-        The numpy counterpart of :meth:`jax_predict_modes`: :meth:`predict` is
+        The numpy counterpart of :meth:`jax_predict_modes`: :meth:`predict_numpy` is
         ``sum(c_plus * coprecessing), sum(c_cross * coprecessing)`` over the
         multipoles (see :func:`twist_coefficients`).
 
@@ -1225,10 +1226,56 @@ class PrecessingModel:
         self,
         frequencies: np.ndarray,
         params: PrecessingParametersWithExtrinsic,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        r"""Predict the two polarizations of a precessing waveform.
+
+        Evaluates :meth:`jax_predict` for one binary (compiled on the first
+        call, and again for every new length of ``frequencies``), so it
+        requires the ``jax`` extra. For many binaries, call the function
+        :meth:`jax_predict` returns on a batch of them instead.
+
+        Parameters
+        ----------
+        frequencies : np.ndarray
+            Frequencies at which to evaluate the waveform, in Hz.
+        params : PrecessingParametersWithExtrinsic
+            Source parameters; ``reference_frequency_hz`` must be set.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            The complex polarizations ``(h_plus, h_cross)``, in the same
+            convention as :meth:`~mlgw_bns.model.Model.predict`.
+        """
+        if params.reference_frequency_hz is None:
+            raise ValueError(
+                "PrecessingModel.predict needs params.reference_frequency_hz, "
+                "the frequency at which the spins are given"
+            )
+        from .batched_precession import batch_arguments
+
+        if self._jitted_predict is None:
+            import jax
+
+            self._jitted_predict = jax.jit(self.jax_predict())
+        h_plus, h_cross = self._jitted_predict(*batch_arguments([params], frequencies))
+        return np.asarray(h_plus[0]), np.asarray(h_cross[0])
+
+    def predict_numpy(
+        self,
+        frequencies: np.ndarray,
+        params: PrecessingParametersWithExtrinsic,
         source: str = "surrogate",
         angles: Optional[EulerAngles] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        r"""Predict the two polarizations of a precessing waveform.
+        r"""The numpy reference implementation of :meth:`predict`.
+
+        Painfully slow (~20 s a waveform: the precession is integrated with
+        scipy from the bottom of the band at every call), and only meant for
+        testing :meth:`predict` and the twist: unlike it, it can twist
+        TEOBResumS' own co-precessing multipoles (``source="eob"``), take
+        precomputed Euler angles, and accept ``reference_frequency_hz =
+        None``.
 
         Parameters
         ----------
@@ -1310,7 +1357,7 @@ def check_aligned_spin_limit(
     reference.inclination = params.inclination
     expected_plus, expected_cross = model.predict(frequencies, reference)
 
-    predicted_plus, predicted_cross = PrecessingModel(model).predict(
+    predicted_plus, predicted_cross = PrecessingModel(model).predict_numpy(
         frequencies, aligned_params
     )
 

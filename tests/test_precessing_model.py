@@ -203,8 +203,8 @@ def test_anchoring_to_the_reference_phase_moves_only_precessing_waveforms(
     anchored = precessing.euler_angles(
         precessing_params, float(frequencies[0]), anchor_to_reference_phase=True
     )
-    hp_plain, _ = precessing.predict(frequencies, precessing_params, angles=plain)
-    hp_anchored, _ = precessing.predict(frequencies, precessing_params, angles=anchored)
+    hp_plain, _ = precessing.predict_numpy(frequencies, precessing_params, angles=plain)
+    hp_anchored, _ = precessing.predict_numpy(frequencies, precessing_params, angles=anchored)
     scale = np.max(np.abs(hp_plain))
     assert np.max(np.abs(hp_anchored - hp_plain)) > 1e-3 * scale
 
@@ -218,13 +218,13 @@ def test_anchoring_to_the_reference_phase_moves_only_precessing_waveforms(
         inclination=precessing_params.inclination,
         total_mass=precessing_params.total_mass,
     )
-    with_anchor = precessing.predict(
+    with_anchor = precessing.predict_numpy(
         frequencies, aligned,
         angles=precessing.euler_angles(
             aligned, float(frequencies[0]), anchor_to_reference_phase=True
         ),
     )
-    without = precessing.predict(frequencies, aligned)
+    without = precessing.predict_numpy(frequencies, aligned)
     np.testing.assert_allclose(with_anchor[0], without[0], rtol=1e-8, atol=0.0)
 
 
@@ -287,12 +287,21 @@ def test_precessing_prediction_is_finite(frequencies, precessing_params):
     """A generic precessing configuration produces a usable waveform."""
 
     precessing = PrecessingModel(Model.default_for_testing())
-    h_plus, h_cross = precessing.predict(frequencies, precessing_params)
+    params = dataclasses.replace(precessing_params, reference_frequency_hz=20.0)
+    h_plus, h_cross = precessing.predict(frequencies, params)
 
     assert h_plus.shape == frequencies.shape
     assert np.all(np.isfinite(h_plus))
     assert np.all(np.isfinite(h_cross))
     assert np.max(np.abs(h_plus)) > 0.0
+
+
+def test_prediction_needs_a_reference_frequency(frequencies, precessing_params):
+    """The JAX path cannot guess where the spins are given."""
+
+    precessing = PrecessingModel(Model.default_for_testing())
+    with pytest.raises(ValueError, match="reference_frequency_hz"):
+        precessing.predict(frequencies, precessing_params)
 
 
 def test_twist_reproduces_teobresums_frequency_domain_polarizations():
@@ -351,7 +360,7 @@ def test_twist_reproduces_teobresums_frequency_domain_polarizations():
     angles = precessing.euler_angles(params, float(grid[0]))
     assert angles.beta.max() > 0.2
 
-    hp, hc = precessing.predict(grid, params, source="eob", angles=angles)
+    hp, hc = precessing.predict_numpy(grid, params, source="eob", angles=angles)
     for ours, (real, imag) in ((hp, (real_hp, imag_hp)), (hc, (real_hc, imag_hc))):
         mismatch = validator.full_waveform_mismatch(
             {(2, 2): resampled(real, imag, grid)}, {(2, 2): ours}, frequencies=grid
