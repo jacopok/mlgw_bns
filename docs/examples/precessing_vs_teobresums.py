@@ -53,11 +53,10 @@ f, hp_re, hp_im, hc_re, hc_im, _, hlm, dynamics = EOBRunPy(dict(
     use_mode_lm=sorted(mode_to_k(mode) for mode in model.modes),
     use_mode_lm_inertial=list(range(mode_to_k(Mode(largest_l, largest_l)) + 1)),
 ))
-# mlgw_bns' Fourier transform is the complex conjugate of TEOBResumS', and
-# its h_x has the opposite sign
+# mlgw_bns' Fourier transform is the complex conjugate of TEOBResumS'
 f = np.asarray(f)
 hp_teob = np.conj(np.asarray(hp_re) + 1j * np.asarray(hp_im))
-hc_teob = -np.conj(np.asarray(hc_re) + 1j * np.asarray(hc_im))
+hc_teob = np.conj(np.asarray(hc_re) + 1j * np.asarray(hc_im))
 
 # TEOBResumS' orbital phase is zero where its integration starts
 params.reference_phase = precessing.teob_reference_phase(
