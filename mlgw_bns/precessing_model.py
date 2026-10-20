@@ -745,9 +745,9 @@ def polarizations_from_inertial_modes(
     the polarizations are
 
     .. math::
-        \tilde{h}_+ - i \tilde{h}_\times &= \sum_{\ell m}
-            \tilde{h}_{\ell m}(f)\; {}_{-2}Y_{\ell m}(\iota, \varphi) \\
         \tilde{h}_+ + i \tilde{h}_\times &= \sum_{\ell m}
+            \tilde{h}_{\ell m}(f)\; {}_{-2}Y_{\ell m}(\iota, \varphi) \\
+        \tilde{h}_+ - i \tilde{h}_\times &= \sum_{\ell m}
             \tilde{h}_{\ell m}^*(-f)\; {}_{-2}Y_{\ell m}^*(\iota, \varphi)
 
     the second following from the reality of the time-domain strain.
@@ -793,7 +793,7 @@ def polarizations_from_inertial_modes(
     )
 
     h_plus = (h_minus + h_plus_combination) / 2.0
-    h_cross = 1j * (h_minus - h_plus_combination) / 2.0
+    h_cross = -1j * (h_minus - h_plus_combination) / 2.0
     return h_plus, h_cross
 
 

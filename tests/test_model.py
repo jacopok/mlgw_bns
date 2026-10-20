@@ -310,7 +310,7 @@ def test_model_predict_modes_dict_sums_to_predict(
     )
 
     assert set(modes_dict.keys()) == set(trained_model.modes)
-    assert_waveforms_close(hp - 1j * hc, sum(modes_dict.values()))
+    assert_waveforms_close(hp + 1j * hc, sum(modes_dict.values()))
 
 
 def test_model_predict_modes_dict_sums_to_predict_at_other_total_mass(
@@ -330,7 +330,7 @@ def test_model_predict_modes_dict_sums_to_predict_at_other_total_mass(
     hp, hc = trained_model.predict(frequencies, params)
     modes_dict = trained_model.predict_modes_dict(frequencies, params)
 
-    assert_waveforms_close(hp - 1j * hc, sum(modes_dict.values()))
+    assert_waveforms_close(hp + 1j * hc, sum(modes_dict.values()))
 
 
 def test_model_predict_amplitude_phase_mode(

@@ -10,8 +10,14 @@ spin-weighted spherical harmonics :math:`{}_{-2}Y_{\ell m}(\iota, \varphi)`
 as
 
 .. math::
-    h_+ - i\, h_\times = \sum_{\ell m} A_{\ell m}(f)\, e^{-i \phi_{\ell m}(f)}
-                          \; {}_{-2}Y_{\ell m}(\iota, \varphi)\,,
+    \tilde{h}_+ + i\, \tilde{h}_\times = \sum_{\ell, m > 0}
+        A_{\ell m}(f)\, e^{i \phi_{\ell m}(f)} \; {}_{-2}Y_{\ell m}(\iota, \varphi)
+
+at positive frequencies, with the Fourier convention
+:math:`\tilde{h}(f) = \int h(t) e^{-2 \pi i f t} \mathrm{d}t` (LALSuite's,
+and numpy's FFT): the combination :math:`h_+ - i h_\times` of the
+time-domain decomposition has its :math:`m > 0` multipoles at negative
+frequencies (see ``docs/explanation/higher_order_modes.md``),
 
 see for instance Appendix E of `arXiv:2004.06503
 <https://arxiv.org/pdf/2004.06503.pdf>`_. Each individual mode amplitude
@@ -241,20 +247,20 @@ def _build_mode_coeffs(
             coeffs[i, 1] = -(yi + yi_m)
             coeffs[i, 2] = yi + yi_m
             coeffs[i, 3] = yr - yr_m
-            coeffs[i, 4] = -(yi - yi_m)
-            coeffs[i, 5] = -(yr + yr_m)
-            coeffs[i, 6] = yr + yr_m
-            coeffs[i, 7] = -(yi - yi_m)
+            coeffs[i, 4] = yi - yi_m
+            coeffs[i, 5] = yr + yr_m
+            coeffs[i, 6] = -(yr + yr_m)
+            coeffs[i, 7] = yi - yi_m
         else:
             # Even l: Y_{l,-m} = +conj(Y_{l,m}).
             coeffs[i, 0] = yr + yr_m
             coeffs[i, 1] = -(yi - yi_m)
             coeffs[i, 2] = yi - yi_m
             coeffs[i, 3] = yr + yr_m
-            coeffs[i, 4] = -(yi + yi_m)
-            coeffs[i, 5] = -(yr - yr_m)
-            coeffs[i, 6] = yr - yr_m
-            coeffs[i, 7] = -(yi + yi_m)
+            coeffs[i, 4] = yi + yi_m
+            coeffs[i, 5] = yr - yr_m
+            coeffs[i, 6] = -(yr - yr_m)
+            coeffs[i, 7] = yi + yi_m
     return coeffs
 
 
@@ -298,8 +304,10 @@ class Model:
     produce the observer-frame polarizations :math:`h_+, h_\times` via
 
     .. math::
-        h_+ - i\, h_\times = \sum_{\ell m} A_{\ell m}\, e^{-i\phi_{\ell m}}
-                              \; {}_{-2}Y_{\ell m}(\iota, \varphi).
+        \tilde{h}_+ + i\, \tilde{h}_\times = \sum_{\ell, m > 0}
+            A_{\ell m}\, e^{i\phi_{\ell m}} \; {}_{-2}Y_{\ell m}(\iota, \varphi)
+
+    (see the module docstring).
 
     Each per-mode model is instantiated lazily on first access through
     :attr:`mode_models`, which means that constructing a :class:`Model`
@@ -1153,7 +1161,7 @@ class Model:
         tuple[np.ndarray, np.ndarray]
             The complex polarizations ``(h_plus, h_cross)``, in the same
             convention as :meth:`ModeModel.predict`. The combination
-            appearing in the mode decomposition is ``h_plus - 1j * h_cross``.
+            appearing in the mode decomposition is ``h_plus + 1j * h_cross``.
 
         References
         ----------
@@ -1182,7 +1190,7 @@ class Model:
         r"""Return the per-mode complex Cartesian contributions.
 
         Each entry is the contribution of the corresponding mode to the
-        observer-frame combination :math:`h_+ - i\, h_\times`, already
+        observer-frame combination :math:`h_+ + i\, h_\times`, already
         weighted by :math:`{}_{-2}Y_{\ell m}(\iota, \varphi)`. Summing the
         returned arrays reproduces the output of :meth:`predict`.
 
@@ -1196,7 +1204,7 @@ class Model:
         Returns
         -------
         dict[tuple[int, int], np.ndarray]
-            Mapping ``(l, m) -> h_lm = h_+ - i h_x`` (one complex array
+            Mapping ``(l, m) -> h_lm = h_+ + i h_x`` (one complex array
             per mode).
         """
         modes_dict = self._hpc_waveform_per_mode(
@@ -1210,7 +1218,7 @@ class Model:
         for (l, m), (hp_real, hp_imag, hc_real, hc_imag) in modes_dict.items():
             hp = (hp_real + 1j * hp_imag) / eta / 2
             hc = (hc_real + 1j * hc_imag) / eta / 2
-            result[(l, m)] = hp - 1j * hc
+            result[(l, m)] = hp + 1j * hc
         return result
 
     def batched_surrogate(
@@ -1401,7 +1409,7 @@ class Model:
         Returns
         -------
         dict[tuple[int, int], np.ndarray]
-            Mapping ``(l, m) -> h_lm = h_+ - i h_x``.
+            Mapping ``(l, m) -> h_lm = h_+ + i h_x``.
         """
         if inclination is None:
             inclination = params.inclination
@@ -1418,7 +1426,7 @@ class Model:
         for (l, m), (hp_real, hp_imag, hc_real, hc_imag) in modes_dict.items():
             hp = (hp_real + 1j * hp_imag) / eta / 2
             hc = (hc_real + 1j * hc_imag) / eta / 2
-            result[(l, m)] = hp - 1j * hc
+            result[(l, m)] = hp + 1j * hc
         return result
 
     def teob_modes_amp_phase(
@@ -1514,7 +1522,7 @@ class Model:
         Returns
         -------
         dict[tuple[int, int], np.ndarray]
-            Mapping ``(l, m) -> h_lm = h_+ - i h_x``.
+            Mapping ``(l, m) -> h_lm = h_+ + i h_x``.
         """
         if inclination is None:
             inclination = params.inclination
@@ -1550,7 +1558,7 @@ class Model:
             h_cross_imag = amp_arr[i] * (cosphi_arr[i] * c[6] + sinphi_arr[i] * c[7])
             hp = (h_plus_real + 1j * h_plus_imag) / eta / 2
             hc = (h_cross_real + 1j * h_cross_imag) / eta / 2
-            result[(mode.l, mode.m)] = hp - 1j * hc
+            result[(mode.l, mode.m)] = hp + 1j * hc
         return result
 
     def _hpc_waveform(

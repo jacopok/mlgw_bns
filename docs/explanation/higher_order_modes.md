@@ -268,3 +268,26 @@ swapped relative to the frequency convention used here).
 These are the final expressions we need, since they express the frequency-domain
 polarizations $h_+(f)$ and $h_\times(f)$ as a function of the frequency-domain modes
 $\widetilde{H}_{\ell m} (f)$.
+
+### Which Fourier convention
+
+The step that drops the $\widetilde{H}_{\ell -m}$ modes depends on the sign in
+the Fourier transform. The time-domain multipoles of an inspiral go as
+$H_{\ell m} \propto e^{-i m \Phi(t)}$, with the orbital phase $\Phi$
+increasing: with $\widetilde{h}(f) = \int h(t) e^{+2 \pi i f t} \mathrm{d}t$
+(TEOBResumS' frequency-domain output) the $m > 0$ multipoles are at positive
+frequencies, as assumed above; with $\int h(t) e^{-2 \pi i f t} \mathrm{d}t$
+(LALSuite's, and numpy's FFT) they are at negative ones. The polarizations of
+`mlgw_bns` are in the second convention, whose phase *increases* with
+frequency during the inspiral. Doing the same computation there, keeping the
+multipoles at positive frequencies, gives the same $\widetilde{h}_+$ and the
+opposite sign of $\widetilde{h}_\times$ when both are written in terms of the
+multipoles the model stores, $\widetilde{h}_{\ell m} = A_{\ell m} e^{i \phi_{\ell m}}$:
+
+$$ \widetilde{h}_+ + i \widetilde{h}_\times = \frac{M}{d_L}
+\sum _{\ell \geq 2} \sum _{0<m \leq \ell} \widetilde{h}_{\ell m}(f) \, {}^{(-2)}Y_{\ell m}\,.
+$$
+
+This is what `Model.predict` computes. Since 2.0 it agrees with TEOBResumS'
+time-domain $h_+$, $h_\times$ (Fourier transformed with numpy), to the sign of
+$h_\times / h_+$; until then $h_\times$ had the opposite sign.

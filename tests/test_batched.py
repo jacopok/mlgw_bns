@@ -79,7 +79,7 @@ def test_single_rows_match_predict_modes_dict(default_model):
             ),
         )
         for j, mode in enumerate(ALL_MODES):
-            got = h_plus[0, j] - 1j * h_cross[0, j]
+            got = h_plus[0, j] + 1j * h_cross[0, j]
             scale = np.max(np.abs(expected[mode]))
             np.testing.assert_allclose(
                 got / scale, expected[mode] / scale, rtol=0, atol=SINGLE_ROW_RTOL
@@ -320,7 +320,7 @@ def test_matches_teobresums(default_model):
         params = ParametersWithExtrinsic(*intrinsic[i], 1.0, 1.0, total_mass[i])
         true = default_model.get_teob_modes_dict(frequencies[band], params)
         predicted = {
-            mode: h_plus[i, j] - 1j * h_cross[i, j] for j, mode in enumerate(ALL_MODES)
+            mode: h_plus[i, j] + 1j * h_cross[i, j] for j, mode in enumerate(ALL_MODES)
         }
         mismatches.append(
             validator.full_waveform_mismatch(

@@ -888,7 +888,7 @@ class ValidateModel:
         modes_1 : Dict[Tuple[int, int], np.ndarray]
                 Per-mode contributions for the first waveform. Keys are
                 :math:`(\ell, m)`, values are complex arrays
-                (:math:`h_+ - i h_\times` for that mode).
+                (:math:`h_+ + i h_\times` for that mode).
         modes_2 : Dict[Tuple[int, int], np.ndarray]
                 Per-mode contributions for the second waveform. Same
                 format as ``modes_1``.
@@ -925,9 +925,9 @@ class ValidateModel:
         ) -> Tuple[np.ndarray, np.ndarray]:
             r"""Build :math:`h_+` and :math:`h_\times` from modes at given ``phi_ref``.
 
-            Convention: ``modes[(l,m)] = h_+ - i h_\times`` for that
+            Convention: ``modes[(l,m)] = h_+ + i h_\times`` for that
             mode, so :math:`h_+ = \mathrm{Re}(h)` and
-            :math:`h_\times = -\mathrm{Im}(h)`.
+            :math:`h_\times = \mathrm{Im}(h)`.
             """
             shifted = {
                 (l, m): v * np.exp(1j * m * phi_ref)
@@ -935,7 +935,7 @@ class ValidateModel:
             }
             h_sum = sum(shifted.values())
             h_plus = np.real(h_sum)
-            h_cross = -np.imag(h_sum)
+            h_cross = np.imag(h_sum)
             return h_plus, h_cross
 
         # Reference waveform fixed at kappa=0 (i.e. pure h_+).

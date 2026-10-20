@@ -159,6 +159,32 @@ loaded, and the waveforms are referenced differently in time and phase.
 
 ### Fixed
 
+- **The sign of `hx`.** `Model.predict`, `batched.mode_polarizations` (and
+    so `jax_predict.model_to_jax_waveform` and the batched surrogate) and
+    `PrecessingModel` returned `hx` with the opposite sign to TEOBResumS'
+    and LALSuite's convention relative to `h+`: `hx/h+ = +0.836i` for the
+    (2,2) at inclination 1 against `-0.836i` (the single-mode
+    `ModeModel.predict` was right). That is the waveform seen from
+    `pi - iota`, which mirrors the inclination posterior in multi-detector
+    inference. The frequency-domain projection had been derived keeping
+    the `m > 0` multipoles at positive frequencies, which holds in the
+    `exp(+2 pi i f t)` Fourier convention of TEOBResumS' frequency-domain
+    output, not in the `exp(-2 pi i f t)` one of the model's polarizations
+    (`docs/explanation/higher_order_modes.md`). No comparison could see it:
+    the tests compared `h+` and `hx` with TEOBResumS' each on its own, by
+    a mismatch maximised over a constant phase, which absorbs the sign;
+    the full-waveform mismatch builds both sides' polarizations from
+    multipoles in the same convention, and maximises over a polarization
+    angle and the absolute value of the overlap, either of which absorbs
+    it; and for aligned spins negating `hx` is the same as `iota -> pi -
+    iota`, so no single-detector mismatch can see it at all. The
+    precessing test against TEOBResumS' `hx` compared it with `-hc`. Now
+    `h+ + i hx`, not `h+ - i hx`, is the sum of the multipoles weighted by
+    the spherical harmonics, and `Model.predict_modes_dict` and
+    `get_teob_modes_dict` return each mode's contribution to it (the same
+    arrays as before). The
+    trained models are unchanged.
+
 - `Model.get_teob_modes_dict` returned amplitudes without the physical
     prefactor (off by ~1e-27 relative to `predict_modes_dict`).
 
@@ -268,12 +294,6 @@ loaded, and the waveforms are referenced differently in time and phase.
     mismatch): `prolong_euler_angles_FD` unwraps `alpha` with `unwrap_HM`
     rather than `unwrap_euler`. A defect of the reference, not of
     `PrecessingModel` (reported upstream).
-- `Model.predict` (and so `PrecessingModel.predict`) returns `hx` with the
-    opposite sign to TEOBResumS' and LAL's convention relative to `h+`,
-    i.e. the polarizations of inclination `pi - iota`. For an aligned-spin
-    binary this is an exact symmetry no mismatch can see; in multi-detector
-    inference it mirrors the inclination posterior.
-
 ## [1.0.1] - 2026-09-21
 
 ### Fixed

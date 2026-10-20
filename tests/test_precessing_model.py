@@ -352,7 +352,7 @@ def test_twist_reproduces_teobresums_frequency_domain_polarizations():
     assert angles.beta.max() > 0.2
 
     hp, hc = precessing.predict(grid, params, source="eob", angles=angles)
-    for ours, (real, imag) in ((hp, (real_hp, imag_hp)), (-hc, (real_hc, imag_hc))):
+    for ours, (real, imag) in ((hp, (real_hp, imag_hp)), (hc, (real_hc, imag_hc))):
         mismatch = validator.full_waveform_mismatch(
             {(2, 2): resampled(real, imag, grid)}, {(2, 2): ours}, frequencies=grid
         )

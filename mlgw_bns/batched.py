@@ -42,10 +42,10 @@ reproduces.
   .. math::
       h_+ = \tfrac{1}{2} \tilde{h}_{\ell m}
             \left(Y_{\ell m} + s\, Y^*_{\ell, -m}\right), \qquad
-      h_\times = \tfrac{i}{2} \tilde{h}_{\ell m}
+      h_\times = -\tfrac{i}{2} \tilde{h}_{\ell m}
             \left(Y_{\ell m} - s\, Y^*_{\ell, -m}\right),
 
-  so that :math:`h_+ - i h_\times = \tilde{h}_{\ell m} Y_{\ell m}`, summed
+  so that :math:`h_+ + i h_\times = \tilde{h}_{\ell m} Y_{\ell m}`, summed
   over the modes. :func:`mode_polarizations` implements exactly this. No
   angular factor, reference phase or polarisation convention is applied
   to ``amp`` and ``phase`` themselves.
@@ -319,7 +319,7 @@ def mode_polarizations(amp, phase, modes, inclination, azimuth=0.0, xp=np):
     y_sum = xp.stack(y_sum, axis=1)  # (N or 1, n_modes, 1)
     y_diff = xp.stack(y_diff, axis=1)
     h = amp * xp.exp(1j * phase) / 2
-    return h * y_sum, 1j * h * y_diff
+    return h * y_sum, -1j * h * y_diff
 
 
 # ====================================================================== #
