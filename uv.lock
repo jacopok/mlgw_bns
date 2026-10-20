@@ -2927,7 +2927,7 @@ wheels = [
 [[package]]
 name = "teobresums"
 version = "4.4.1"
-source = { git = "https://github.com/jacopok/teobresums?subdirectory=Python&branch=initial-spa-fix#0da39b990c781eeee8574e7939eee1879d57c408" }
+source = { git = "https://github.com/jacopok/teobresums?subdirectory=Python&branch=initial-spa-fix#882a1649f6eff37c3f0a0edc4215a851bce0cd32" }
 
 [[package]]
 name = "textual"
