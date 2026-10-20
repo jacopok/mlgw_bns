@@ -1,6 +1,6 @@
 [project]
 name = "mlgw_bns"
-version = "1.0.1"
+version = "2.0.0"
 description = "Accelerating gravitational wave template generation with machine learning."
 license = "GPL-3.0-only"
 authors = [
@@ -12,13 +12,14 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "numpy>=2.2.3,<3", # for all kinds of array manipulation
     "optuna>=5.0.0,<6", # for optimization of hyperparameters
-    "scikit-learn>=1.9.0,<2", # provides the neural networks
+    "scipy>=1.16.3,<2", # interpolation, integration of the precession equations
+    "scikit-learn>=1.9.1,<2", # provides the neural networks
     "h5py>=3.16.0,<4", # for management of h5 files
-    "numba>=0.67.0", # acceleration of numerical computations
-    "joblib>=1.5.3,<2", # to save pickled objects such as neural networks
-    "tqdm>=4.67.1,<5", # makes progressbars
+    "numba>=0.68.0", # acceleration of numerical computations
+    "joblib>=1.6.0,<2", # to save pickled objects such as neural networks
+    "tqdm>=4.70.1,<5", # makes progressbars
     "sortedcontainers>=2.4.0,<3", # for the management of index lists while downsampling
-    "plotly>=6.8.0,<7", # to make plots for optuna studies
+    "plotly>=6.8.0,<8", # to make plots for optuna studies
     "types-setuptools>=75.8.0", # technical
     "toml>=0.10.2,<0.11", # technical
     "PyYAML>=6.0.2,<7",
@@ -35,7 +36,7 @@ Repository = "https://github.com/jacopok/mlgw_bns"
  
 [project.optional-dependencies]
 docs = [
-    "Sphinx>=8.1.3,<9", # myst-parser currently caps this at <9
+    "Sphinx>=8.1.3,<10", # myst-parser currently caps this at <10
     "sphinx-rtd-theme>=3.0.2",
     "readthedocs-sphinx-search>=0.3.2",
     "myst-parser>=5.1.0,<6",
@@ -44,22 +45,22 @@ docs = [
     "sphinx-autodoc-defaultargs>=0.1.2",
 ]
 torch = [
-    "torch>=2.12.0,<3",
+    "torch>=2.14.1,<3",
 ]
 pycbc = [
     "pycbc>=2.11.0", # requires Python>=3.11
 ]
 jax = [
-    "jax>=0.7,<0.12", # experimental JAX port of the prediction inner loop
+    "jax>=0.7,<0.13", # experimental JAX port of the prediction inner loop
 ]
 
 [dependency-groups]
 dev = [
     "teobresums>=4.4.1",
-    "pytest<9",
+    "pytest<9", # pytest-cases 3.10 breaks on pytest 9,
     "tox>=4.23.2",
     "tox-uv>=1.16.0",
-    "black>=26.5.1",
+    "black>=26.10.1",
     "tox-gh-actions>=3.2.0",
     "pre-commit>=4.0.1",
     "mypy>=1.14.1",

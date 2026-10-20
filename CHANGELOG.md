@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-20
+
 This release breaks compatibility with 1.0: models saved by 1.0 cannot be
 loaded, and the waveforms are referenced differently in time and phase.
 
@@ -209,6 +211,45 @@ loaded, and the waveforms are referenced differently in time and phase.
     hyperparameter studies of the regressors shared by workers on many
     nodes (`hyperparameter_optimization.run_worker`, journal storage).
 
+- **Precessing waveforms**: `mlgw_bns.precessing_model.PrecessingModel`
+    twists the surrogate's co-precessing multipoles into the inertial frame
+    along Euler angles integrated from the PN spin-precession equations
+    (`mlgw_bns.twist_waveform`, 3.5PN + tidal `dOmega/dt`). The twist is done
+    in the frequency domain, each multipole's angles looked up at its own
+    stationary-phase orbital frequency; with no in-plane spins it reduces to
+    `Model.predict`. `PrecessingParametersWithExtrinsic` gives the spin
+    vectors at `reference_frequency_hz`, where the orbital phase is fixed to
+    `reference_phase` (as `f_ref`, `phiRef` in LALSuite);
+    `PrecessingModel.teob_reference_phase` converts TEOBResumS' phase origin.
+    Against TEOBResumS' precessing waveforms the mismatch is the same as the
+    aligned-spin one of the same binaries (7.0e-8 median, 48 binaries x 4
+    lines of sight, outside TEOBResumS' `alpha` steps, see Known issues).
+    See `docs/explanation/precession.md` and
+    `docs/examples/precessing_vs_teobresums.py`.
+- **Batched precessing waveforms in JAX**: `PrecessingModel.jax_predict()`
+    (`mlgw_bns.batched_precession`) is a pure JAX function of `N` binaries,
+    which can be jitted, vmapped and differentiated. It integrates the
+    precession against the orbital frequency with fixed DOP853 steps and
+    matches `PrecessingModel.predict` to mismatches of 1e-11--3e-10; ~75 ms
+    a waveform alone, ~20 ms in a batch of 64 (CPU), against ~20 s for the
+    numpy path and ~0.13 s for TEOBResumS. `PrecessingModel.jax_predict_modes`
+    (`batched_precession.precessing_mode_components`) returns the
+    co-precessing multipoles and their twist coefficients separately, for
+    mode-by-mode relative binning, and `batched_precession.precession_angles`
+    integrates the angles once for a frequency array evaluated in pieces.
+    `special_func.wigner_d_function`/`spinsphericalharm` take `xp=` (numpy
+    or `jax.numpy`).
+- `Model.coprecessing_modes_dict` and
+    `Model.coprecessing_amplitudes_and_phases`: the multipoles without the
+    sky projection, which is what the twist needs.
+- The LVK spin angles: `mlgw_bns.spin_conversion.lvk_to_precessing` (and
+    `PrecessingParametersWithExtrinsic.from_lvk`) maps `theta_jn, phi_jl,
+    tilt_1, tilt_2, phi_12, a_1, a_2, phase` at `f_ref` to the precessing
+    parameters; `lal_precessing_spins`, a numpy/JAX port of LALSuite's
+    `SimInspiralTransformPrecessingNewInitialConditions`, agrees with it to
+    1e-11.
+- `scipy` is now a declared dependency (it was used through scikit-learn's).
+
 ### Known issues
 
 - The kernel-ridge regressors of the 1.0 model have dual coefficients up
@@ -221,6 +262,17 @@ loaded, and the waveforms are referenced differently in time and phase.
     as SNR^2). Evaluating the sum in 80-bit precision removes it (6e-6 rad)
     but costs ~20x; the lasting fix is a better-conditioned regressor, which
     needs retraining.
+- TEOBResumS' precession angle `alpha` has spurious ~2 pi steps, which its
+    frequency-domain twist splines through, so its precessing `h+`, `hx`
+    are wrong on the few frequency bins around each (up to ~4e-3 of
+    mismatch): `prolong_euler_angles_FD` unwraps `alpha` with `unwrap_HM`
+    rather than `unwrap_euler`. A defect of the reference, not of
+    `PrecessingModel` (reported upstream).
+- `Model.predict` (and so `PrecessingModel.predict`) returns `hx` with the
+    opposite sign to TEOBResumS' and LAL's convention relative to `h+`,
+    i.e. the polarizations of inclination `pi - iota`. For an aligned-spin
+    binary this is an exact symmetry no mismatch can see; in multi-detector
+    inference it mirrors the inclination posterior.
 
 ## [1.0.1] - 2026-09-21
 
@@ -501,7 +553,10 @@ loaded, and the waveforms are referenced differently in time and phase.
 - Fix `ValidateModel` frequency arrays
 - Various fixes to tests
 
-[Unreleased]: https://github.com/jacopok/mlgw_bns/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/jacopok/mlgw_bns/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/jacopok/mlgw_bns/compare/v1.0.1...v2.0.0
+[1.0.1]: https://github.com/jacopok/mlgw_bns/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/jacopok/mlgw_bns/compare/v0.12.1...v1.0.0
 [0.12.1]: https://github.com/jacopok/mlgw_bns/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/jacopok/mlgw_bns/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/jacopok/mlgw_bns/compare/v0.10.2...v0.11.0
