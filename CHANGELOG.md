@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- The overview lists the shipped models and how to load and download them,
+    and shows how to generate precessing waveforms; the installation guide
+    points to the fork of TEOBResumS the models are trained with and to the
+    `jax` extra. The profiling guide, the TEOBResumS comparison in the
+    precession page and the README's mismatch plot are updated to the
+    2.0 models.
+
 ## [2.0.1] - 2026-10-21
 
 ### Changed

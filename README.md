@@ -16,12 +16,15 @@ the accuracy then steadily improves as more training waveforms are used.
 Currently, the only model used for training is [`TEOBResumS`](http://arxiv.org/abs/1806.01772),
 but it is planned to introduce the possibility to use others.
 
-The model shipped with the package covers the $(2,2)$, $(2,1)$, $(3,1)$,
-$(3,2)$, $(3,3)$, $(4,3)$ and $(4,4)$ spherical-harmonic modes.
-Below are the per-mode and full-waveform mismatch distributions against
-the underlying `TEOBResumS` waveforms: with the residual time shift and
-reference phase optimized (top), and with only the surrogate's own
-predicted alignment applied (bottom):
+The two models shipped with the package, `default_hom` (tidal
+polarizabilities up to 2000) and `default_hom_lambda12000` (up to 12000),
+cover the $(2,2)$, $(2,1)$, $(3,1)$, $(3,2)$, $(3,3)$, $(4,3)$ and $(4,4)$
+spherical-harmonic modes, for aligned spins; precessing waveforms are
+built from them by twisting the multipoles, as `TEOBResumS` does.
+Below are the per-mode and full-waveform mismatch distributions of
+`default_hom` against 1000 `TEOBResumS` waveforms: with the residual time
+shift and reference phase optimized (top), and with only the surrogate's
+own predicted alignment applied (bottom):
 
 ![mismatches](docs/images/mismatches.png)
 

@@ -87,16 +87,18 @@ uv run snakeviz prediction_profile.prof
 from the command line, and a local webpage containing an interactive visualization 
 of the execution times of the various internal functions.
 
-The expected result, if the length of the required frequencies 
-is of the order of a few thousands (as is needed, for example, with reduced order quadratures), 
-is that: 
-- most of the time will be taken by interpolation: the internal function 
-    is called `model.cartesian_waveforms_at_frequencies`, which calls 
-    `downsampling_interpolation.resample` twice (once for amplitude, once for phase),
-    and which in turns calls the scipy low-level functions `splrep` and `splev`;
-- some time is taken by the prediction of the waveforms (`mode_model.ModeModel.predict_waveforms_bulk`), of which
-  - some time (about half) is taken by the prediction of the residuals with the neural network and PCA:
-        `mode_model.ModeModel.predict_residuals_bulk`;
-  - some time (about half) is taken by the evaluation of the post-Newtonian amplitude and phase:
-        `dataset_generation.Dataset.recompose_residuals`;
+The expected result, for the shipped models and a few thousand frequencies
+(~100 ms for a call), is that:
+- most of the time (about two thirds) is taken by the kernel ridge
+    regressors predicting the principal components of each mode
+    (`neural_network.KernelRidgeNetwork.predict`, called by
+    `mode_model.ModeModel.predict_residuals_bulk`), since their cost scales
+    with the number of training waveforms;
+- some time is taken by the interpolation of the amplitude and phase of each
+    mode to the requested frequencies (`downsampling_interpolation.resample`),
+    and by reading the merger time and phase off the $(2,2)$ mode
+    (`model.Model.merger_reference`);
+- some time is taken by the evaluation of the post-Newtonian amplitudes and
+    phases the residuals are added to (`higher_order_modes`, `pn_modes`,
+    `taylorf2`);
 - any remaining time required should be comparatively small.

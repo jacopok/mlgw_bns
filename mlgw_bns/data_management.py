@@ -240,7 +240,7 @@ class ParameterRanges(SavableData):
     ----------
     mass_range : tuple[float, float]
             Range of valid total masses, in solar masses.
-            Defaults to (2.5., 4.).
+            Defaults to (2., 4.).
     q_range : tuple[float, float]
             Range of valid mass ratios.
             Defaults to (1., 3.).

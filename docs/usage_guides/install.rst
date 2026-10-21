@@ -10,16 +10,34 @@ From pip
     
     pip install mlgw-bns
 
-Having ``TEOBResumS`` installed is optional, but 
-the functionality of the package is currently severely hampered without it ---
-no new models can be generated, and the only possibility is to use the 
-one which is provided by default.
+This is enough to generate waveforms with the pretrained models (see
+:ref:`shipped_models`); their regressors are downloaded the first time
+they are used.
+Precessing waveforms (see :ref:`precessing_waveforms`) need JAX, which is
+an optional extra:
 
-It is available on PyPI, so it can be installed with 
+.. code-block:: bash
+    
+    pip install "mlgw-bns[jax]"
+
+.. _install_teobresums:
+
+TEOBResumS
+----------
+
+Having ``TEOBResumS`` installed is optional, but it is needed to generate
+new models and to compare against the reference waveforms.
+The shipped models are trained with a fork of it, the
+``initial-spa-fix`` branch of
+`github.com/jacopok/teobresums <https://github.com/jacopok/teobresums>`_:
+the public version aborts on some of the waveforms of the training sets,
+and its frequency-domain precessing waveforms have spurious :math:`2\pi`
+steps in the precession angle :math:`\alpha`.
+It can be installed with
 
 .. code-block:: bash
 
-    pip install teobresums
+    pip install "git+https://github.com/jacopok/teobresums@initial-spa-fix#subdirectory=Python"
 
 It is distributed as a source package which links against the 
 `GNU Scientific Library <https://www.gnu.org/software/gsl/>`_, so its 
@@ -47,7 +65,8 @@ and then run
 
 in the project directory.
 This creates a virtual environment in ``.venv/`` with all the dependencies, 
-``TEOBResumS`` included.
+the fork of ``TEOBResumS`` included; add ``--extra jax`` for the precessing
+waveforms.
 
 
 Testing and dev functionality

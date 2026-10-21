@@ -211,8 +211,8 @@ comparison can start at 20 Hz.
 :language: python
 ```
 
-This prints mismatches of $7.5 \times 10^{-8}$ for $h_+$ and
-$7.9 \times 10^{-8}$ for $h_\times$, with the Einstein Telescope noise curve,
+This prints mismatches of $1.4 \times 10^{-8}$ for $h_+$ and
+$1.0 \times 10^{-8}$ for $h_\times$, with the Einstein Telescope noise curve,
 optimised over a time shift and a constant phase. Leaving `reference_phase`
 at zero instead gives $6 \times 10^{-4}$.
 
