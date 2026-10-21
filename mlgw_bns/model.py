@@ -61,7 +61,7 @@ from .higher_order_modes import (
     _post_newtonian_amplitudes_by_mode,
     _post_newtonian_phases_by_mode,
 )
-from .mode_model import ModeModel, ParametersWithExtrinsic
+from .mode_model import ModeModel, ParametersWithExtrinsic, _with_single_row_config
 from .neural_network import Hyperparameters
 from .special_func import spinsphericalharm
 
@@ -928,6 +928,7 @@ class Model:
 
         self._batched_cache.clear()
 
+    @_with_single_row_config
     def merger_reference(self, params: ParametersWithExtrinsic) -> tuple[float, float]:
         """The (2,2) reference line of ``params``, see
         :meth:`ModeModel.merger_reference`."""
@@ -1019,6 +1020,7 @@ class Model:
 
         return np.stack(amps_list), np.stack(phases_list)
 
+    @_with_single_row_config
     def coprecessing_modes_dict(
         self,
         frequencies: np.ndarray,
@@ -1069,6 +1071,7 @@ class Model:
             ).items()
         }
 
+    @_with_single_row_config
     def coprecessing_amplitudes_and_phases(
         self,
         frequencies: np.ndarray,
@@ -1102,6 +1105,7 @@ class Model:
             for i, mode in enumerate(self.modes)
         }
 
+    @_with_single_row_config
     def predict_amplitude_phase_mode(
         self,
         mode: Mode,
@@ -1137,6 +1141,7 @@ class Model:
             frequencies, params, merger_reference=self.merger_reference(params)
         )
 
+    @_with_single_row_config
     def predict(
         self,
         frequencies: np.ndarray,
@@ -1182,6 +1187,7 @@ class Model:
 
         return hp_pred, hc_pred
 
+    @_with_single_row_config
     def predict_modes_dict(
         self,
         frequencies: np.ndarray,

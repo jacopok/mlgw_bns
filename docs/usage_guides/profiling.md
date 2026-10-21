@@ -88,17 +88,22 @@ from the command line, and a local webpage containing an interactive visualizati
 of the execution times of the various internal functions.
 
 The expected result, for the shipped models and a few thousand frequencies
-(~100 ms for a call), is that:
-- most of the time (about two thirds) is taken by the kernel ridge
-    regressors predicting the principal components of each mode
+(~13 ms for a call on a laptop), is that:
+- about a third of the time is taken by the interpolation of the amplitude
+    and phase of each mode to the requested frequencies
+    (`downsampling_interpolation.resample`), and by the sum of the modes
+    into the polarizations (`model.Model._hpc_waveform_per_mode`); these
+    scale with the number of frequencies, and dominate for more of them;
+- about a third is taken by the kernel ridge regressors predicting the
+    principal components of each mode
     (`neural_network.KernelRidgeNetwork.predict`, called by
-    `mode_model.ModeModel.predict_residuals_bulk`), since their cost scales
-    with the number of training waveforms;
-- some time is taken by the interpolation of the amplitude and phase of each
-    mode to the requested frequencies (`downsampling_interpolation.resample`),
-    and by reading the merger time and phase off the $(2,2)$ mode
-    (`model.Model.merger_reference`);
-- some time is taken by the evaluation of the post-Newtonian amplitudes and
+    `mode_model.ModeModel.predict_residuals_bulk`), ~0.5 ms each, once per
+    mode and once more for the merger reference (`model.Model.merger_reference`);
+- the rest is taken by the evaluation of the post-Newtonian amplitudes and
     phases the residuals are added to (`higher_order_modes`, `pn_modes`,
-    `taylorf2`);
-- any remaining time required should be comparatively small.
+    `taylorf2`), and by the reconstruction of the residuals from the
+    principal components.
+
+Linear algebra is kept on a single thread during a prediction: these
+products are too small for a multithreaded BLAS to help, and with it a
+call takes several times longer.

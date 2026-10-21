@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `Model.predict` and the other single-binary predictions keep BLAS on one
+    thread: the regressors' products are too small for a multithreaded BLAS,
+    which spent far longer synchronizing its threads than computing them,
+    and slowed the rest of the call down with them. A prediction of the
+    shipped model at 4000 frequencies takes ~13 ms instead of ~100; the
+    waveforms are bit-for-bit unchanged.
+
 ### Documentation
 
 - The overview lists the shipped models and how to load and download them,

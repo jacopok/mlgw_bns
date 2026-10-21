@@ -19,22 +19,35 @@ from numba import njit  # type: ignore
 from scipy.interpolate import CubicSpline, interp1d
 
 
-def _with_fast_sklearn_config(func):
-    """Run ``func`` with scikit-learn's per-call input validation disabled.
+@functools.lru_cache(maxsize=None)
+def _threadpool_controller():
+    """One shared ``ThreadpoolController``: building it inspects every loaded
+    library (~0.4 ms), while limiting through it costs a few microseconds."""
+    from threadpoolctl import ThreadpoolController  # type: ignore
+
+    return ThreadpoolController()
+
+
+def _with_single_row_config(func):
+    """Run ``func`` with scikit-learn's per-call input validation disabled,
+    and BLAS on a single thread.
 
     Every ``predict`` here feeds a single, already-clean parameter row to
     fitted ``KernelRidge`` / ``MLPRegressor`` estimators. scikit-learn's
     default ``check_array`` finiteness scan and ``@validate_params``
-    introspection then cost more than the linear algebra they guard. The
-    context manager is scoped to the call, so it never leaks to a caller
-    that uses scikit-learn itself.
+    introspection then cost more than the linear algebra they guard; and
+    a multithreaded BLAS spends far longer synchronizing its threads on
+    these small products than computing them, while its threads, left
+    spinning, slow the rest of the prediction down (a ``Model.predict``
+    of the shipped model took ~100 ms instead of ~10). Both settings are
+    scoped to the call, so they never leak to the caller.
     """
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         with sklearn.config_context(
             assume_finite=True, skip_parameter_validation=True
-        ):
+        ), _threadpool_controller().limit(limits=1, user_api="blas"):
             return func(*args, **kwargs)
 
     return wrapper
@@ -1220,7 +1233,7 @@ class ModeModel:
         slope = float(CubicSpline(knots, phase_nodes)(knots[-1], 1))
         return slope, float(phase_nodes[-1] - slope * knots[-1])
 
-    @_with_fast_sklearn_config
+    @_with_single_row_config
     def predict_amplitude_phase(
         self,
         frequencies: np.ndarray,
