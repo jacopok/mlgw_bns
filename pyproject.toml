@@ -1,6 +1,6 @@
 [project]
 name = "mlgw_bns"
-version = "2.0.0"
+version = "2.0.1"
 description = "Accelerating gravitational wave template generation with machine learning."
 license = "GPL-3.0-only"
 authors = [
@@ -20,12 +20,8 @@ dependencies = [
     "tqdm>=4.70.1,<5", # makes progressbars
     "sortedcontainers>=2.4.0,<3", # for the management of index lists while downsampling
     "plotly>=6.8.0,<8", # to make plots for optuna studies
-    "types-setuptools>=75.8.0", # technical
-    "toml>=0.10.2,<0.11", # technical
     "PyYAML>=6.0.2,<7",
-    "types-PyYAML>=6.0.12",
     "dacite>=1.9.2,<2",
-    "setuptools>=84.0.0",
     "tqdm-joblib>=0.0.5",
 ]
  
@@ -57,26 +53,16 @@ jax = [
 dev = [
     "teobresums>=4.4.1",
     "pytest>=9.0.3",
-    "tox>=4.23.2",
-    "tox-uv>=1.16.0",
     "black>=26.10.1",
-    "tox-gh-actions>=3.2.0",
     "pre-commit>=4.0.1",
     "mypy>=1.14.1",
-    "virtualenv>=20.28.1",
+    "types-PyYAML>=6.0.12",
     "ipython>=8.31.0",
-    "pytest-cov>=6.0.0",
     "pytest-benchmark>=5.1.0",
     "isort>=5.13.2",
-    "pylint>=3.3.3",
-    "mutmut>=3.2.2",
-    "scalene>=1.5.51",
     "pydeps>=3.0.1",
     "snakeviz>=2.2.2",
-    "colorama>=0.4.6",
-    "click>=8.1.8",
     "coveralls>=4.0.1",
-    "pytest-profiling>=1.8.1",
     "matplotlib>=3.10.0",
     "optuna-dashboard>=0.21.0", # visualization/studies_dashboard.py
 ]

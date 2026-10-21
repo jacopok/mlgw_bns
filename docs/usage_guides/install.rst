@@ -53,23 +53,15 @@ This creates a virtual environment in ``.venv/`` with all the dependencies,
 Testing and dev functionality
 -----------------------------
 
-To see whether everything is working properly, run 
-
-.. code-block:: bash
-    
-    uv run tox
-    
-This will run the tests and also build the documentation locally, 
-in the folder `docs/html/`; one can access it starting from `index.html`.
-
-To only run the tests, do 
+To see whether everything is working properly, run the tests with
 
 .. code-block:: bash
     
     uv run pytest
 
 
-To only build the documentation, do
+To build the documentation locally, in the folder `docs/html/`
+(one can access it starting from `index.html`), do
 
 .. code-block:: bash
     

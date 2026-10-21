@@ -5,11 +5,5 @@ learning model on effective-one-body waveforms.
 
 The code can be found on the `github page <https://github.com/jacopok/mlgw_bns>`_.
 """
-from importlib import metadata  # type: ignore
-
-import toml  # type: ignore
-
 from .mode_model import ModeModel, ParametersWithExtrinsic
 from .model import Model
-
-# __version__ = metadata.version(__package__)  # type: ignore

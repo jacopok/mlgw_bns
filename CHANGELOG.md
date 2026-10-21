@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-21
+
 ### Changed
 
 - `pytest-cases` is no longer a dependency: it breaks on pytest 9, and the
@@ -13,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a runtime dependency, which it never was.
 - The development dependencies require pytest 9.0.3 or newer and lock uv
   0.13.4, following security advisories.
+- Dropped the unused dependencies: `toml`, `setuptools` and the type stubs
+  from the runtime ones (`types-PyYAML` is now a development dependency),
+  and tox (with `tox.ini`), `pytest-cov`, `pylint`, `mutmut`, `scalene`,
+  `colorama`, `click` and `pytest-profiling` from the development ones.
 
 ## [2.0.0] - 2026-10-20
 
@@ -600,7 +606,8 @@ loaded, and the waveforms are referenced differently in time and phase.
 - Fix `ValidateModel` frequency arrays
 - Various fixes to tests
 
-[Unreleased]: https://github.com/jacopok/mlgw_bns/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/jacopok/mlgw_bns/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/jacopok/mlgw_bns/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/jacopok/mlgw_bns/compare/v1.0.1...v2.0.0
 [1.0.1]: https://github.com/jacopok/mlgw_bns/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jacopok/mlgw_bns/compare/v0.12.1...v1.0.0
