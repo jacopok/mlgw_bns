@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `pytest-cases` is no longer a dependency: it breaks on pytest 9, and the
+  test fixtures it parametrized are now plain pytest ones. It was also listed
+  as a runtime dependency, which it never was.
+- The development dependencies require pytest 9.0.3 or newer and lock uv
+  0.13.4, following security advisories.
+
 ## [2.0.0] - 2026-10-20
 
 This release breaks compatibility with 1.0: models saved by 1.0 cannot be

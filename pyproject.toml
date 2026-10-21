@@ -25,7 +25,6 @@ dependencies = [
     "PyYAML>=6.0.2,<7",
     "types-PyYAML>=6.0.12",
     "dacite>=1.9.2,<2",
-    "pytest-cases>=3.10.1",
     "setuptools>=84.0.0",
     "tqdm-joblib>=0.0.5",
 ]
@@ -57,7 +56,7 @@ jax = [
 [dependency-groups]
 dev = [
     "teobresums>=4.4.1",
-    "pytest<9", # pytest-cases 3.10 breaks on pytest 9,
+    "pytest>=9.0.3",
     "tox>=4.23.2",
     "tox-uv>=1.16.0",
     "black>=26.10.1",
@@ -70,7 +69,6 @@ dev = [
     "pytest-benchmark>=5.1.0",
     "isort>=5.13.2",
     "pylint>=3.3.3",
-    "pytest-cases>=3.8.6",
     "mutmut>=3.2.2",
     "scalene>=1.5.51",
     "pydeps>=3.0.1",

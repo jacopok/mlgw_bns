@@ -8,7 +8,6 @@ import h5py
 import numpy as np
 import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
-from pytest_cases import fixture, fixture_union, parametrize  # type:ignore
 
 from mlgw_bns import Model, ModeModel, ParametersWithExtrinsic
 from mlgw_bns.data_management import ParameterRanges
@@ -17,12 +16,11 @@ from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
 from mlgw_bns.higher_order_modes import Mode
 
 
-@fixture(name="variable_dataset")
-@parametrize(f_0=[30.0, 40.0])
-def fixture_variable_dataset(f_0):
+@pytest.fixture(name="variable_dataset", params=[30.0, 40.0])
+def fixture_variable_dataset(request):
     """Dataset object with variable initial frequency"""
     return Dataset(
-        initial_frequency_hz=f_0,
+        initial_frequency_hz=request.param,
         srate_hz=4096.0,
         waveform_generator=TEOBResumSGenerator(EOBRunPy),
         multibanding=True,
@@ -41,20 +39,19 @@ def fixture_dataset():
     )
 
 
-@fixture
-@parametrize(
-    wf_params=[
+@pytest.fixture(
+    params=[
         (1, 300, 300, 0.3, 0.3),
         (1.9, 5000, 200, -0.5, 0.1),
         (1.1, 10, 20, 0.0, 0.4),
     ]
 )
-def variable_parameters(wf_params, variable_dataset):
+def variable_parameters(request, variable_dataset):
     """Parametrized WaveformParameters object.
-    `wf_params` are given in the same order as the
+    The parameters are given in the same order as the
     inizialization of `WaveformParameters`.
     """
-    return WaveformParameters(*wf_params, variable_dataset)
+    return WaveformParameters(*request.param, variable_dataset)
 
 
 @pytest.fixture
@@ -153,9 +150,6 @@ def file():
     yield file
     file.close()
     os.remove(fname)
-
-
-fixture_union("all", ["variable_dataset", "variable_parameters"])
 
 
 @pytest.fixture
