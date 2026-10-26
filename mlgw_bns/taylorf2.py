@@ -94,7 +94,7 @@ def compute_delta_lambda(m1: float, m2: float, l1: float, l2: float):
     M = m1 + m2
     q = m1 / m2
     eta = q / ((1.0 + q) * (1.0 + q))
-    X = np.sqrt(1.0 - 4.0 * eta)
+    X = np.sqrt(np.maximum(1.0 - 4.0 * eta, 0.0))
     m1_4 = m1 ** 4.0
     m2_4 = m2 ** 4.0
     M4 = M ** 4.0
@@ -111,7 +111,7 @@ def PhifT7hPN(
     Appendix B [https://arxiv.org/abs/1203.4352]
     """
     v = np.power(np.abs(np.pi * M * f * SUN_MASS_SECONDS), 1.0 / 3.0)
-    delta = np.sqrt(1.0 - 4.0 * eta)
+    delta = np.sqrt(np.maximum(1.0 - 4.0 * eta, 0.0))
     Xa = 0.5 * (1.0 + delta)
     Xb = 0.5 * (1.0 - delta)
     Xa2 = Xa * Xa
@@ -202,7 +202,7 @@ def _make_phift7hpn_complete(xp):
     """
 
     def phift7hpn_complete(v, eta, Lama, Lamb):
-        delta = xp.sqrt(1.0 - 4.0 * eta)
+        delta = xp.sqrt(xp.maximum(1.0 - 4.0 * eta, 0.0))
         Xa = 0.5 * (1.0 + delta)
         Xb = 0.5 * (1.0 - delta)
         Xa2 = Xa * Xa
@@ -304,7 +304,7 @@ def _make_phifqm3hpn(xp, compute_quadrupole_yy):
 
     def phifqm3hpn(v, eta, s1z, s2z, Lam1, Lam2):
         v2 = v * v
-        delta = xp.sqrt(1.0 - 4.0 * eta)
+        delta = xp.sqrt(xp.maximum(1.0 - 4.0 * eta, 0.0))
         X1 = 0.5 * (1.0 + delta)
         X2 = 0.5 * (1.0 - delta)
         at1 = X1 * s1z
@@ -568,7 +568,7 @@ def Af3hPN(
     """
 
     Mchirp = M * np.power(np.abs(eta), 3.0 / 5.0)
-    delta = np.sqrt(1.0 - 4.0 * eta)
+    delta = np.sqrt(np.maximum(1.0 - 4.0 * eta, 0.0))
     v = np.power(np.abs(np.pi * M * f * SUN_MASS_SECONDS), 1.0 / 3.0)
     v2 = v * v
     v3 = v2 * v
@@ -645,7 +645,7 @@ def _make_phif3hpn(xp):
 
     def phif3hpn(v, eta, s1x, s1y, s1z, s2x, s2y, s2z, Lam, dLam):
         vlso = 1.0 / xp.sqrt(6.0)
-        delta = xp.sqrt(1.0 - 4.0 * eta)
+        delta = xp.sqrt(xp.maximum(1.0 - 4.0 * eta, 0.0))
         v2 = v * v
         v3 = v2 * v
         v4 = v2 * v2

@@ -176,10 +176,12 @@ def twist_modes(hlm_coprec, alpha, beta, gamma, lm_inertial,
 def nu_to_X1(nu, xp=np):
     """Mass fraction M1/M from the symmetric mass ratio nu. Mirrors
     nu_to_X1() in C/src/TEOBResumSUtils.c. ``xp`` is the array namespace,
-    ``numpy`` (default) or ``jax.numpy``, as for the functions below."""
-    if xp is np and np.any((np.asarray(nu) < 0.0) | (np.asarray(nu) > 0.25)):
+    ``numpy`` (default) or ``jax.numpy``, as for the functions below. A nu
+    above 1/4 by rounding (q / (1 + q)^2 for q within ~1e-8 of 1) is equal
+    mass."""
+    if xp is np and np.any((np.asarray(nu) < 0.0) | (np.asarray(nu) > 0.25 + 1e-12)):
         raise ValueError("symmetric mass ratio must be 0 <= nu <= 1/4")
-    return 0.5 * (1.0 + xp.sqrt(1.0 - 4.0 * nu))
+    return 0.5 * (1.0 + xp.sqrt(xp.maximum(1.0 - 4.0 * nu, 0.0)))
 
 
 def eob_mrg_momg(nu, X1, X2, chi1, chi2, xp=np):
@@ -189,7 +191,7 @@ def eob_mrg_momg(nu, X1, X2, chi1, chi2, xp=np):
     dimensionless) spins of the two bodies.
     """
     nu2 = nu * nu
-    X12 = xp.sqrt(1.0 - 4.0 * nu)
+    X12 = xp.sqrt(xp.maximum(1.0 - 4.0 * nu, 0.0))
     a1 = X1 * chi1
     a2 = X2 * chi2
     a0 = a1 + a2
