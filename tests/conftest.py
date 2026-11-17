@@ -10,7 +10,6 @@ import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 
 from mlgw_bns import Model, ModeModel, ParametersWithExtrinsic
-from mlgw_bns.data_management import ParameterRanges
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
 from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
 from mlgw_bns.higher_order_modes import Mode
@@ -24,7 +23,6 @@ def fixture_variable_dataset(request):
         srate_hz=4096.0,
         waveform_generator=TEOBResumSGenerator(EOBRunPy),
         multibanding=True,
-        parameter_ranges=ParameterRanges(mass_range=(2.8, 2.8)),
     )
 
 
@@ -35,7 +33,6 @@ def fixture_dataset():
         initial_frequency_hz=20.0,
         srate_hz=4096.0,
         waveform_generator=TEOBResumSGenerator(EOBRunPy),
-        parameter_ranges=ParameterRanges(mass_range=(2.8, 2.8)),
     )
 
 

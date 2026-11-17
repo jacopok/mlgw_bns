@@ -82,9 +82,7 @@ def test_model_nn_prediction(
     """
     model = request.getfixturevalue(model_name)
 
-    teob_dict = parameters_with_extrinsic.teobresums_dict(
-        model.dataset, use_effective_frequencies=False
-    )
+    teob_dict = parameters_with_extrinsic.teobresums_dict(model.dataset)
     teob_dict["use_geometric_units"] = "no"
     teob_dict["initial_frequency"] /= parameters_with_extrinsic.mass_sum_seconds
     teob_dict["srate_interp"] /= parameters_with_extrinsic.mass_sum_seconds
@@ -142,7 +140,7 @@ def test_model_nn_prediction_random_extrinsic(
 
     params = random_parameters(model, seed)
 
-    teob_dict = params.teobresums_dict(model.dataset, use_effective_frequencies=False)
+    teob_dict = params.teobresums_dict(model.dataset)
 
     teob_dict["use_geometric_units"] = "no"
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
@@ -199,7 +197,6 @@ def random_parameters(model: ModeModel, seed: int) -> ParametersWithExtrinsic:
         ("lambda_2", 6000.0),
         ("chi_1", 2.0),
         ("chi_2", 2.0),
-        ("total_mass", 5.0),
     ],
 )
 def test_parameters_out_of_bounds_error(trained_mode_model, param_name, value):
@@ -221,8 +218,10 @@ def test_parameters_out_of_bounds_error(trained_mode_model, param_name, value):
         trained_mode_model.predict(freqs, params)
 
 
-@pytest.mark.parametrize("total_mass", [2.0, 4.0])
-def test_bounds_of_mass_range_work(trained_mode_model, total_mass):
+@pytest.mark.parametrize("total_mass", [1.0, 2.0, 4.0, 10.0])
+def test_any_total_mass_works(trained_mode_model, total_mass):
+    """There is no total-mass range: masses far from the reference one
+    only move the band (with the PN and zero extensions beyond it)."""
     freqs = np.linspace(20.0, 2048.0)
     params = ParametersWithExtrinsic(
         mass_ratio=2.0,

@@ -25,6 +25,7 @@ told otherwise -- parallelism is opt-in, not a hidden default -- so pass
 import argparse
 import logging
 
+from mlgw_bns.dataset_generation import SHIPPED_BAND_HZ
 from mlgw_bns.model import DEFAULT_MODES, MODELS_AVAILABLE, PRETRAINED_MODEL_FOLDER, Model
 from mlgw_bns.neural_network import KernelRidgeNetwork, SklearnNetwork
 
@@ -43,7 +44,8 @@ def train(legacy: bool = False, n_jobs: int = 1) -> None:
     model = Model(
         modes=list(DEFAULT_MODES),
         filename=TRAINING_BASENAME,
-        initial_frequency_hz=5.0,
+        initial_frequency_hz=SHIPPED_BAND_HZ[0],
+        srate_hz=SHIPPED_BAND_HZ[1],
         nn_kind=SklearnNetwork if legacy else KernelRidgeNetwork,
         reference_amplitude=not legacy,
     )

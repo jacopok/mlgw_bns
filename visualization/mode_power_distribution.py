@@ -53,7 +53,6 @@ RESTRICTED_LAMBDA_MAX = 1000.0
 def _restricted_parameter_ranges(full_ranges: ParameterRanges) -> ParameterRanges:
     """``full_ranges`` narrowed to :math:`q < 1.2`, :math:`\\Lambda_{1,2} < 1000`."""
     return ParameterRanges(
-        mass_range=full_ranges.mass_range,
         q_range=(full_ranges.q_range[0], min(full_ranges.q_range[1], RESTRICTED_Q_MAX)),
         lambda1_range=(
             full_ranges.lambda1_range[0],

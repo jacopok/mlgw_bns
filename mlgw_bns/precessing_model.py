@@ -915,9 +915,12 @@ class PrecessingModel:
             The angles, tabulated against :math:`M \\Omega_{\\rm orb}`.
         """
         if omega_dot is None and anchor_to_reference_phase:
+            # the trained band, given at the reference mass, for this source
+            dataset = self.model.dataset
+            to_source = dataset.total_mass / params.total_mass
             reference_frequencies = np.geomspace(
-                max(initial_frequency_hz, self.model.dataset.initial_frequency_hz),
-                self.model.dataset.effective_srate_hz / 2.0,
+                max(initial_frequency_hz, dataset.initial_frequency_hz * to_source),
+                dataset.srate_hz / 2.0 * to_source,
                 1024,
             )
             amplitude, phase = self.model.predict_amplitude_phase_mode(

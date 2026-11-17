@@ -6,8 +6,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-17
+
+### Changed
+
+- There is no total-mass range any more: any total mass is accepted.
+    The surrogate is a function of the mass-rescaled frequency $Mf$, so a
+    change in the total mass is an exact rescaling of the waveform; the
+    range only ever served to size the trained frequency band, and
+    rejecting masses outside it (2--4 Msun) refused detector-frame BNS
+    masses that the model describes exactly. What is fixed is the band in
+    $Mf$ ($4.9 \times 10^{-5}$ to $0.040$ for the shipped models, 5 to
+    2048 Hz between 2 and 4 Msun); below it the PN extension and above
+    it the zeros apply as before. `ParameterRanges.mass_range` is
+    removed, and the batched predictions no longer return NaN rows for
+    the total mass.
+- **Breaking, for training:** the `initial_frequency_hz` and `srate_hz` of
+    `Dataset`, `ModeModel`, `Model` and `ModesDatasetConfig` now give the
+    trained band directly, at the reference mass `Dataset.total_mass`
+    (2.8 Msun), instead of being widened by the mass range. The default
+    `ModesDatasetConfig` and the training scripts use
+    `dataset_generation.SHIPPED_BAND_HZ`, the band of the shipped models;
+    a `ModeModel` or `Model` built with the old defaults (20 Hz,
+    4096 Hz, 2--4 Msun) now trains on 20 to 2048 Hz at 2.8 Msun rather
+    than 14.3 to 2926 Hz.
+- Models and sharded-dataset configs saved before 2.1, with a mass range,
+    are converted on loading (`dataset_generation.migrate_mass_range`) to
+    the band they were trained on, bit for bit; the metadata of the shipped
+    models is converted in the package. Their predictions are unchanged.
+- `Dataset.effective_initial_frequency_hz` and `effective_srate_hz` are
+    deprecated aliases of `initial_frequency_hz` and `srate_hz`, and the
+    `use_effective_frequencies` argument of `WaveformParameters.teobresums`
+    and `ParametersWithExtrinsic.teobresums_dict` is removed.
+
 ### Fixed
 
+- `PrecessingModel.euler_angles(anchor_to_reference_phase=True)` samples
+    the aligned-spin (2,2) over the trained band of the source's own mass;
+    it used the band of the reference mass, which for heavier sources ran
+    past the top of the band, where the waveform is zero.
+- A mass ratio within ~1e-8 of 1, whose symmetric mass ratio can round
+    above 1/4, is treated as equal mass instead of raising or giving NaN.
 - `Model.predict` and the other single-binary predictions keep BLAS on one
     thread: the regressors' products are too small for a multithreaded BLAS,
     which spent far longer synchronizing its threads than computing them,
@@ -23,6 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `jax` extra. The profiling guide, the TEOBResumS comparison in the
     precession page and the README's mismatch plot are updated to the
     2.0 models.
+- The overview's parameter ranges explain that any total mass is
+    accepted, and give the trained band in $Mf$ and in Hz.
 
 ## [2.0.1] - 2026-10-21
 
@@ -624,7 +665,8 @@ loaded, and the waveforms are referenced differently in time and phase.
 - Fix `ValidateModel` frequency arrays
 - Various fixes to tests
 
-[Unreleased]: https://github.com/jacopok/mlgw_bns/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/jacopok/mlgw_bns/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/jacopok/mlgw_bns/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/jacopok/mlgw_bns/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/jacopok/mlgw_bns/compare/v1.0.1...v2.0.0
 [1.0.1]: https://github.com/jacopok/mlgw_bns/compare/v1.0.0...v1.0.1

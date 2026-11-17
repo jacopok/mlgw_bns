@@ -214,15 +214,34 @@ def test_frequency_regions(default_model):
 def test_out_of_range_rows_are_nan(default_model):
     intrinsic, total_mass, _ = random_rows(4, seed=8)
     intrinsic[1, 0] = 3.5  # q
-    total_mass[2] = 5.0
+    total_mass[2] = 50.0  # any total mass is in range
     intrinsic[3, 1] = 1.0  # lambda_1 below the model's range
     surrogate = default_model.batched_surrogate(FOUR_MODES)
     np.testing.assert_array_equal(
-        surrogate.valid(intrinsic, total_mass), [True, False, False, False]
+        surrogate.valid(intrinsic, total_mass), [True, False, True, False]
     )
     amp, phase = surrogate(intrinsic, total_mass, FREQUENCIES)
-    assert np.all(np.isfinite(amp[0])) and np.all(np.isfinite(phase[0]))
-    assert np.all(np.isnan(amp[1:])) and np.all(np.isnan(phase[1:]))
+    for row in (0, 2):
+        assert np.all(np.isfinite(amp[row])) and np.all(np.isfinite(phase[row]))
+    for row in (1, 3):
+        assert np.all(np.isnan(amp[row])) and np.all(np.isnan(phase[row]))
+
+
+@pytest.mark.parametrize("total_mass", [1.0, 6.0, 20.0])
+def test_total_mass_is_an_exact_rescaling(default_model, total_mass):
+    """h(f; M) = (M / M0)^2 h(f M / M0; M0), for every mode, far outside
+    the 2-4 Msun the models used to accept: the surrogate is a function
+    of M f."""
+    intrinsic, _, _ = random_rows(2, seed=4)
+    reference = 2.8
+    frequencies = np.geomspace(20.0, 1000.0, 60) * reference / total_mass
+    surrogate = default_model.batched_surrogate(FOUR_MODES)
+    amp, phase = surrogate(intrinsic, total_mass, frequencies)
+    amp0, phase0 = surrogate(intrinsic, reference, frequencies * total_mass / reference)
+    np.testing.assert_allclose(amp, (total_mass / reference) ** 2 * amp0, rtol=1e-9, atol=0)
+    # the merger time, in seconds, scales with the mass too: compare up to
+    # the -2 pi f t_c the alignment puts on the phases, which vanishes here
+    np.testing.assert_allclose(phase, phase0, rtol=0, atol=1e-6)
 
 
 def test_parameter_ranges_setter_applies_to_every_mode():

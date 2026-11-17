@@ -201,7 +201,7 @@ def test_default_model_merger_reference_matches_teobresums(default_model):
 def test_full_waveform_mismatch_is_flat_in_total_mass(default_model, total_mass):
     """The multi-mode mismatch must not jump when the total mass crosses
     the dataset reference (2.8): below it the rescaled grid dips under
-    ``effective_initial_frequency_hz`` and the PN low-frequency extension
+    ``initial_frequency_hz`` and the PN low-frequency extension
     fires, which used to overwrite each mode's inter-mode phase constant
     with the PN one and mis-phase the HOM modes by ~1e-4."""
 

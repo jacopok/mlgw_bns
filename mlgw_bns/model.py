@@ -426,7 +426,10 @@ class Model:
 
         Those of the first mode model; :meth:`predict` and
         :meth:`predict_modes_dict` raise outside them, and the batched
-        :meth:`predict_modes_amp_phase` returns NaN rows.
+        :meth:`predict_modes_amp_phase` returns NaN rows. They bound the
+        intrinsic parameters only: any total mass is accepted, since it
+        just rescales the frequencies (see
+        :class:`~mlgw_bns.data_management.ParameterRanges`).
 
         Assigning a new :class:`~mlgw_bns.data_management.ParameterRanges`
         applies it to every mode, e.g. to accept tidal deformabilities
@@ -438,8 +441,8 @@ class Model:
                 lambda2_range=(0.0, 5000.0))
 
         Only the checks change: each mode's :class:`Dataset` keeps the
-        ranges it was trained with, from which it derives its frequency
-        band and its reference amplitude. Mutating the returned object in
+        ranges it was trained with, from which it derives its reference
+        amplitude. Mutating the returned object in
         place is *not* the same (it is shared with the first mode's
         dataset, and not seen by the other modes).
         """

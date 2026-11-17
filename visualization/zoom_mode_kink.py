@@ -54,7 +54,7 @@ def main() -> None:
     f_ref_natural = ds.hz_to_natural_units(
         np.geomspace(
             ds.natural_units_to_hz(ds.frequencies[0]),
-            min(args.fmax_hz, ds.effective_srate_hz / 2),
+            min(args.fmax_hz, ds.srate_hz / 2),
             args.grid_points,
         )
     )

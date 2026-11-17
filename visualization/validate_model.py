@@ -129,7 +129,7 @@ INCLINATION = 1.0
 TOTAL_MASS = 2.8
 
 #: Low-frequency floor for the full-waveform validation, in Hz. Below the
-#: trained band's own edge (``dataset.effective_initial_frequency_hz``,
+#: trained band's own edge (``dataset.initial_frequency_hz``,
 #: ~3.57 Hz for ``default_hom`` at ``TOTAL_MASS``), ``Model.predict`` /
 #: ``predict_modes_dict`` splice in each mode's post-Newtonian low-frequency
 #: extension (``ModeModel.predict_amplitude_phase``'s
@@ -825,7 +825,7 @@ def mismatch_vs_power_by_mode(model: Model, n_waveforms: int = N_FULL_WAVEFORM_M
     # Down to LOW_FREQUENCY_HZ, like full_waveform_mismatches: exercises
     # the post-Newtonian low-frequency extension in predict_modes_dict, and
     # lets a mode's power fraction reflect its own EOB starting threshold
-    # if that happens to fall in [LOW_FREQUENCY_HZ, effective_initial_frequency_hz)
+    # if that happens to fall in [LOW_FREQUENCY_HZ, initial_frequency_hz)
     # (e.g. (2,1)'s, at m/2 * f0).
     frequencies, psd_values = extended_frequency_grid(power_validator)
 

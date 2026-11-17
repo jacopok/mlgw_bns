@@ -261,14 +261,12 @@ def test_recomposition_inverts_generation(reference_amplitude):
     """
     from EOBRun_module import EOBRunPy  # type: ignore
 
-    from mlgw_bns.data_management import ParameterRanges
     from mlgw_bns.dataset_generation import TEOBResumSGenerator
 
     dataset = Dataset(
         initial_frequency_hz=20.0,
         srate_hz=4096.0,
         waveform_generator=TEOBResumSGenerator(EOBRunPy),
-        parameter_ranges=ParameterRanges(mass_range=(2.8, 2.8)),
         reference_amplitude=reference_amplitude,
     )
 

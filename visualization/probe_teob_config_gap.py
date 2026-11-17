@@ -309,7 +309,7 @@ def main():
 
     model = Model(modes=MODES, filename="mlgw_bns/data/default_hom")
     model.load()
-    srate = model.dataset.effective_srate_hz
+    srate = model.dataset.srate_hz
     validator = ValidateModel(model.mode_models[Mode(2, 2)])
 
     if args.abc:

@@ -217,41 +217,48 @@ the band), which is the right one only for the $(2,2)$.
 These may change as the package is updated. For the default pretrained
 model shipped with the package, `default_hom`, the current ranges are
 
-- `total_mass`: between 2 and 4 solar masses
 - `mass_ratio`: between 1 and 3
 - `lambda_1` (tidal polarizability of the larger star): between 5 and 2000
 - `lambda_2`: between 5 and 2000
 - `chi_1` (aligned spin of the larger star): between -0.5 and 0.5
 - `chi_2`: between -0.5 and 0.5
-- frequencies: between 5 and 2048 Hz
+- frequencies: see below
 
 The other one, `default_hom_lambda12000`, has the same ranges except for
 `lambda_1` and `lambda_2`, between 5 and 12000.
+
+Any `total_mass` is accepted. The model is a function of the
+mass-rescaled frequency $Mf$, so changing the total mass rescales the
+waveform exactly, $\tilde h(f; M) = (M/M_0)^2 \, \tilde h(f M / M_0; M_0)$:
+what is fixed is the trained band, which in $Mf$ runs from about
+$4.9 \times 10^{-5}$ to $0.040$. For a binary of $M$ solar masses this is
+from $10\,\mathrm{Hz} \times M_\odot / M$ to
+$8192\,\mathrm{Hz} \times M_\odot / M$: 5 to 2048 Hz or wider between 2
+and 4 solar masses, 1.7 to 1365 Hz at 6. Below the band the waveform is
+continued with its post-Newtonian expression; above it, after the merger,
+it is zero.
 
 A freshly-created `Model` uses `lambda_1` and `lambda_2` between 5 and
 5000 instead, and otherwise the same ranges; they are set by
 {class}`ParameterRanges <mlgw_bns.data_management.ParameterRanges>` and
 customizable through the `parameter_ranges` argument of `ModeModel` (or of
-`Model`, which forwards it to every mode) when building a new model.
+`Model`, which forwards it to every mode) when building a new model. Its
+band is set by the `initial_frequency_hz` and `srate_hz` arguments, which
+are given at the reference mass of 2.8 solar masses.
 
 The ranges actually in effect can be checked, once a `Model` object is
 initialized as described before, by looking at the ranges of any of its modes:
 ```python
 >>> print(model.mode_models[Mode(2, 2)].parameter_ranges)
-ParameterRanges(mass_range=(2.0, 4.0), q_range=(1.0, 3.0), lambda1_range=(5.0, 2000.0), lambda2_range=(5.0, 2000.0), chi1_range=(-0.5, 0.5), chi2_range=(-0.5, 0.5))
+ParameterRanges(q_range=(1.0, 3.0), lambda1_range=(5.0, 2000.0), lambda2_range=(5.0, 2000.0), chi1_range=(-0.5, 0.5), chi2_range=(-0.5, 0.5))
 ```
-for the first six,
+and the band, in Hz at the reference mass, with
 ```python
->>> print(model.dataset.initial_frequency_hz)
-5.0
+>>> print(model.dataset.total_mass)
+2.8
+>>> print(model.dataset.initial_frequency_hz, model.dataset.srate_hz / 2)
+3.5714285714285716 2925.714285714286
 ```
-for the initial frequency and
-```python
->>> print(model.dataset.srate_hz / 2)
-2048.0
-```
-for the maximum (Nyquist) frequency.
-
-The actual array of possible frequencies, `model.dataset.frequencies_hz`
-(or `model.dataset.frequencies` in natural units)
-is wider, to accomodate the possibility of changing the total mass.
+The trained frequency array itself is `model.dataset.frequencies_hz`
+(or `model.dataset.frequencies` in natural units), again at the reference
+mass.

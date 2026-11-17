@@ -486,7 +486,7 @@ def main() -> None:
 
     model = Model(modes=MODES, filename="mlgw_bns/data/default_hom")
     model.load()
-    SRATE_HZ = model.dataset.effective_srate_hz
+    SRATE_HZ = model.dataset.srate_hz
 
     records = validate(model, N_WAVEFORMS)
 

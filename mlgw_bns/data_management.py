@@ -233,14 +233,14 @@ class SavableData:
 class ParameterRanges(SavableData):
     """Parameter ranges for waveform generation.
 
-    The parameters should all be numpy arrays,
-    but
+    There is no total-mass range: the model is a function of the
+    mass-rescaled frequency :math:`Mf`, so a change in the total mass is an
+    exact rescaling of the waveform, and any total mass is accepted. What
+    limits it is the trained frequency band, which is given at the
+    reference mass (see :class:`~mlgw_bns.dataset_generation.Dataset`).
 
     Parameters
     ----------
-    mass_range : tuple[float, float]
-            Range of valid total masses, in solar masses.
-            Defaults to (2., 4.).
     q_range : tuple[float, float]
             Range of valid mass ratios.
             Defaults to (1., 3.).
@@ -260,7 +260,6 @@ class ParameterRanges(SavableData):
 
     """
 
-    mass_range: Tuple[float, float] = (2.0, 4.0)
     q_range: Tuple[float, float] = (1.0, 3.0)
     lambda1_range: Tuple[float, float] = (5.0, 5000.0)
     lambda2_range: Tuple[float, float] = (5.0, 5000.0)
@@ -284,7 +283,6 @@ class ParameterRanges(SavableData):
             if x > x_max:
                 raise ValueError(f"{name} out of bounds! {x} > {x_max}")
 
-        within(params.total_mass, self.mass_range, name="total_mass")
         within(params.mass_ratio, self.q_range, name="mass_ratio")
         within(params.lambda_1, self.lambda1_range, name="lambda_1")
         within(params.lambda_2, self.lambda2_range, name="lambda_2")

@@ -68,7 +68,7 @@ reproduces.
   :math:`t_c` and coalescence phase :math:`\phi_c` are applied by adding
   :math:`m \phi_c - 2\pi f t_c` to the phases.
 * **Frequencies.** Below the trained band (``f M / M_ref`` under
-  ``effective_initial_frequency_hz``) each mode is continued with its
+  ``initial_frequency_hz``) each mode is continued with its
   post-Newtonian amplitude and phase, blended in as in
   :meth:`ModeModel.predict_amplitude_phase
   <mlgw_bns.mode_model.ModeModel.predict_amplitude_phase>`; above
@@ -395,7 +395,7 @@ class _Frozen:
     connection_natural: float
     extend_low: bool
     extend_high: bool
-    # parameter ranges: (6, 2), rows total_mass, q, lambda_1, lambda_2, chi_1, chi_2
+    # parameter ranges: (5, 2), rows q, lambda_1, lambda_2, chi_1, chi_2
     ranges: Any
     safe_row: Any
     modes_arrays: list
@@ -580,7 +580,6 @@ def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
 
     range_array = np.array(
         [
-            ranges.mass_range,
             ranges.q_range,
             ranges.lambda1_range,
             ranges.lambda2_range,
@@ -594,14 +593,12 @@ def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
         modes=[(mode.l, mode.m) for mode in requested],
         reference_mass=float(dataset.total_mass),
         mass_sum_seconds=float(dataset.mass_sum_seconds),
-        eff_fmin_hz=float(dataset.effective_initial_frequency_hz),
-        connection_natural=float(
-            dataset.hz_to_natural_units(dataset.effective_initial_frequency_hz)
-        ),
+        eff_fmin_hz=float(dataset.initial_frequency_hz),
+        connection_natural=float(dataset.hz_to_natural_units(dataset.initial_frequency_hz)),
         extend_low=bool(first.extend_with_post_newtonian),
         extend_high=bool(first.extend_with_zeros_at_high_frequency),
         ranges=range_array,
-        safe_row=range_array[1:].mean(axis=1),
+        safe_row=range_array.mean(axis=1),
         modes_arrays=modes_arrays,
         reference_index=modes.index(Mode(2, 2)),
     )
@@ -776,8 +773,8 @@ class BatchedSurrogate:
     def valid(self, intrinsic, total_mass, frequencies=None):
         """Boolean mask ``(N,)`` of the rows the surrogate can evaluate.
 
-        A row is valid when its total mass and intrinsic parameters are
-        within the model's parameter ranges and, if ``frequencies`` is
+        A row is valid when its intrinsic parameters are within the
+        model's parameter ranges (any total mass is) and, if ``frequencies`` is
         given, when every positive frequency is either in the trained band
         or covered by an extension the model is configured to make.
         """
@@ -788,8 +785,7 @@ class BatchedSurrogate:
 
     def _valid(self, xp, x, total_mass, frequencies):
         fr = self._frozen
-        values = xp.concatenate([total_mass[:, None], x], axis=1)
-        ok = xp.all((values >= fr.ranges[:, 0]) & (values <= fr.ranges[:, 1]), axis=1)
+        ok = xp.all((x >= fr.ranges[:, 0]) & (x <= fr.ranges[:, 1]), axis=1)
         if frequencies is not None and not (fr.extend_low and fr.extend_high):
             f = xp.asarray(frequencies, dtype=float)
             rescaled = f * (total_mass / fr.reference_mass)[:, None]

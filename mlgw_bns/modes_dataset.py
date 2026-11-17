@@ -46,7 +46,7 @@ from typing import Callable, Iterator, Mapping, Optional, Sequence, Union
 import numpy as np
 
 from .data_management import DownsamplingIndices, ParameterRanges, PrincipalComponentData, Residuals
-from .dataset_generation import ParameterSet
+from .dataset_generation import SHIPPED_BAND_HZ, ParameterSet, migrate_mass_range
 from .higher_order_modes import Mode
 from .model import Model
 from .neural_network import Hyperparameters, JaxMLPNetwork, KernelRidgeNetwork
@@ -90,8 +90,8 @@ class ModesDatasetConfig:
     shard_size: int = 1024
     seed: int = 1
     modes: tuple = HOM7_MODES
-    initial_frequency_hz: float = 5.0
-    srate_hz: float = 4096.0
+    initial_frequency_hz: float = SHIPPED_BAND_HZ[0]
+    srate_hz: float = SHIPPED_BAND_HZ[1]
     reference_amplitude: bool = True
     parameter_ranges: ParameterRanges = field(
         default_factory=lambda: ParameterRanges(lambda1_range=(5.0, 12000.0), lambda2_range=(5.0, 12000.0))
@@ -102,7 +102,8 @@ class ModesDatasetConfig:
 
     @classmethod
     def from_json(cls, text: str) -> "ModesDatasetConfig":
-        values = json.loads(text)
+        # a config written before 2.1 has a total-mass range
+        values = migrate_mass_range(json.loads(text))
         values["modes"] = tuple(tuple(mode) for mode in values["modes"])
         values["parameter_ranges"] = ParameterRanges(
             **{key: tuple(value) for key, value in values["parameter_ranges"].items()}
