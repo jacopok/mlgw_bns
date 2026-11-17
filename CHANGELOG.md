@@ -10,6 +10,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **New shipped models**, retrained and named by their largest tidal
+    deformability: `default_hom_lambda2000`, `default_hom_lambda4000`,
+    `default_hom_lambda8000` and `default_hom_lambda12000`
+    (`MODELS_AVAILABLE`). `default_hom`, the default, is now another name for
+    `default_hom_lambda2000` (`model_files.MODEL_ALIASES`); the 2.0
+    `default_hom` (from $\Lambda = 5$) is no longer shipped. Each is kernel
+    ridge on $2^{15}$ waveforms of $\Lambda \in [1, L]$; the full-waveform
+    mismatch medians are 3e-8, 6e-8, 1e-7 and 9e-7.
+- The training sets of the shipped models are drawn in the effective
+    parameters, as the priors of a parameter estimation are: uniform in the
+    mass ratio, in $\tilde\Lambda$ and in $\chi_{\rm eff}$, then uniformly
+    along the segment of constant $\tilde\Lambda$ (or $\chi_{\rm eff}$) in
+    the range. A uniform draw of $\Lambda_1$ and $\Lambda_2$ left the corner
+    where both are small almost empty, and the merger time was 0.1--0.5 ms
+    off there; it is now within tens of microseconds for $\Lambda \le 5$ at
+    $\Lambda_{\max} = 2000$. New: `EffectiveParameterGenerator` and
+    `LogEffectiveParameterGenerator` (`PARAMETER_GENERATORS`), the
+    `sampling` of `ModesDatasetConfig`, `--sampling` and `--lambda-min` of
+    `modes_scale.py init`, and the `SAMPLING`, `LAMBDA_MIN` and `CLUSTER_ENV`
+    settings of the SLURM pipeline (presets
+    `slurm/modes/release_lambda<L>.env.example`).
+- **Tidal deformabilities down to 0.** The shipped models accept
+    $\Lambda_1, \Lambda_2 \ge 0$ (`Model.default_for_testing` widens their
+    `parameter_ranges`; the files keep the trained ones, from 1). Below 1
+    they follow the TEOBResumS they are trained with, which no longer
+    switches to its black-hole settings there (below), with the accuracy
+    they have at $\Lambda = 1$.
+- The waveforms are generated with the upstream TEOBResumS, branch `Dali`
+    (asking for its `Giotto` model, `dataset_generation.TEOB_MODEL`; every
+    call that builds its own parameters goes through
+    `dataset_generation.eobrun`), as in its PR #12, plus the fixes of the
+    fork the 2.0 models were trained with (jacopok/teobresums, branch
+    `dali-precession-mlgw`): it matches that fork to $10^{-10}$ in the
+    (2,2) mismatch over the training range. The fork also keeps the
+    neutron-star settings of TEOBResumS for any $\Lambda > 0$: before,
+    both $\Lambda \le 1$ gave a binary black hole (no tides, a ringdown) and
+    one $\Lambda \le 1$ switched off the tides of the other star, a jump at
+    $\Lambda = 1$. Below 1 its quasi-universal relations (spin-induced
+    multipoles, higher-order Love numbers), fits in $\log\Lambda$ that
+    diverge as $\Lambda \to 0$, are continued by quadratics in $\Lambda$ to
+    their black-hole values; above 1 its waveforms are bit-for-bit those of
+    the version without this.
+- The post-Newtonian spin-induced quadrupole (`taylorf2.compute_quadrupole_yy`)
+    is continued below $\Lambda = 1$ in the same way: its Yagi-Yunes fit
+    grows without bound as $\Lambda \to 0$ (32 at $10^{-3}$), which made the
+    predictions with spins diverge there. Unchanged for $\Lambda \ge 1$.
 - There is no total-mass range any more: any total mass is accepted.
     The surrogate is a function of the mass-rescaled frequency $Mf$, so a
     change in the total mass is an exact rescaling of the waveform; the
@@ -44,17 +90,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Loading `default_hom_lambda12000` raises a `ModelAccuracyWarning`
     (`mlgw_bns.model.MODEL_CAVEATS`): it is not accurate enough in the late
     inspiral to predict the merger reliably. Trained on tidal deformabilities
-    up to 12000 with as many waveforms as `default_hom`, its time to merger
+    up to 12000 with as many waveforms as the others, its time to merger
     above about 1 kHz is wrong in parts of the parameter space: against
-    TEOBResumS the merger is 1.3--1.5 ms early at $q \approx 2.5$,
-    $\Lambda_1 \approx 10$, and off by more than 0.2 ms for about 4% of its
-    range. This is a modelling error, not a choice of merger reference. The
-    accuracy tests now run on every shipped model; the six this one fails are
-    strict expected failures (`KNOWN_FAILURES` in `tests/conftest.py`), and
-    a test checks the merger time in that corner of the parameter space.
+    TEOBResumS the merger is 0.2--0.5 ms early at $q \approx 2.5$,
+    $\Lambda_1 \approx 10$, and off by more than 0.2 ms for about 5% of its
+    range (0.2% for the others). This is a modelling error, not a choice of
+    merger reference. The accuracy tests now run on every shipped model; the
+    ones it fails, and the one `default_hom_lambda8000` fails (its median
+    mismatch with nothing maximised), are strict expected failures
+    (`KNOWN_FAILURES` in `tests/conftest.py`), and a test checks the merger
+    time in that corner of the parameter space.
 
 ### Fixed
 
+- A mode generated on its own, such as the (2,2) whose merger reference
+    `ValidateModel.merger_reference_errors` compares, used the TEOBResumS
+    settings of that mode alone, while the training data and
+    `Model.get_teob_modes_dict` generate all the modes of a model together
+    (an earlier ODE start and a higher `srate_interp`, for the $m = 4$
+    modes). The two differ by ~1e-3 rad, and the single (2,2) has glitches
+    in its phase gradient in the last tens of Hz of the band, where the
+    merger reference is: merger-time "errors" of milliseconds to seconds at
+    a few parameters. A `Model` now sets the `generation_modes` of its
+    generators to its modes, so a mode alone is the same waveform.
 - `PrecessingModel.euler_angles(anchor_to_reference_phase=True)` samples
     the aligned-spin (2,2) over the trained band of the source's own mass;
     it used the band of the reference mass, which for heavier sources ran

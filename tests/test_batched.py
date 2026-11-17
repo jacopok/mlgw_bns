@@ -216,7 +216,7 @@ def test_out_of_range_rows_are_nan(default_model):
     intrinsic, total_mass, _ = random_rows(4, seed=8)
     intrinsic[1, 0] = 3.5  # q
     total_mass[2] = 50.0  # any total mass is in range
-    intrinsic[3, 1] = 1.0  # lambda_1 below the model's range
+    intrinsic[3, 1] = -1.0  # lambda_1 below the model's range (which starts at 0)
     surrogate = default_model.batched_surrogate(FOUR_MODES)
     np.testing.assert_array_equal(
         surrogate.valid(intrinsic, total_mass), [True, False, True, False]

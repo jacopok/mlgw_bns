@@ -1,0 +1,12 @@
+{
+  "url": "https://github.com/jacopok/mlgw_bns/releases/download/models-v2.1.0/",
+  "files": {
+    "default_hom_lambda4000_l2_m1_nn.pkl": "e9f8a8095e1ea07d490500056a0b1d44f8811a04a8eb442dc3a6736a2e76fb45",
+    "default_hom_lambda4000_l2_m2_nn.pkl": "59ff5ec2c287c62af35ba277b22e4ff2636cd009d18577fae23dc7dfcba0ee9a",
+    "default_hom_lambda4000_l3_m1_nn.pkl": "520800c022c9e61246ada2fba15be787dcd91e51b5b12a43bc76f16e72416fe7",
+    "default_hom_lambda4000_l3_m2_nn.pkl": "f79cf998c5dcac6b659a22b0da0267fc39a82f0da71c6831f2e42ff18b579b2a",
+    "default_hom_lambda4000_l3_m3_nn.pkl": "00106d11a72bd9fa2f4610dc3786d9d0a469122d11f2ade126f88324e9fa4670",
+    "default_hom_lambda4000_l4_m3_nn.pkl": "0f0e3ca8659e49b34a9bfe543443cd8db28f7cf65cf3149ce1377270c071435f",
+    "default_hom_lambda4000_l4_m4_nn.pkl": "5c762fc374a8bc918ad54820af7e7098cb79d4f8057af07006e2ae43f9c4ef60"
+  }
+}

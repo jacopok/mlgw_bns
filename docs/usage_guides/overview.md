@@ -15,19 +15,45 @@ $(2,2)$, $(2,1)$, $(3,1)$, $(3,2)$, $(3,3)$, $(4,3)$ and $(4,4)$
 (shipped_models)=
 ## The shipped models
 
-Two pretrained models come with the package, listed in
-`mlgw_bns.model.MODELS_AVAILABLE`; they differ only in the range of the
-tidal polarizabilities they are trained on (see
-[below](model_parameter_ranges) for the full ranges):
+Four pretrained models come with the package, listed in
+`mlgw_bns.model.MODELS_AVAILABLE` and named by the largest tidal
+polarizability they are trained on; they differ only in that (see
+[below](model_parameter_ranges) for the full ranges). `default_hom`, the
+default, is another name for `default_hom_lambda2000`
+(`mlgw_bns.model_files.MODEL_ALIASES`).
 
 | name | `lambda_1`, `lambda_2` | full-waveform mismatch, median / 90% | merger time error, median / 90% |
 |---|---|---|---|
-| `default_hom` (the default) | 5--2000 | 2.5e-8 / 4.6e-7 | 1.4 / 8.7 $\mu$s |
-| `default_hom_lambda12000` | 5--12000 | 9.1e-7 / 9.8e-6 | 36 / 132 $\mu$s |
+| `default_hom_lambda2000` (`default_hom`) | 0--2000 | 3.2e-8 / 5.5e-7 | 2.7 / 11 $\mu$s |
+| `default_hom_lambda4000` | 0--4000 | 5.7e-8 / 1.0e-6 | 2.9 / 15 $\mu$s |
+| `default_hom_lambda8000` | 0--8000 | 1.1e-7 / 1.6e-6 | 4.5 / 23 $\mu$s |
+| `default_hom_lambda12000` | 0--12000 | 9.1e-7 / 1.0e-5 | 26 / 108 $\mu$s |
 
-Both are trained on the same number of waveforms, so the narrower range is
-sampled more densely, and is more accurate; use `default_hom_lambda12000`
-only if tidal polarizabilities above 2000 are needed.
+The mismatches are over 16384 TEOBResumS waveforms drawn as the training
+set is (below), the merger-time errors over 400 uniform draws of each
+model's range (`visualization/merger_time_release.py`). All are trained on
+the same number of waveforms, $2^{15}$, so a narrower range is sampled more
+densely and is more accurate: use the smallest one that covers the tidal
+polarizabilities needed.
+
+The training waveforms are drawn uniformly in the mass ratio, in the
+effective tidal deformability $\tilde\Lambda$ and in the effective spin
+$\chi_{\rm eff}$, and then uniformly along the segment of constant
+$\tilde\Lambda$ (or $\chi_{\rm eff}$) inside the range
+(`mlgw_bns.dataset_generation.EffectiveParameterGenerator`), as is usual for
+the priors of a parameter estimation: this fills the corners of the range,
+such as both tidal deformabilities small, which a uniform draw of each
+leaves almost empty.
+
+The models are trained from $\Lambda = 1$ and accept tidal
+deformabilities down to 0. Below 1, TEOBResumS used to switch to its
+black-hole settings (no tides, a ringdown): the version they are trained
+with keeps its neutron-star settings for any $\Lambda > 0$, continuing its
+quasi-universal relations (such as the spin-induced quadrupole) smoothly to
+their black-hole values, and the models follow it there with the accuracy
+they have at $\Lambda = 1$. At exactly $\Lambda_1 = \Lambda_2 = 0$ TEOBResumS
+still gives its black-hole waveform, which differs from this limit by a
+mismatch of about $10^{-4}$ (more with spins).
 
 ```{warning}
 `default_hom_lambda12000` is not accurate enough in the late inspiral to
@@ -35,21 +61,21 @@ predict the merger reliably, and loading it raises a
 `mlgw_bns.model.ModelAccuracyWarning`. Spread over tidal deformabilities up
 to 12000, its training waveforms sample the parameter space too sparsely
 for the last few milliseconds before merger: its time to merger above
-about 1 kHz is wrong in parts of the space, worst at small `lambda_1` and
-large mass ratios. Compared with TEOBResumS, the merger comes 1.3--1.5 ms
+about 1 kHz is wrong in parts of the space, worst at small tidal
+deformabilities, large mass ratios and at the $\Lambda_1 \approx 12000$,
+$q \approx 3$ edge. Compared with TEOBResumS, the merger comes 0.2--0.5 ms
 early at $q \approx 2.5$, $\Lambda_1 \approx 10$, $\Lambda_2 \approx 1500$
 (where a GW170817 posterior has a secondary mode), and more than 0.2 ms
-early or late for about 4% of uniform draws over its range; `default_hom`
-stays within 0.1 ms there and has a 99th percentile of 50 $\mu$s.
+early or late for about 5% of uniform draws over its range, against 0.2%
+for `default_hom_lambda8000`.
 
 This is a modelling error, not a difference of convention. The merger
 reference itself, the tangent to the $(2,2)$ phase at the top of the band,
-is arbitrary: any consistent choice would do, and the two models make the
+is arbitrary: any consistent choice would do, and the models make the
 same one. What is wrong is the phase of the surrogate between about 1 and
 2 kHz. Below 1 kHz it shows as a constant shift of the merger time, which
-a sampled or marginalised coalescence time absorbs, with a time- and
-phase-optimised mismatch of a few $10^{-4}$; but the merger time, and
-anything measured from the last milliseconds before merger, are not
+a sampled or marginalised coalescence time absorbs; but the merger time,
+and anything measured from the last milliseconds before merger, are not
 reliable. The tests that fail on it are marked as expected failures in
 `tests/conftest.py` (`KNOWN_FAILURES`).
 ```
@@ -239,18 +265,16 @@ the band), which is the right one only for the $(2,2)$.
 (model_parameter_ranges)=
 ## The parameter ranges
 
-These may change as the package is updated. For the default pretrained
-model shipped with the package, `default_hom`, the current ranges are
+These may change as the package is updated. For the pretrained models
+shipped with the package, `default_hom_lambda<L>`, the current ranges are
 
 - `mass_ratio`: between 1 and 3
-- `lambda_1` (tidal polarizability of the larger star): between 5 and 2000
-- `lambda_2`: between 5 and 2000
+- `lambda_1` (tidal polarizability of the larger star): between 0 and `L`
+  (trained from 1, see [above](shipped_models))
+- `lambda_2`: between 0 and `L`
 - `chi_1` (aligned spin of the larger star): between -0.5 and 0.5
 - `chi_2`: between -0.5 and 0.5
 - frequencies: see below
-
-The other one, `default_hom_lambda12000`, has the same ranges except for
-`lambda_1` and `lambda_2`, between 5 and 12000.
 
 Any `total_mass` is accepted. The model is a function of the
 mass-rescaled frequency $Mf$, so changing the total mass rescales the

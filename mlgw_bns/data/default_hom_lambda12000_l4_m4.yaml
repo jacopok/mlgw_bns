@@ -11,10 +11,10 @@ parameter_ranges:
   - -0.5
   - 0.5
   lambda1_range: !!python/tuple
-  - 5.0
+  - 1.001
   - 12000.0
   lambda2_range: !!python/tuple
-  - 5.0
+  - 1.001
   - 12000.0
   q_range: !!python/tuple
   - 1.0

@@ -35,6 +35,7 @@ spherical harmonics.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import logging
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -53,7 +54,7 @@ from .data_management import (
     reference_gauge,
 )
 from .dataset_generation import Dataset
-from .model_files import model_file
+from .model_files import MODEL_ALIASES, canonical_name, model_file  # noqa: F401
 from .progress import joblib_progress
 from .higher_order_modes import (
     Mode,
@@ -73,7 +74,16 @@ if TYPE_CHECKING:
 PRETRAINED_MODEL_FOLDER = "data/"
 
 #: Names of the pretrained models shipped with the package.
-MODELS_AVAILABLE = ["default_hom", "default_hom_lambda12000"]
+#: Pretrained models shipped with the package, named by their largest tidal
+#: deformability; all are trained from Lambda = 1 (and accept Lambda >= 0,
+#: see :meth:`Model.default_for_testing`), with mass ratio in [1, 3] and
+#: aligned spins in [-0.5, 0.5].
+MODELS_AVAILABLE = [
+    "default_hom_lambda2000",
+    "default_hom_lambda4000",
+    "default_hom_lambda8000",
+    "default_hom_lambda12000",
+]
 
 
 class ModelAccuracyWarning(UserWarning):
@@ -86,15 +96,17 @@ MODEL_CAVEATS = {
     "default_hom_lambda12000": (
         "default_hom_lambda12000 is not accurate enough in the late inspiral "
         "to predict the merger reliably. Trained on tidal deformabilities up "
-        "to 12000 with as many waveforms as default_hom (up to 2000), it "
+        "to 12000 with as many waveforms as the other shipped models, it "
         "samples them too sparsely: its time to merger above about 1 kHz is "
-        "wrong in parts of the parameter space, worst at small lambda_1 and "
-        "large mass ratios (merger 1.3-1.5 ms early at q ~ 2.5, lambda_1 ~ 10; "
-        "above 0.2 ms for about 4% of its parameter space). Below about 1 kHz "
-        "the error is a constant shift of the merger time, which a sampled "
-        "coalescence time absorbs; the merger time itself, and anything "
-        "measured from the last milliseconds before it, are not reliable. "
-        "Use default_hom unless tidal deformabilities above 2000 are needed."
+        "wrong in parts of the parameter space, worst at small tidal "
+        "deformabilities, large mass ratios and the Lambda_1 ~ 12000, q ~ 3 "
+        "edge (0.2-0.5 ms at q ~ 2.5, lambda_1 ~ 10; above 0.2 ms for about "
+        "5% of its parameter space, against 0.2% for the others). Below about "
+        "1 kHz the error is a constant shift of the merger time, which a "
+        "sampled coalescence time absorbs; the merger time itself, and "
+        "anything measured from the last milliseconds before it, are not "
+        "reliable. Use default_hom_lambda8000 or below unless tidal "
+        "deformabilities above 8000 are needed."
     ),
 }
 
@@ -529,8 +541,15 @@ class Model:
         Parameters
         ----------
         model_name : str, optional
-            Name of the model to load. Must be one of
-            :data:`MODELS_AVAILABLE`. Defaults to the first entry.
+            Name of the model to load: one of :data:`MODELS_AVAILABLE`, or
+            of :data:`MODEL_ALIASES`. Defaults to ``"default_hom"``.
+
+            The models are trained on tidal deformabilities from 1: below
+            that TEOBResumS used to switch to its black-hole settings, and
+            the TEOBResumS they are trained with continues its neutron-star
+            fits smoothly to Lambda = 0 instead (see the changelog of 2.1).
+            The models follow it there, so their :attr:`parameter_ranges`
+            accept Lambda from 0; the files keep the trained range.
         **kwargs
             Extra keyword arguments forwarded to the :class:`Model`
             constructor. The reserved keys ``filename`` and ``modes`` are
@@ -558,7 +577,8 @@ class Model:
             (:data:`MODEL_CAVEATS`): ``default_hom_lambda12000`` does.
         """
         if model_name is None:
-            model_name = MODELS_AVAILABLE[0]
+            model_name = "default_hom"
+        model_name = canonical_name(model_name)
 
         if model_name not in MODELS_AVAILABLE:
             raise ValueError(f"Model {model_name} not available!")
@@ -584,6 +604,16 @@ class Model:
                     open(model_file(model_name, mode_model.filename_nn), "rb"),
                 )
             )
+
+        # Lambda from 0, not from the trained 1: see `model_name` above. Set
+        # after loading, so the datasets keep the trained ranges, from which
+        # they derive their reference amplitudes.
+        trained = model.parameter_ranges
+        model.parameter_ranges = dataclasses.replace(
+            trained,
+            lambda1_range=(0.0, trained.lambda1_range[1]),
+            lambda2_range=(0.0, trained.lambda2_range[1]),
+        )
 
         if given_filename is not None:
             model.base_filename = given_filename

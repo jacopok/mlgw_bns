@@ -200,10 +200,11 @@ def test_default_model_merger_reference_matches_teobresums(default_model):
 
 # Corner of the parameter space that the uniform draws above miss: unequal
 # masses, a stiff heavy star with a soft light one, chi_1 > 0 > chi_2.
-# The first two are posterior samples of a bajes GW170817 run with
+# The first two are posterior samples of a bajes GW170817 run with the 2.0
 # default_hom_lambda12000, at whose secondary mode (q ~ 2.5, Lambda_1 ~ 10)
-# that model merges ~1.3 ms early; default_hom is within 0.1 ms on all of
-# them. The total mass does not matter: the error is in natural units.
+# that model merged ~1.3 ms early (the 2.1 one, 0.2-0.5 ms); the others are
+# within 0.15 ms on all of them. The total mass does not matter: the error
+# is in natural units.
 # (q, Lambda_1, Lambda_2, chi_1, chi_2).
 LOW_LAMBDA_1_CORNER = [
     (2.50, 7.0, 1765.0, 0.22, -0.17),
