@@ -1540,13 +1540,13 @@ def teob_precessing_polarizations(
     ``prolong_euler_angles_FD``, see ``visualization/teob_alpha_unwrap_bug.md``)
     that glitch the polarizations around them.
     """
-    from EOBRun_module import EOBRunPy
+    from mlgw_bns.dataset_generation import eobrun
 
     from mlgw_bns.higher_order_modes import mode_to_k
 
     initial_frequency = params.reference_frequency_hz / 0.95
     largest_l = max(mode.l for mode in model.modes)
-    _, hp_re, hp_im, hc_re, hc_im, _, hlm, dynamics = EOBRunPy(dict(
+    _, hp_re, hp_im, hc_re, hc_im, _, hlm, dynamics = eobrun(dict(
         M=params.total_mass,
         q=params.mass_ratio,
         LambdaAl2=params.lambda_1,

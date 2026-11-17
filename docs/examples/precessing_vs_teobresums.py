@@ -2,9 +2,9 @@
 
 import jax
 import numpy as np
-from EOBRun_module import EOBRunPy
 
 from mlgw_bns import Model
+from mlgw_bns.dataset_generation import eobrun
 from mlgw_bns.batched_precession import batch_arguments
 from mlgw_bns.higher_order_modes import Mode, mode_to_k
 from mlgw_bns.model_validation import ValidateModel
@@ -29,7 +29,7 @@ params = PrecessingParametersWithExtrinsic(
 )
 
 largest_l = max(mode.l for mode in model.modes)
-f, hp_re, hp_im, hc_re, hc_im, _, hlm, dynamics = EOBRunPy(dict(
+f, hp_re, hp_im, hc_re, hc_im, _, hlm, dynamics = eobrun(dict(
     M=params.total_mass,
     q=params.mass_ratio,
     LambdaAl2=params.lambda_1,

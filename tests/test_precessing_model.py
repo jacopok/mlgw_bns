@@ -316,7 +316,7 @@ def test_twist_reproduces_teobresums_frequency_domain_polarizations():
     surrogate's multipoles are in the conjugate Fourier convention)
     reduces to the identity there, and here costs a mismatch of ~3e-2.
     """
-    from EOBRun_module import EOBRunPy
+    from mlgw_bns.dataset_generation import eobrun
 
     from mlgw_bns.model_validation import ValidateModel
 
@@ -331,7 +331,7 @@ def test_twist_reproduces_teobresums_frequency_domain_polarizations():
         total_mass=2.8, reference_frequency_hz=0.95 * initial_frequency,
     )
 
-    frequencies, real_hp, imag_hp, real_hc, imag_hc = EOBRunPy(dict(
+    frequencies, real_hp, imag_hp, real_hc, imag_hc = eobrun(dict(
         q=params.mass_ratio, LambdaAl2=params.lambda_1, LambdaBl2=params.lambda_2,
         M=params.total_mass, distance=params.distance_mpc,
         initial_frequency=initial_frequency, srate_interp=4096.0,

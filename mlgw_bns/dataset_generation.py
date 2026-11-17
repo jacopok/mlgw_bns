@@ -365,6 +365,22 @@ class BarePostNewtonianGenerator(WaveformGenerator):
         )
 
 
+#: The TEOBResumS model the waveforms are generated with: the quasi-circular
+#: one of its Dali branch, which the shipped models are trained on. Without
+#: it, the Dali branch runs its eccentric model, Dali, which has no
+#: frequency-domain output; older TEOBResumS ignore the key.
+TEOB_MODEL = "Giotto"
+
+
+def eobrun(parameters: dict) -> tuple:
+    """``EOBRunPy(parameters)``, with ``model`` :data:`TEOB_MODEL` unless
+    ``parameters`` sets one: for the callers that build their own TEOBResumS
+    parameters instead of :meth:`WaveformParameters.teobresums`."""
+    from EOBRun_module import EOBRunPy  # type: ignore
+
+    return EOBRunPy({"model": TEOB_MODEL} | parameters)
+
+
 class TEOBResumSGenerator(BarePostNewtonianGenerator):
     """Generate waveforms using the
     TEOBResumS effective-one-body code"""
@@ -568,9 +584,7 @@ class WaveformParameters:
             "output_hpc": "no",
             "time_shift_FD": "yes",
             "ode_tmax": 1e12,
-            # the quasi-circular model of the Dali branch, the one the shipped
-            # models were trained with (older TEOBResumS ignore the key)
-            "model": "Giotto",
+            "model": TEOB_MODEL,
         }
 
     def taylor_f2(

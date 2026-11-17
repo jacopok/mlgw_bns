@@ -92,7 +92,7 @@ BINARIES = [
 
 def teob_independent(params: ParametersWithExtrinsic, grid: np.ndarray) -> np.ndarray:
     r"""Plain ``EOBRunPy`` summed ``h_+ - i h_x`` directly on ``grid``."""
-    from EOBRun_module import EOBRunPy
+    from mlgw_bns.dataset_generation import eobrun
 
     par = dict(
         q=params.mass_ratio, LambdaAl2=params.lambda_1, LambdaBl2=params.lambda_2,
@@ -103,7 +103,7 @@ def teob_independent(params: ParametersWithExtrinsic, grid: np.ndarray) -> np.nd
         arg_out="no", coalescence_angle=0.0,
         use_mode_lm=sorted({mode_to_k(mode) for mode in MODES}),
     )
-    _f, re_hp, im_hp, re_hc, im_hc = EOBRunPy(par)
+    _f, re_hp, im_hp, re_hc, im_hc = eobrun(par)
     hp = np.conj(np.asarray(re_hp) + 1j * np.asarray(im_hp))
     hc = np.conj(np.asarray(re_hc) + 1j * np.asarray(im_hc))
     return hp - 1j * hc
