@@ -38,10 +38,20 @@ def _make_compute_quadrupole_yy(xp):
     Python ``if``) so the same code works under ``jax.vmap`` tracing; the
     ``xp.log`` argument is pre-clamped to avoid a spurious ``log`` of a
     non-positive number on the branch that is discarded anyway.
+
+    The Yagi-Yunes fit is a polynomial in ``log(lam)``, calibrated for
+    ``lam >~ 1``: below that it has a minimum near 0.5 and then diverges as
+    ``lam -> 0``. Below ``lam = 1`` it is continued, as in the TEOBResumS
+    the models are trained with, by the quadratic in ``lam`` that is 1 (a
+    black hole) at ``lam = 0`` and matches the fit and its derivative at
+    ``lam = 1``.
     """
+    # C_Q - 1 and dC_Q/dlam at lam = 1
+    cq_1 = np.exp(0.194) - 1.0
+    dcq_1 = np.exp(0.194) * 0.0936
 
     def compute_quadrupole_yy(lam):
-        loglam = xp.log(xp.where(lam > 0.0, lam, 1.0))
+        loglam = xp.log(xp.where(lam > 1.0, lam, 1.0))
         logCQ = (
             0.194
             + 0.0936 * loglam
@@ -49,7 +59,8 @@ def _make_compute_quadrupole_yy(xp):
             - 4.21e-3 * loglam ** 3
             + 1.23e-4 * loglam ** 4
         )
-        return xp.where(lam <= 0.0, 1.0, xp.exp(logCQ))
+        continued = 1.0 + (2.0 * cq_1 - dcq_1) * lam + (dcq_1 - cq_1) * lam ** 2
+        return xp.where(lam <= 0.0, 1.0, xp.where(lam >= 1.0, xp.exp(logCQ), continued))
 
     return compute_quadrupole_yy
 

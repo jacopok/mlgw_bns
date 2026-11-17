@@ -310,10 +310,15 @@ class _LazyModeModelsDict(dict):
     def __missing__(self, mode: Mode) -> ModeModel:
         if mode not in self._model.modes:
             raise KeyError(f"Mode {mode} not in {self._model.modes}")
+        generator = self._model._generator_factory(mode)
+        if hasattr(generator, "generation_modes"):
+            # generate each mode on its own as with all of them (training,
+            # `get_teob_modes_dict`): see `TEOBResumSModeGenerator.generation_modes`
+            generator.generation_modes = list(self._model.modes)
         mode_model = ModeModel(
             mode=mode,
             filename=self._model.mode_filename(mode),
-            waveform_generator=self._model._generator_factory(mode),
+            waveform_generator=generator,
             **self._model._mode_model_kwargs,
         )
         self[mode] = mode_model
