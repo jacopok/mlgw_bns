@@ -46,7 +46,7 @@ from typing import Callable, Iterator, Mapping, Optional, Sequence, Union
 import numpy as np
 
 from .data_management import DownsamplingIndices, ParameterRanges, PrincipalComponentData, Residuals
-from .dataset_generation import SHIPPED_BAND_HZ, ParameterSet, migrate_mass_range
+from .dataset_generation import PARAMETER_GENERATORS, SHIPPED_BAND_HZ, ParameterSet, migrate_mass_range
 from .higher_order_modes import Mode
 from .model import Model
 from .neural_network import Hyperparameters, JaxMLPNetwork, KernelRidgeNetwork
@@ -84,6 +84,13 @@ class ModesDatasetConfig:
     modes, initial_frequency_hz, srate_hz, reference_amplitude, parameter_ranges
         Of the :class:`~mlgw_bns.model.Model`; the defaults are those of
         ``hom7_big`` (make_hom7_dataset.py).
+    sampling : str
+        The distribution of the parameters within ``parameter_ranges``, a key
+        of :data:`~mlgw_bns.dataset_generation.PARAMETER_GENERATORS`:
+        ``"uniform"`` (the default, and that of every dataset made before
+        it existed) in the component parameters, ``"effective"`` uniform in
+        the effective tidal deformability and spin
+        (:class:`~mlgw_bns.dataset_generation.EffectiveParameterGenerator`).
     """
 
     n_binaries: int
@@ -96,6 +103,11 @@ class ModesDatasetConfig:
     parameter_ranges: ParameterRanges = field(
         default_factory=lambda: ParameterRanges(lambda1_range=(5.0, 12000.0), lambda2_range=(5.0, 12000.0))
     )
+    sampling: str = "uniform"
+
+    def __post_init__(self) -> None:
+        if self.sampling not in PARAMETER_GENERATORS:
+            raise ValueError(f"sampling {self.sampling!r} is not one of {sorted(PARAMETER_GENERATORS)}")
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self), indent=2)
@@ -121,14 +133,16 @@ class ModesDatasetConfig:
             srate_hz=self.srate_hz,
             reference_amplitude=self.reference_amplitude,
             parameter_ranges=self.parameter_ranges,
+            parameter_generator_class=PARAMETER_GENERATORS[self.sampling],
             **kwargs,
         )
 
     def same_waveforms(self, other: "ModesDatasetConfig") -> bool:
         """Whether ``other`` has waveforms of the same model (if not the
-        same ones): what a validation set and its training set share."""
+        same ones, nor drawn the same way): what a validation set and its
+        training set share."""
         return dataclasses.replace(other, n_binaries=self.n_binaries, shard_size=self.shard_size,
-                                   seed=self.seed) == self
+                                   seed=self.seed, sampling=self.sampling) == self
 
 
 class ShardedModesDataset(ShardedStore):

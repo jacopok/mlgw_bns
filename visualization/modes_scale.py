@@ -58,6 +58,7 @@ import numpy as np
 import optuna
 
 from mlgw_bns.data_management import Residuals
+from mlgw_bns.dataset_generation import PARAMETER_GENERATORS
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.hyperparameter_optimization import mlp_command_line, study_mlp_config
 from mlgw_bns.jax_mlp import TrainingInterrupted
@@ -129,11 +130,14 @@ def open_model(base: str) -> Model:
 
 def init(args) -> None:
     ranges = ModesDatasetConfig(n_binaries=args.n).parameter_ranges
-    if args.lambda_max is not None:
-        ranges = dataclasses.replace(ranges, lambda1_range=(5.0, args.lambda_max), lambda2_range=(5.0, args.lambda_max))
+    lambda_range = (
+        ranges.lambda1_range[0] if args.lambda_min is None else args.lambda_min,
+        ranges.lambda1_range[1] if args.lambda_max is None else args.lambda_max,
+    )
+    ranges = dataclasses.replace(ranges, lambda1_range=lambda_range, lambda2_range=lambda_range)
     config = ModesDatasetConfig(
         n_binaries=args.n, shard_size=args.shard_size, seed=args.seed, modes=tuple(args.modes),
-        parameter_ranges=ranges,
+        parameter_ranges=ranges, sampling=args.sampling,
     )
     dataset = ShardedModesDataset.create(args.dataset, config)
     if args.downsampling_from:
@@ -578,6 +582,10 @@ def main() -> int:
     command.add_argument("--seed", type=int, required=True, help="different for independent datasets")
     command.add_argument("--modes", type=parse_mode, nargs="+", default=list(HOM7_MODES))
     command.add_argument("--lambda-max", type=float, help="of both stars (default: that of hom7_big, 12000)")
+    command.add_argument("--lambda-min", type=float, help="of both stars (default: that of hom7_big, 5); "
+                         "TEOBResumS switches to its BBH settings at 1 and below")
+    command.add_argument("--sampling", default="uniform", choices=sorted(PARAMETER_GENERATORS),
+                         help="distribution of the parameters in their ranges (see ModesDatasetConfig)")
     command.add_argument("--downsampling-from", help="share the downsampling of this (training) dataset")
     command.set_defaults(run=init)
 

@@ -15,7 +15,8 @@
 #                                             # the workers of the study NAME of mode SLURM_ARRAY_TASK_ID,
 #                                             # until the walltime (here: give --mode)
 #
-# Settings from cluster.env (see cluster.env.example). Every step skips what
+# Settings from cluster.env (see cluster.env.example), or the file CLUSTER_ENV
+# names (submit.sh passes it on). Every step skips what
 # is already done. Inside SLURM, USR1 (--signal=B:USR1@SIGNAL_LEAD, before the
 # walltime) makes the step checkpoint or abandon its shard and exit with 75,
 # and the job is requeued, at most MAX_REQUEUES times (optimize: not, it
@@ -24,7 +25,8 @@ set -euo pipefail
 # under sbatch the script runs from a spool copy: submit.sh submits from the repository
 ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 cd "$ROOT"
-[[ -f slurm/modes/cluster.env ]] && source slurm/modes/cluster.env
+CLUSTER_ENV="${CLUSTER_ENV:-slurm/modes/cluster.env}"
+[[ -f "$CLUSTER_ENV" ]] && source "$CLUSTER_ENV"
 source slurm/lib.sh
 DATA="${DATA:-visualization/modes_scale/run}"
 resolve_data
@@ -41,7 +43,8 @@ case "$STEP" in
         single_threaded
         "$PYTHON" "$M" downsampling "$DATA/train" --size "${DOWNSAMPLING_SIZE:-64}" --jobs "$CPUS"
         CMD=("$PYTHON" "$M" init "$DATA/validation" --n "$N_VALIDATION" --seed 2 --shard-size "$SHARD_SIZE"
-             --lambda-max "$LAMBDA_MAX" --downsampling-from "$DATA/train") ;;
+             --lambda-min "${LAMBDA_MIN:-5}" --lambda-max "$LAMBDA_MAX" --sampling "${SAMPLING:-uniform}"
+             --downsampling-from "$DATA/train") ;;
     generate)
         single_threaded
         CMD=("$PYTHON" "$M" generate "$DATA/validation" "$DATA/train" --jobs "$CPUS") ;;

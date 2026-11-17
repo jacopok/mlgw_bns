@@ -11,7 +11,7 @@ from typing import Any, Callable, ClassVar, Optional, Type, Union
 
 import h5py
 import numpy as np
-from numpy.random import default_rng
+from numpy.random import Generator, default_rng
 from joblib import Parallel, delayed
 
 from .progress import joblib_progress
@@ -973,6 +973,97 @@ class GWPriorUniformSpinParameterGenerator(GWPriorParameterGenerator):
             q_prior="gw",
             spin_prior="uniform",
         )
+
+
+def uniform_sum_then_position(
+    rng: Generator,
+    weights: tuple[float, float],
+    range_1: tuple[float, float],
+    range_2: tuple[float, float],
+    log_sum: bool = False,
+) -> tuple[float, float]:
+    r"""Draw :math:`(x_1, x_2)` in a box through :math:`S = w_1 x_1 + w_2 x_2`.
+
+    :math:`S` is uniform over its range on the box (or log-uniform, with
+    ``log_sum``), then the position along the segment of constant :math:`S`
+    inside the box is uniform. This is the chart the effective spin and
+    tidal deformability are sampled in by nessai-gw's
+    ``EffectiveSpinReparameterisation`` and
+    ``EffectiveTidalDeformabilityReparameterisation``, but with the effective
+    parameter uniform instead of following its prior: compared with a uniform
+    draw over the box, the corners where the segments are short (both
+    :math:`x_i` small, or both large) are much more densely populated.
+    """
+    w_1, w_2 = weights
+    s_lo = w_1 * range_1[0] + w_2 * range_2[0]
+    s_hi = w_1 * range_1[1] + w_2 * range_2[1]
+    if log_sum:
+        if s_lo <= 0:
+            raise ValueError("a log-uniform sum needs a positive lower bound")
+        s = float(np.exp(rng.uniform(np.log(s_lo), np.log(s_hi))))
+    else:
+        s = float(rng.uniform(s_lo, s_hi))
+    x_1_lo = max(range_1[0], (s - w_2 * range_2[1]) / w_1)
+    x_1_hi = min(range_1[1], (s - w_2 * range_2[0]) / w_1)
+    x_1 = float(rng.uniform(x_1_lo, x_1_hi))
+    x_2 = float(np.clip((s - w_1 * x_1) / w_2, *range_2))
+    return x_1, x_2
+
+
+class EffectiveParameterGenerator(UniformParameterGenerator):
+    r"""Training parameters drawn in the effective parameters of a PE analysis.
+
+    The mass ratio is uniform, as in :class:`UniformParameterGenerator`. The
+    deformabilities are drawn through the binary tidal deformability
+    :math:`\tilde\Lambda` (uniform over its range at the drawn mass ratio,
+    or log-uniform in :class:`LogEffectiveParameterGenerator`) and the
+    position along the line of constant :math:`\tilde\Lambda` inside the box
+    of ``lambda1_range`` and ``lambda2_range`` (uniform); the aligned spins
+    likewise, through :math:`\chi_{\rm eff} = (m_1\chi_1 + m_2\chi_2)/M`.
+    See :func:`uniform_sum_then_position`.
+
+    At fixed mass ratio both are linear maps of the component parameters, so
+    the samples still cover the same box. But where a uniform draw over the
+    box leaves the corner of two small deformabilities almost empty (both
+    :math:`\Lambda_i < 20` for :math:`\sim 10^{-5}` of the samples, with
+    :math:`\Lambda_i \in [5, 5000]`), here every value of
+    :math:`\tilde\Lambda` gets the same share.
+    """
+
+    log_lambda_tilde: bool = False
+
+    def __next__(self) -> WaveformParameters:
+        mass_ratio = self.rng.uniform(*self.q_range)
+        m_1, m_2 = mass_ratio / (1 + mass_ratio), 1 / (1 + mass_ratio)
+        lambda_weights = (compute_lambda_tilde(m_1, m_2, 1.0, 0.0),
+                          compute_lambda_tilde(m_1, m_2, 0.0, 1.0))
+        lambda_1, lambda_2 = uniform_sum_then_position(
+            self.rng, lambda_weights, self.lambda1_range, self.lambda2_range,
+            log_sum=self.log_lambda_tilde,
+        )
+        chi_1, chi_2 = uniform_sum_then_position(
+            self.rng, (m_1, m_2), self.chi1_range, self.chi2_range
+        )
+        return WaveformParameters(
+            mass_ratio, lambda_1, lambda_2, chi_1, chi_2, self.dataset
+        )
+
+
+class LogEffectiveParameterGenerator(EffectiveParameterGenerator):
+    r""":class:`EffectiveParameterGenerator` with :math:`\tilde\Lambda`
+    log-uniform (a named class, so it can be passed as
+    ``parameter_generator_class`` and pickled)."""
+
+    log_lambda_tilde = True
+
+
+#: The training-set distributions by name, as
+#: :class:`~mlgw_bns.modes_dataset.ModesDatasetConfig` refers to them.
+PARAMETER_GENERATORS: dict[str, Type[ParameterGenerator]] = {
+    "uniform": UniformParameterGenerator,
+    "effective": EffectiveParameterGenerator,
+    "effective_log": LogEffectiveParameterGenerator,
+}
 
 
 class Dataset:
