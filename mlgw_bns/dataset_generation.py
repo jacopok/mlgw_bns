@@ -568,6 +568,9 @@ class WaveformParameters:
             "output_hpc": "no",
             "time_shift_FD": "yes",
             "ode_tmax": 1e12,
+            # the quasi-circular model of the Dali branch, the one the shipped
+            # models were trained with (older TEOBResumS ignore the key)
+            "model": "Giotto",
         }
 
     def taylor_f2(
