@@ -29,6 +29,31 @@ Both are trained on the same number of waveforms, so the narrower range is
 sampled more densely, and is more accurate; use `default_hom_lambda12000`
 only if tidal polarizabilities above 2000 are needed.
 
+```{warning}
+`default_hom_lambda12000` is not accurate enough in the late inspiral to
+predict the merger reliably, and loading it raises a
+`mlgw_bns.model.ModelAccuracyWarning`. Spread over tidal deformabilities up
+to 12000, its training waveforms sample the parameter space too sparsely
+for the last few milliseconds before merger: its time to merger above
+about 1 kHz is wrong in parts of the space, worst at small `lambda_1` and
+large mass ratios. Compared with TEOBResumS, the merger comes 1.3--1.5 ms
+early at $q \approx 2.5$, $\Lambda_1 \approx 10$, $\Lambda_2 \approx 1500$
+(where a GW170817 posterior has a secondary mode), and more than 0.2 ms
+early or late for about 4% of uniform draws over its range; `default_hom`
+stays within 0.1 ms there and has a 99th percentile of 50 $\mu$s.
+
+This is a modelling error, not a difference of convention. The merger
+reference itself, the tangent to the $(2,2)$ phase at the top of the band,
+is arbitrary: any consistent choice would do, and the two models make the
+same one. What is wrong is the phase of the surrogate between about 1 and
+2 kHz. Below 1 kHz it shows as a constant shift of the merger time, which
+a sampled or marginalised coalescence time absorbs, with a time- and
+phase-optimised mismatch of a few $10^{-4}$; but the merger time, and
+anything measured from the last milliseconds before merger, are not
+reliable. The tests that fail on it are marked as expected failures in
+`tests/conftest.py` (`KNOWN_FAILURES`).
+```
+
 The fastest way to access a functional instance of a `Model` is to load
 one of them:
 ```python

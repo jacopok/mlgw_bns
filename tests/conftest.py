@@ -3,6 +3,7 @@ which all other testing files can then use."""
 
 import glob
 import os
+import warnings
 
 import h5py
 import numpy as np
@@ -10,6 +11,7 @@ import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 
 from mlgw_bns import Model, ModeModel, ParametersWithExtrinsic
+from mlgw_bns.model import MODELS_AVAILABLE, ModelAccuracyWarning
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
 from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
 from mlgw_bns.higher_order_modes import Mode
@@ -106,10 +108,43 @@ def trained_mode_model(generated_mode_model):
     yield generated_mode_model
 
 
-@pytest.fixture(scope="session")
-def default_model():
-    """The pretrained multi-mode model shipped with the package."""
-    yield Model.default_for_testing()
+@pytest.fixture(scope="session", params=MODELS_AVAILABLE)
+def default_model(request):
+    """Each pretrained multi-mode model shipped with the package."""
+    with warnings.catch_warnings():
+        # its known caveat, tested in test_model.py
+        warnings.simplefilter("ignore", ModelAccuracyWarning)
+        model = Model.default_for_testing(request.param)
+    yield model
+
+
+#: Tests of ``default_model`` that a shipped model is known to fail, with
+#: why. Strict: a model that starts passing one (after a retrain) fails the
+#: suite until it is taken off this list.
+KNOWN_FAILURES = {
+    "default_hom_lambda12000": (
+        {
+            "test_default_model_merger_reference_matches_teobresums",
+            "test_merger_reference_matches_teobresums_at_low_lambda_1",
+            "test_full_waveform_mismatch_is_flat_in_total_mass",
+            "test_matches_teobresums",
+        },
+        "trained on Lambda up to 12000 with as many waveforms as default_hom, "
+        "it is not accurate enough in the late inspiral to predict the merger "
+        "(up to 1.5 ms early at small lambda_1 and large q) and is a few "
+        "times less accurate in mismatch (MODEL_CAVEATS)",
+    ),
+}
+
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        callspec = getattr(item, "callspec", None)
+        model_name = callspec.params.get("default_model") if callspec else None
+        if model_name in KNOWN_FAILURES:
+            tests, reason = KNOWN_FAILURES[model_name]
+            if item.originalname in tests:
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
 
 
 @pytest.fixture(scope="session")

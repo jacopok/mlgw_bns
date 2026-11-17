@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from typing import IO, TYPE_CHECKING, Callable, Optional, Sequence, Union
 
@@ -73,6 +74,29 @@ PRETRAINED_MODEL_FOLDER = "data/"
 
 #: Names of the pretrained models shipped with the package.
 MODELS_AVAILABLE = ["default_hom", "default_hom_lambda12000"]
+
+
+class ModelAccuracyWarning(UserWarning):
+    """A shipped model is used where it is known not to be accurate."""
+
+
+#: Known accuracy problems of shipped models, warned about when one is
+#: loaded (:meth:`Model.default_for_testing`) as a :class:`ModelAccuracyWarning`.
+MODEL_CAVEATS = {
+    "default_hom_lambda12000": (
+        "default_hom_lambda12000 is not accurate enough in the late inspiral "
+        "to predict the merger reliably. Trained on tidal deformabilities up "
+        "to 12000 with as many waveforms as default_hom (up to 2000), it "
+        "samples them too sparsely: its time to merger above about 1 kHz is "
+        "wrong in parts of the parameter space, worst at small lambda_1 and "
+        "large mass ratios (merger 1.3-1.5 ms early at q ~ 2.5, lambda_1 ~ 10; "
+        "above 0.2 ms for about 4% of its parameter space). Below about 1 kHz "
+        "the error is a constant shift of the merger time, which a sampled "
+        "coalescence time absorbs; the merger time itself, and anything "
+        "measured from the last milliseconds before it, are not reliable. "
+        "Use default_hom unless tidal deformabilities above 2000 are needed."
+    ),
+}
 
 #: Modes covered by the pretrained models.
 DEFAULT_MODES = [
@@ -521,12 +545,20 @@ class Model:
         ------
         ValueError
             If ``model_name`` is not in :data:`MODELS_AVAILABLE`.
+
+        Warns
+        -----
+        ModelAccuracyWarning
+            If the model has a known accuracy problem
+            (:data:`MODEL_CAVEATS`): ``default_hom_lambda12000`` does.
         """
         if model_name is None:
             model_name = MODELS_AVAILABLE[0]
 
         if model_name not in MODELS_AVAILABLE:
             raise ValueError(f"Model {model_name} not available!")
+        if model_name in MODEL_CAVEATS:
+            warnings.warn(MODEL_CAVEATS[model_name], ModelAccuracyWarning, stacklevel=2)
 
         given_filename = kwargs.pop("filename", None)
 

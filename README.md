@@ -17,7 +17,9 @@ Currently, the only model used for training is [`TEOBResumS`](http://arxiv.org/a
 but it is planned to introduce the possibility to use others.
 
 The two models shipped with the package, `default_hom` (tidal
-polarizabilities up to 2000) and `default_hom_lambda12000` (up to 12000),
+polarizabilities up to 2000) and `default_hom_lambda12000` (up to 12000,
+but not accurate enough in the late inspiral to predict the merger
+reliably: see the [shipped models](https://mlgw-bns.readthedocs.io/en/latest/usage_guides/overview.html#shipped-models)),
 cover the $(2,2)$, $(2,1)$, $(3,1)$, $(3,2)$, $(3,3)$, $(4,3)$ and $(4,4)$
 spherical-harmonic modes, for aligned spins; precessing waveforms are
 built from them by twisting the multipoles, as `TEOBResumS` does.

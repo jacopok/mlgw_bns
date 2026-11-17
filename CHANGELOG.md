@@ -39,6 +39,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `use_effective_frequencies` argument of `WaveformParameters.teobresums`
     and `ParametersWithExtrinsic.teobresums_dict` is removed.
 
+### Added
+
+- Loading `default_hom_lambda12000` raises a `ModelAccuracyWarning`
+    (`mlgw_bns.model.MODEL_CAVEATS`): it is not accurate enough in the late
+    inspiral to predict the merger reliably. Trained on tidal deformabilities
+    up to 12000 with as many waveforms as `default_hom`, its time to merger
+    above about 1 kHz is wrong in parts of the parameter space: against
+    TEOBResumS the merger is 1.3--1.5 ms early at $q \approx 2.5$,
+    $\Lambda_1 \approx 10$, and off by more than 0.2 ms for about 4% of its
+    range. This is a modelling error, not a choice of merger reference. The
+    accuracy tests now run on every shipped model; the six this one fails are
+    strict expected failures (`KNOWN_FAILURES` in `tests/conftest.py`), and
+    a test checks the merger time in that corner of the parameter space.
+
 ### Fixed
 
 - `PrecessingModel.euler_angles(anchor_to_reference_phase=True)` samples

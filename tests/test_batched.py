@@ -1,6 +1,7 @@
 """Tests for the batched, per-mode evaluation (:mod:`mlgw_bns.batched`)."""
 
 import dataclasses
+import os
 
 import numpy as np
 import pytest
@@ -312,7 +313,10 @@ def test_merger_is_at_zero_time_and_phase(default_model):
 def test_mode_subset_model(default_model):
     """A model loaded with a subset of the trained modes predicts them as
     the full one does."""
-    subset = Model.default_for_testing(modes=[Mode(*mode) for mode in FOUR_MODES])
+    subset = Model.default_for_testing(
+        os.path.basename(default_model.base_filename),
+        modes=[Mode(*mode) for mode in FOUR_MODES],
+    )
     params = ParametersWithExtrinsic(1.4, 300.0, 700.0, 0.1, -0.1, 100.0, 0.8, 2.8)
     expected = default_model.predict_modes_dict(FREQUENCIES, params)
     got = subset.predict_modes_dict(FREQUENCIES, params)
