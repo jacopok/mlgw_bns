@@ -1071,12 +1071,30 @@ class LogEffectiveParameterGenerator(EffectiveParameterGenerator):
     log_lambda_tilde = True
 
 
+class MixedParameterGenerator(LogEffectiveParameterGenerator):
+    r"""Half of the draws from :class:`UniformParameterGenerator`, half from
+    :class:`LogEffectiveParameterGenerator`, each draw choosing at random.
+
+    The surrogate's error grows by orders of magnitude towards small
+    :math:`\tilde\Lambda`, where a uniform draw leaves the box almost
+    empty, while a log-uniform :math:`\tilde\Lambda` takes so much from
+    the rest of the box that it does worse there than uniform draws: the
+    mixture keeps at least half the density of either everywhere.
+    """
+
+    def __next__(self) -> WaveformParameters:
+        if self.rng.uniform() < 0.5:
+            return UniformParameterGenerator.__next__(self)
+        return super().__next__()
+
+
 #: The training-set distributions by name, as
 #: :class:`~mlgw_bns.modes_dataset.ModesDatasetConfig` refers to them.
 PARAMETER_GENERATORS: dict[str, Type[ParameterGenerator]] = {
     "uniform": UniformParameterGenerator,
     "effective": EffectiveParameterGenerator,
     "effective_log": LogEffectiveParameterGenerator,
+    "mixed": MixedParameterGenerator,
 }
 
 
