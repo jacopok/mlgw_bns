@@ -108,6 +108,8 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 import numpy as np
 from scipy.interpolate import CubicSpline  # type: ignore
 
+from .neural_network import regression_inputs
+
 from .dataset_generation import AMP_SI_BASE
 from .jax_mlp import array_activation
 from .pn_modes import H_21, H_22, H_31, H_32, H_33, H_43, H_44, Mode
@@ -384,6 +386,8 @@ class _ModeArrays:
     phase_nodes_natural: Any
     pn_amp_nodes: Any  # frozen reference amplitude, or None
     trained_fmax_hz: float
+    # kernel ridge: the coordinates of its inputs (neural_network.regression_inputs)
+    input_coordinates: str = "linear"
 
 
 @dataclass
@@ -543,6 +547,7 @@ def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
                     mlp_activation=None,
                     target_mean=np.asarray(nn.target_scaler.mean_, dtype=float),
                     target_scale=np.asarray(nn.target_scaler.scale_, dtype=float),
+                    input_coordinates=nn.input_coordinates,
                     **common,
                 )
             )
@@ -807,7 +812,7 @@ class BatchedSurrogate:
         kernel_groups: dict = {}
         for i, ma in enumerate(modes_arrays):
             if ma.regressor_kind == "kernel_ridge":
-                key = (id(ma.kernel.x_fit), id(ma.param_mean), id(ma.param_scale))
+                key = (id(ma.kernel.x_fit), id(ma.param_mean), id(ma.param_scale), ma.input_coordinates)
                 kernel_groups.setdefault(key, []).append(i)
             else:
                 activation = (x - ma.param_mean) / ma.param_scale
@@ -821,7 +826,8 @@ class BatchedSurrogate:
                 components[i] = activation
         for indices in kernel_groups.values():
             first = modes_arrays[indices[0]]
-            scaled = (x - first.param_mean) / first.param_scale
+            inputs = regression_inputs(x, first.input_coordinates, xp)
+            scaled = (inputs - first.param_mean) / first.param_scale
             predictions = _kernel_ridge(
                 xp, scaled, [modes_arrays[i].kernel for i in indices]
             )

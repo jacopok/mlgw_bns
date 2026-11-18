@@ -24,6 +24,7 @@ from mlgw_bns.neural_network import (
     Hyperparameters,
     KernelRidgeNetwork,
     SklearnNetwork,
+    regression_inputs,
 )
 
 
@@ -362,3 +363,48 @@ def test_kernel_alpha_selection_fixed_keeps_one_penalty(smooth_training_data):
     network.fit(x_train, y_train)
     assert np.shape(network.regressor.alpha) == (y_train.shape[1],)
     assert np.array_equal(network.regressor.alpha, network.alpha_selection.alpha)
+
+
+def lambda_rows(n, seed):
+    """Parameters ``(n, 5)`` with deformabilities from 0 to 2000."""
+    rng = np.random.default_rng(seed)
+    return np.column_stack([
+        rng.uniform(1, 3, n), rng.uniform(0, 2000, n), rng.uniform(0, 2000, n),
+        rng.uniform(-0.5, 0.5, n), rng.uniform(-0.5, 0.5, n),
+    ])
+
+
+def test_log_lambda_coordinates_regress_log_one_plus_lambda(tmp_path):
+    """``input_coordinates="log_lambda"`` is kernel ridge on the parameters
+    with each deformability replaced by log(1 + Lambda), in fit and predict,
+    and it is kept when saved."""
+    x_train, x_test = lambda_rows(300, 1), lambda_rows(40, 2)
+    y_train = np.column_stack([np.sqrt(x_train[:, 1] + 1), x_train[:, 0] * x_train[:, 3]])
+
+    hyper = Hyperparameters.default_kernel_ridge(len(x_train), input_coordinates="log_lambda")
+    network = KernelRidgeNetwork(hyper)
+    network.fit(x_train, y_train)
+    plain = KernelRidgeNetwork(Hyperparameters.default_kernel_ridge(len(x_train)))
+    plain.fit(regression_inputs(x_train, "log_lambda"), y_train)
+
+    assert network.input_coordinates == "log_lambda"
+    np.testing.assert_allclose(
+        network.predict(x_test), plain.predict(regression_inputs(x_test, "log_lambda")), rtol=1e-12, atol=0
+    )
+    path = str(tmp_path / "kernel.pkl")
+    network.save(path)
+    np.testing.assert_array_equal(KernelRidgeNetwork.from_file(path).predict(x_test), network.predict(x_test))
+
+
+def test_input_coordinates_default_to_linear_and_are_checked():
+    hyper = Hyperparameters.default_kernel_ridge(10)
+    assert KernelRidgeNetwork(hyper).input_coordinates == "linear"
+    # hyperparameters pickled before the field existed
+    del hyper.__dict__["input_coordinates"]
+    assert KernelRidgeNetwork(hyper).input_coordinates == "linear"
+    with pytest.raises(ValueError, match="input_coordinates"):
+        Hyperparameters.default_kernel_ridge(10, input_coordinates="log")
+    x = lambda_rows(3, 3)
+    np.testing.assert_array_equal(regression_inputs(x), x)
+    with pytest.raises(ValueError, match="input_coordinates"):
+        regression_inputs(x, "log")

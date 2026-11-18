@@ -73,7 +73,7 @@ from mlgw_bns.modes_dataset import (
     same_indices,
     stored_size,
 )
-from mlgw_bns.neural_network import Hyperparameters, JaxMLPNetwork, KernelRidgeNetwork
+from mlgw_bns.neural_network import INPUT_COORDINATES, Hyperparameters, JaxMLPNetwork, KernelRidgeNetwork
 from mlgw_bns.sharding import EXIT_REQUEUE, Stopped, save_arrays, save_json, stop_on_signals, write_atomically
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -214,6 +214,10 @@ def train(args) -> int:
             )
         logging.info("kernel ridge on %i waveforms: ~%.1f GB", args.n, KRR_BYTES(args.n) / 1e9)
         nn_kind, hyperparameters = KernelRidgeNetwork, None
+        if args.input_coordinates != "linear" or args.kernel_gamma is not None:
+            def hyperparameters(mode, n):
+                return Hyperparameters.default_kernel_ridge(
+                    n, mode=mode, kernel_gamma=args.kernel_gamma, input_coordinates=args.input_coordinates)
     # (while the perceptron trains, it checkpoints on them instead)
     stop_on_signals()
     start = time.time()
@@ -620,6 +624,10 @@ def main() -> int:
     command.add_argument("--modes", type=parse_mode, nargs="+", help="only these (default: all)")
     command.add_argument("--max-kernel-ridge", type=int, default=65536,
                          help="refuse kernel ridge on more waveforms (memory)")
+    command.add_argument("--input-coordinates", choices=INPUT_COORDINATES, default="linear",
+                         help="kernel ridge: regress in these coordinates (log_lambda: log(1 + Lambda))")
+    command.add_argument("--kernel-gamma", type=float,
+                         help="kernel ridge: this kernel width for every mode (default: each mode's tuned one)")
     add_mlp_arguments(command)
     command.add_argument("--mlp-steps", type=int, help="train for about this many steps (sets the epochs)")
     command.add_argument("--checkpoint", help="base filename of the perceptrons' checkpoints")

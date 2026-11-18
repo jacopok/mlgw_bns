@@ -87,6 +87,34 @@ def test_single_rows_match_predict_modes_dict(default_model):
             )
 
 
+def test_log_lambda_coordinates_match_predict_modes_dict(default_model, monkeypatch):
+    """A model whose kernel ridge regresses in log(1 + Lambda) predicts the
+    same in a batch as row by row. The coordinates are set on the shipped
+    regressors: wrong for them, so their kernel sums, far from their
+    training points, cancel worse and round to ~1e-6 rather than 1e-7; but
+    they change the prediction by far more than that, on both paths."""
+    intrinsic, total_mass, distance = random_rows(2, seed=11)
+
+    def params(i):
+        return ParametersWithExtrinsic(*intrinsic[i], distance[i], 0.7, total_mass[i])
+
+    linear = [default_model.predict_modes_dict(FREQUENCIES, params(i)) for i in range(len(intrinsic))]
+    for mode_model in default_model.mode_models.values():
+        monkeypatch.setattr(mode_model.nn.hyper, "input_coordinates", "log_lambda", raising=False)
+    surrogate = BatchedSurrogate(default_model, ALL_MODES)
+    for i in range(len(intrinsic)):
+        amp, phase = surrogate(intrinsic[i : i + 1], total_mass[i], FREQUENCIES, distance[i])
+        h_plus, h_cross = mode_polarizations(amp, phase, ALL_MODES, 0.7)
+        expected = default_model.predict_modes_dict(FREQUENCIES, params(i))
+        for j, mode in enumerate(ALL_MODES):
+            scale = np.max(np.abs(expected[mode]))
+            assert np.max(np.abs(expected[mode] - linear[i][mode])) / scale > 1e-2
+            np.testing.assert_allclose(
+                (h_plus[0, j] + 1j * h_cross[0, j]) / scale, expected[mode] / scale,
+                rtol=0, atol=1e-5,
+            )
+
+
 def test_polarizations_sum_to_predict(default_model):
     intrinsic, total_mass, distance = random_rows(1, seed=2)
     params = ParametersWithExtrinsic(*intrinsic[0], distance[0], 0.7, total_mass[0])
