@@ -211,7 +211,7 @@ def test_true_waveforms_in_validation(dataset, parameters):
     )
 
 
-@pytest.mark.parametrize("sampling", ["effective", "effective_log", "mixed"])
+@pytest.mark.parametrize("sampling", ["effective", "effective_log", "mixed", "effective_mixed"])
 def test_effective_parameter_generator(dataset, sampling):
     """Draws in the effective parameters stay in the box, and fill the corner
     of two small deformabilities and the extremes of the effective spin, which

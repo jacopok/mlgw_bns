@@ -995,12 +995,14 @@ def uniform_sum_then_position(
     range_1: tuple[float, float],
     range_2: tuple[float, float],
     log_sum: bool = False,
+    sum_range: Optional[tuple[float, float]] = None,
 ) -> tuple[float, float]:
     r"""Draw :math:`(x_1, x_2)` in a box through :math:`S = w_1 x_1 + w_2 x_2`.
 
     :math:`S` is uniform over its range on the box (or log-uniform, with
     ``log_sum``), then the position along the segment of constant :math:`S`
-    inside the box is uniform. This is the chart the effective spin and
+    inside the box is uniform. ``sum_range`` restricts :math:`S` to a part
+    of its range on the box. This is the chart the effective spin and
     tidal deformability are sampled in by nessai-gw's
     ``EffectiveSpinReparameterisation`` and
     ``EffectiveTidalDeformabilityReparameterisation``, but with the effective
@@ -1011,6 +1013,8 @@ def uniform_sum_then_position(
     w_1, w_2 = weights
     s_lo = w_1 * range_1[0] + w_2 * range_2[0]
     s_hi = w_1 * range_1[1] + w_2 * range_2[1]
+    if sum_range is not None:
+        s_lo, s_hi = max(s_lo, sum_range[0]), min(s_hi, sum_range[1])
     if log_sum:
         if s_lo <= 0:
             raise ValueError("a log-uniform sum needs a positive lower bound")
@@ -1047,13 +1051,16 @@ class EffectiveParameterGenerator(UniformParameterGenerator):
     log_lambda_tilde: bool = False
 
     def __next__(self) -> WaveformParameters:
+        return self._draw(self.log_lambda_tilde)
+
+    def _draw(self, log_lambda_tilde: bool) -> WaveformParameters:
         mass_ratio = self.rng.uniform(*self.q_range)
         m_1, m_2 = mass_ratio / (1 + mass_ratio), 1 / (1 + mass_ratio)
         lambda_weights = (compute_lambda_tilde(m_1, m_2, 1.0, 0.0),
                           compute_lambda_tilde(m_1, m_2, 0.0, 1.0))
         lambda_1, lambda_2 = uniform_sum_then_position(
             self.rng, lambda_weights, self.lambda1_range, self.lambda2_range,
-            log_sum=self.log_lambda_tilde,
+            log_sum=log_lambda_tilde,
         )
         chi_1, chi_2 = uniform_sum_then_position(
             self.rng, (m_1, m_2), self.chi1_range, self.chi2_range
@@ -1088,6 +1095,22 @@ class MixedParameterGenerator(LogEffectiveParameterGenerator):
         return super().__next__()
 
 
+class EffectiveMixedParameterGenerator(EffectiveParameterGenerator):
+    r""":class:`EffectiveParameterGenerator` with :math:`\tilde\Lambda`
+    uniform for half of the draws and log-uniform for the other half, each
+    draw choosing at random.
+
+    A uniform :math:`\tilde\Lambda` fills its whole range, up to the corner
+    of two large deformabilities, but leaves little at small
+    :math:`\tilde\Lambda`, where the surrogate's error grows by orders of
+    magnitude; a log-uniform one does the opposite. The mixture keeps at
+    least half the density of either everywhere.
+    """
+
+    def __next__(self) -> WaveformParameters:
+        return self._draw(bool(self.rng.uniform() < 0.5))
+
+
 #: The training-set distributions by name, as
 #: :class:`~mlgw_bns.modes_dataset.ModesDatasetConfig` refers to them.
 PARAMETER_GENERATORS: dict[str, Type[ParameterGenerator]] = {
@@ -1095,6 +1118,7 @@ PARAMETER_GENERATORS: dict[str, Type[ParameterGenerator]] = {
     "effective": EffectiveParameterGenerator,
     "effective_log": LogEffectiveParameterGenerator,
     "mixed": MixedParameterGenerator,
+    "effective_mixed": EffectiveMixedParameterGenerator,
 }
 
 

@@ -640,7 +640,7 @@ def extended_frequency_grid(
     return all_frequencies[mask], validator.psd_data[:, 1][mask]
 
 
-def full_waveform_mismatches(model: Model) -> tuple:
+def full_waveform_mismatches(model: Model, parameters=None) -> tuple:
     r"""Compute the multi-mode full-waveform mismatch distribution.
 
     Compares :meth:`Model.predict_modes_dict` against the EOB ground
@@ -663,6 +663,14 @@ def full_waveform_mismatches(model: Model) -> tuple:
     with :math:`h = \sum_{\ell m} h_{\ell m}`. The truth waveforms are
     already being generated here, so this costs nothing extra.
 
+    Parameters
+    ----------
+    model : Model
+    parameters : iterable of WaveformParameters, optional
+        The binaries to compare; by default :data:`N_FULL_WAVEFORM_MISMATCHES`
+        drawn by the model's own parameter generator, seeded with
+        :data:`SEED`.
+
     Returns
     -------
     mismatches : np.ndarray
@@ -683,7 +691,9 @@ def full_waveform_mismatches(model: Model) -> tuple:
     validator = ValidateModel(reference_model)
     frequencies, psd_values = extended_frequency_grid(validator)
 
-    parameter_generator = model.dataset.make_parameter_generator(SEED)
+    if parameters is None:
+        generator = model.dataset.make_parameter_generator(SEED)
+        parameters = (next(generator) for _ in range(N_FULL_WAVEFORM_MISMATCHES))
 
     def inner_product(a: np.ndarray, mask: np.ndarray) -> float:
         """PSD-weighted power of a complex waveform over the support."""
@@ -710,8 +720,7 @@ def full_waveform_mismatches(model: Model) -> tuple:
     mismatches = []
     mismatches_no_opt = []
     power_fractions: dict = {mode: [] for mode in MODES}
-    for _ in range(N_FULL_WAVEFORM_MISMATCHES):
-        intrinsic = next(parameter_generator)
+    for intrinsic in parameters:
         params = ParametersWithExtrinsic(
             mass_ratio=intrinsic.mass_ratio,
             lambda_1=intrinsic.lambda_1,
