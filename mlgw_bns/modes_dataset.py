@@ -343,6 +343,7 @@ class ShardedModesDataset(ShardedStore):
         modes: Optional[Sequence] = None,
         checkpoint: Optional[str] = None,
         sizes: Optional[Mapping[Mode, int]] = None,
+        n_components: int = 30,
     ) -> Optional[Model]:
         """Train a :class:`~mlgw_bns.model.Model` on the first ``n`` valid
         waveforms and save it as ``filename`` (without its training data,
@@ -376,6 +377,8 @@ class ShardedModesDataset(ShardedStore):
         sizes : mapping, optional
             Train the regressors of these modes on the first this many
             waveforms instead of ``n``.
+        n_components : int, optional
+            Principal components of each mode (30 by default).
 
         Returns
         -------
@@ -389,8 +392,9 @@ class ShardedModesDataset(ShardedStore):
         model = self.model(filename, nn_kind=KernelRidgeNetwork if kinds else nn_kind)
         for mode, kind in kinds.items():
             model.mode_models[mode].nn_kind = kind
-        pca = self.principal_components(pca_size or n)
+        pca = self.principal_components(pca_size or n, n_components)
         for mode in self.modes:
+            model.mode_models[mode].pca_components_number = n_components
             model.mode_models[mode].pca_data = pca[mode]
         for mode in self.modes if modes is None else [Mode(*m) for m in modes]:
             mode_model = model.mode_models[mode]

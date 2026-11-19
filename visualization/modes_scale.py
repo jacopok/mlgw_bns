@@ -174,7 +174,7 @@ def status(args) -> None:
 
 def pca(args) -> None:
     stop_on_signals()
-    ShardedModesDataset(args.dataset).principal_components(args.n)
+    ShardedModesDataset(args.dataset).principal_components(args.n, args.components)
 
 
 def train(args) -> int:
@@ -225,6 +225,7 @@ def train(args) -> int:
         model = dataset.train(
             args.n, args.out, nn_kind=nn_kind, hyperparameters=hyperparameters,
             pca_size=args.pca_size, modes=args.modes, sizes=sizes, checkpoint=args.checkpoint,
+            n_components=args.pca_components,
         )
     except (TrainingInterrupted, Stopped) as error:
         logging.info("stopped: %s", error)
@@ -614,6 +615,7 @@ def main() -> int:
     command = commands.add_parser("pca", help="fit the principal components of the first N waveforms")
     command.add_argument("dataset")
     command.add_argument("--n", type=int, required=True)
+    command.add_argument("--components", type=int, default=30, help="principal components of each mode")
     command.set_defaults(run=pca)
 
     command = commands.add_parser("train", help="train on the first N waveforms (and validate)")
@@ -624,6 +626,7 @@ def main() -> int:
     command.add_argument("--modes", type=parse_mode, nargs="+", help="only these (default: all)")
     command.add_argument("--max-kernel-ridge", type=int, default=65536,
                          help="refuse kernel ridge on more waveforms (memory)")
+    command.add_argument("--pca-components", type=int, default=30, help="principal components of each mode")
     command.add_argument("--input-coordinates", choices=INPUT_COORDINATES, default="linear",
                          help="kernel ridge: regress in these coordinates (log_lambda: log(1 + Lambda))")
     command.add_argument("--kernel-gamma", type=float,
