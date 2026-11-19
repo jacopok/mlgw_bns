@@ -50,12 +50,12 @@ case "$STEP" in
         CMD=("$PYTHON" "$M" generate "$DATA/validation" "$DATA/train" --jobs "$CPUS") ;;
     pca)
         export OMP_NUM_THREADS="$CPUS"
-        CMD=("$PYTHON" "$M" pca "$DATA/train" --n "$PCA_SIZE") ;;
+        CMD=("$PYTHON" "$M" pca "$DATA/train" --n "$PCA_SIZE" --components "${PCA_COMPONENTS:-30}") ;;
     train|validate)
         export OMP_NUM_THREADS="$CPUS"
         NAME="$1" SIZE="$2"; shift 2
         RUN="$DATA/runs/${NAME}_$SIZE"
-        mkdir -p "$RUN"
+        mkdir -p "$RUN" || [[ -d "$RUN" ]]  # array tasks race to create it on a network filesystem
         CMD=("$PYTHON" "$M" train "$DATA/train" --n "$SIZE" --pca-size "$PCA_SIZE" --out "$RUN/model"
              --checkpoint "$RUN/checkpoint" "$@")
         if [[ $STEP == train ]]; then

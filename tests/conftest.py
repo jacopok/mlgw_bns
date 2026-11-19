@@ -122,14 +122,6 @@ def default_model(request):
 #: why. Strict: a model that starts passing one (after a retrain) fails the
 #: suite until it is taken off this list.
 KNOWN_FAILURES = {
-    "default_hom_lambda8000": (
-        {"test_default_model_merger_reference_matches_teobresums"},
-        "trained on Lambda up to 8000 with as many waveforms as the others, its "
-        "coalescence phase and merger time are a few times less accurate: the "
-        "median mismatch with nothing maximised is 9e-4 over these draws (the "
-        "merger time is within 0.1 ms for 99% of its range, visualization/"
-        "merger_time_release.py)",
-    ),
     "default_hom_lambda12000": (
         {
             "test_default_model_merger_reference_matches_teobresums",

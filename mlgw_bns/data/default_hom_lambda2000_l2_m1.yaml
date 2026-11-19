@@ -19,7 +19,7 @@ parameter_ranges:
   q_range: !!python/tuple
   - 1.0
   - 3.0
-pca_components_number: 30
+pca_components_number: 60
 power_weight_exponent: 1.0
 power_weighting: true
 reference_amplitude: true

@@ -24,9 +24,9 @@ default, is another name for `default_hom_lambda2000`
 
 | name | `lambda_1`, `lambda_2` | full-waveform mismatch, median / 90% | merger time error, median / 90% |
 |---|---|---|---|
-| `default_hom_lambda2000` (`default_hom`) | 0--2000 | 3.2e-8 / 5.5e-7 | 2.7 / 11 $\mu$s |
-| `default_hom_lambda4000` | 0--4000 | 5.7e-8 / 1.0e-6 | 2.9 / 15 $\mu$s |
-| `default_hom_lambda8000` | 0--8000 | 1.1e-7 / 1.6e-6 | 4.5 / 23 $\mu$s |
+| `default_hom_lambda2000` (`default_hom`) | 0--2000 | 1.1e-8 / 1.1e-7 | 1.1 / 3.0 $\mu$s |
+| `default_hom_lambda4000` | 0--4000 | 2.4e-8 / 1.9e-7 | 1.5 / 5.1 $\mu$s |
+| `default_hom_lambda8000` | 0--8000 | 6.3e-8 / 4.9e-7 | 3.3 / 10 $\mu$s |
 | `default_hom_lambda12000` | 0--12000 | 9.1e-7 / 1.0e-5 | 26 / 108 $\mu$s |
 
 The mismatches are over 16384 TEOBResumS waveforms drawn as the training
@@ -36,14 +36,21 @@ the same number of waveforms, $2^{15}$, so a narrower range is sampled more
 densely and is more accurate: use the smallest one that covers the tidal
 polarizabilities needed.
 
-The training waveforms are drawn uniformly in the mass ratio, in the
-effective tidal deformability $\tilde\Lambda$ and in the effective spin
-$\chi_{\rm eff}$, and then uniformly along the segment of constant
-$\tilde\Lambda$ (or $\chi_{\rm eff}$) inside the range
-(`mlgw_bns.dataset_generation.EffectiveParameterGenerator`), as is usual for
-the priors of a parameter estimation: this fills the corners of the range,
-such as both tidal deformabilities small, which a uniform draw of each
-leaves almost empty.
+The training waveforms are drawn uniformly in the mass ratio and in the
+effective spin $\chi_{\rm eff}$, and in the effective tidal deformability
+$\tilde\Lambda$ uniformly for half of them and log-uniformly for the other
+half; then uniformly along the segment of constant $\tilde\Lambda$ (or
+$\chi_{\rm eff}$) inside the range
+(`mlgw_bns.dataset_generation.EffectiveMixedParameterGenerator`). This
+fills the corners of the range, such as both tidal deformabilities small,
+which a uniform draw of each leaves almost empty, and the small
+$\tilde\Lambda$ where the waveform changes fastest with it. The kernel
+ridge regressors take $\log(1 + \Lambda_{1,2})$ as inputs
+(`Hyperparameters.input_coordinates`) and predict 60 principal components
+of each mode. `default_hom_lambda12000` is the exception: its waveforms are
+drawn uniform in $\tilde\Lambda$ and regressed in $\Lambda_{1,2}$, 30
+principal components, as spread up to 12000 the other choice gave a less
+accurate merger time.
 
 The models are trained from $\Lambda = 1$ and accept tidal
 deformabilities down to 0. Below 1, TEOBResumS used to switch to its
@@ -66,8 +73,8 @@ deformabilities, large mass ratios and at the $\Lambda_1 \approx 12000$,
 $q \approx 3$ edge. Compared with TEOBResumS, the merger comes 0.2--0.5 ms
 early at $q \approx 2.5$, $\Lambda_1 \approx 10$, $\Lambda_2 \approx 1500$
 (where a GW170817 posterior has a secondary mode), and more than 0.2 ms
-early or late for about 5% of uniform draws over its range, against 0.2%
-for `default_hom_lambda8000`.
+early or late for about 5% of uniform draws over its range, against none
+of 400 for `default_hom_lambda8000`.
 
 This is a modelling error, not a difference of convention. The merger
 reference itself, the tangent to the $(2,2)$ phase at the top of the band,
