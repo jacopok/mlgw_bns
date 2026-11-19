@@ -639,14 +639,15 @@ def make_figure(
         Line2D([], [], color=family_colors[f], lw=1.5, label=f) for f in families
     ]
     plt.legend(handles=family_handles, fontsize=8, loc="upper left")
-    plt.gca().annotate(
-        "opaque: reduced modes (22, 21, 33, 44)\n"
-        "faint: full mode set",
-        xy=(0.02, 0.02),
-        xycoords="axes fraction",
-        fontsize=7,
-        va="bottom",
-    )
+    if any(a.is_reduced_modes for a in approximants):
+        plt.gca().annotate(
+            "opaque: reduced modes (22, 21, 33, 44)\n"
+            "faint: full mode set",
+            xy=(0.02, 0.02),
+            xycoords="axes fraction",
+            fontsize=7,
+            va="bottom",
+        )
     plt.tight_layout()
 
 
