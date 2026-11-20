@@ -171,6 +171,13 @@ PRECESSING_MIN_FREQUENCY_HZ = 21.0
 #: Largest shift of the reference phase (rad) searched by
 #: :func:`reference_phase_optimised_mismatch`; the ones found are ~1e-2.
 PRECESSING_MAX_REFERENCE_PHASE_SHIFT = 0.3
+#: half-width (s) of the time-shift search in the precessing mismatches: the
+#: predicted merger time is off by up to ~10 ms at the q = 3, large-Lambda_1,
+#: anti-aligned corner of the 12000 model
+PRECESSING_MAX_TIME_SHIFT = 2e-2
+#: step (s) of the coarse time-shift scan, well below a period at the top of
+#: the band, before the bounded refinement
+PRECESSING_TIME_SHIFT_STEP = 2e-5
 
 
 def load_model(filename: str = None) -> Model:
@@ -1612,9 +1619,19 @@ def time_optimised_mismatch(
 
     norm = np.sqrt(np.sum(np.abs(truth) ** 2 * weight) * np.sum(np.abs(ours) ** 2 * weight))
     cross = np.conj(truth) * ours * weight
+
+    def mismatch(t):
+        return 1 - np.sum(cross * np.exp(2j * np.pi * grid * t)).real / norm
+
+    # Re(truth|ours) oscillates in t at the band's frequencies: scan coarsely,
+    # then refine around the best step
+    shifts = np.arange(-PRECESSING_MAX_TIME_SHIFT, PRECESSING_MAX_TIME_SHIFT,
+                       PRECESSING_TIME_SHIFT_STEP)
+    best = shifts[np.argmin([mismatch(t) for t in shifts])]
     return float(minimize_scalar(
-        lambda t: 1 - np.sum(cross * np.exp(2j * np.pi * grid * t)).real / norm,
-        bounds=(-1e-3, 1e-3), method="bounded", options={"xatol": 1e-12},
+        mismatch,
+        bounds=(best - PRECESSING_TIME_SHIFT_STEP, best + PRECESSING_TIME_SHIFT_STEP),
+        method="bounded", options={"xatol": 1e-12},
     ).fun)
 
 
