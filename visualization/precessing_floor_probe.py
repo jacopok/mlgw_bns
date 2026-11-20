@@ -61,15 +61,11 @@ def mismatch(a, b):
 def best_anchor_mismatch(truth, params):
     """The mismatch with the orbital-phase anchor (reference_phase) also
     optimised: what is left is the waveform's shape, not the anchor."""
-    from scipy.optimize import minimize_scalar
-
-    def at(delta):
-        return mismatch(truth, precessing.predict(
-            grid, dataclasses.replace(params, reference_phase=params.reference_phase + delta))[0])
-
-    best = minimize_scalar(at, bounds=(-0.1, 0.1), method="bounded", options={"xatol": 1e-6})
-    print(f"    anchor offset {best.x:+.2e} rad", flush=True)
-    return best.fun
+    value, shift = vm.anchor_optimised_mismatch(
+        validator, grid, lambda p: precessing.predict(grid, p), truth, params, 0
+    )
+    print(f"    anchor shift {shift:+.2e} rad", flush=True)
+    return value
 
 
 columns = {}

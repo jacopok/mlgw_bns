@@ -39,6 +39,7 @@ the top of the trained band), as :meth:`Model.predict_modes_dict` and
 Run with: python visualization/validate_model.py
 """
 
+import dataclasses
 import logging
 import os
 import pickle
@@ -167,6 +168,9 @@ N_PRECESSING_WAVEFORMS = 100
 PRECESSING_MAX_IN_PLANE_SPIN = 0.5
 PRECESSING_REFERENCE_FREQUENCY_HZ = 9.5
 PRECESSING_MIN_FREQUENCY_HZ = 21.0
+#: Largest shift of the orbital-phase anchor (``reference_phase``, rad)
+#: searched by :func:`anchor_optimised_mismatch`; the ones found are ~1e-2.
+PRECESSING_MAX_ANCHOR_SHIFT = 0.3
 
 
 def load_model(filename: str = None) -> Model:
@@ -1597,6 +1601,46 @@ def teob_precessing_polarizations(
     return hp, hc
 
 
+def anchor_optimised_mismatch(
+    validator: ValidateModel,
+    grid: np.ndarray,
+    polarizations,
+    truth: np.ndarray,
+    params: PrecessingParametersWithExtrinsic,
+    index: int,
+) -> tuple:
+    r"""Mismatch of one polarization (``index`` 0 for :math:`h_+`, 1 for
+    :math:`h_\times`) optimised over time, constant phase *and* the orbital
+    phase at the reference frequency (``params.reference_phase``, the
+    anchor), on ``grid``.
+
+    The anchor :func:`teob_precessing_polarizations` sets reproduces a
+    TEOBResumS run only to ~1e-2 rad (it reads the orbital phase off the
+    run's first sample, at TEOBResumS' own start frequency); unlike in a
+    pure (2,2) waveform, a shift of it is not a constant phase (the
+    :math:`(\ell, m)` modes turn by :math:`m` times it), so the plain
+    optimised mismatch pays for it. The aligned-spin full-waveform mismatch
+    optimises the same angle (``full_waveform_mismatch``'s
+    :math:`e^{i m \phi_c}`).
+
+    ``polarizations(params)`` returns the model's ``(h_plus, h_cross)`` on
+    the grid. Returns ``(mismatch, anchor shift)``.
+    """
+    from scipy.optimize import minimize_scalar
+
+    def at(shift: float) -> float:
+        shifted = dataclasses.replace(params, reference_phase=params.reference_phase + shift)
+        return validator.mismatch(
+            truth, polarizations(shifted)[index], frequencies=grid, max_delta_t=1e-3
+        )
+
+    best = minimize_scalar(
+        at, bounds=(-PRECESSING_MAX_ANCHOR_SHIFT, PRECESSING_MAX_ANCHOR_SHIFT),
+        method="bounded", options={"xatol": 1e-5},
+    )
+    return float(best.fun), float(best.x)
+
+
 def precessing_mismatches(
     model: Model, n_waveforms: int = N_PRECESSING_WAVEFORMS
 ) -> dict:
@@ -1611,6 +1655,11 @@ def precessing_mismatches(
     weighted by the validator's PSD, in two configurations:
 
     * **optimised**: time shift and constant phase maximised over;
+    * **anchor optimised**: also the orbital phase at the reference
+      frequency (see :func:`anchor_optimised_mismatch`);
+    * **aligned**: the same binary with its in-plane spins zeroed, against
+      TEOBResumS run the same way, anchor optimised: the aligned-spin
+      model on the same grid, polarizations and reference;
     * **not optimised**: the real Wiener product as the model returns the
       polarizations, with the orbital phase anchored to TEOBResumS' run
       (:meth:`PrecessingModel.teob_reference_phase`) and nothing else
@@ -1622,7 +1671,11 @@ def precessing_mismatches(
     -------
     dict
         ``{"plus": [...], "cross": [...], "plus_no_optimisation": [...],
-        "cross_no_optimisation": [...], "beta_max": [...], "params": [...]}``, one entry per binary;
+        "cross_no_optimisation": [...], "plus_anchor": [...],
+        "cross_anchor": [...], "plus_anchor_shift": [...],
+        "cross_anchor_shift": [...], "aligned_plus": [...],
+        "aligned_cross": [...], "beta_max": [...], "params": [...]}``, one
+        entry per binary;
         ``beta_max`` is the largest opening angle of the precession cone
         over the band.
     """
@@ -1641,6 +1694,9 @@ def precessing_mismatches(
     grid = grid[(grid >= PRECESSING_MIN_FREQUENCY_HZ) & (grid < grid[-1])]
     weight = np.gradient(grid) / validator.psd_at_frequencies(grid)
 
+    def polarizations(params):
+        return tuple(np.asarray(h[0]) for h in predict(*batch_arguments([params], grid)))
+
     def unoptimised(truth: np.ndarray, ours: np.ndarray) -> float:
         def product(a, b):
             return np.sum(np.conj(a) * b * weight).real
@@ -1651,17 +1707,31 @@ def precessing_mismatches(
 
     result: dict = {key: [] for key in (
         "plus", "cross", "plus_no_optimisation", "cross_no_optimisation",
-        "beta_max", "params",
+        "plus_anchor", "cross_anchor", "plus_anchor_shift", "cross_anchor_shift",
+        "aligned_plus", "aligned_cross", "beta_max", "params",
     )}
     for seed in tqdm(range(n_waveforms), unit="waveform"):
         params = random_precessing_parameters(model, seed)
         hp_teob, hc_teob = teob_precessing_polarizations(model, precessing, params, grid)
-        hp, hc = (np.asarray(h[0]) for h in predict(*batch_arguments([params], grid)))
+        hp, hc = polarizations(params)
         for name, truth, ours in (("plus", hp_teob, hp), ("cross", hc_teob, hc)):
             result[name].append(
                 validator.mismatch(truth, ours, frequencies=grid, max_delta_t=1e-3)
             )
             result[f"{name}_no_optimisation"].append(unoptimised(truth, ours))
+        aligned = dataclasses.replace(
+            params, chi_1=(0.0, 0.0, params.chi_1[2]), chi_2=(0.0, 0.0, params.chi_2[2])
+        )
+        aligned_teob = teob_precessing_polarizations(model, precessing, aligned, grid)
+        for index, name in enumerate(("plus", "cross")):
+            mismatch, shift = anchor_optimised_mismatch(
+                validator, grid, polarizations, (hp_teob, hc_teob)[index], params, index
+            )
+            result[f"{name}_anchor"].append(mismatch)
+            result[f"{name}_anchor_shift"].append(shift)
+            result[f"aligned_{name}"].append(anchor_optimised_mismatch(
+                validator, grid, polarizations, aligned_teob[index], aligned, index
+            )[0])
         # the direction of L at the integration's nodes
         l_hat = np.asarray(angles(
             batch_arguments([params], grid)[0], params.total_mass,
@@ -1678,6 +1748,13 @@ def precessing_mismatches(
             f"worst {np.max(result[name]):.3e}; not optimised median "
             f"{np.median(result[name + '_no_optimisation']):.3e}, worst "
             f"{np.max(result[name + '_no_optimisation']):.3e}"
+        )
+        print(
+            f"  h_{name}: anchor optimised median {np.median(result[name + '_anchor']):.3e}, "
+            f"worst {np.max(result[name + '_anchor']):.3e} (anchor shift median "
+            f"{np.median(np.abs(result[name + '_anchor_shift'])):.1e} rad); aligned spins "
+            f"median {np.median(result['aligned_' + name]):.3e}, worst "
+            f"{np.max(result['aligned_' + name]):.3e}"
         )
     return result
 
@@ -1913,7 +1990,8 @@ def plot_precessing_mismatches(data: dict) -> None:
     fig, (ax_kde, ax_beta) = plt.subplots(1, 2, figsize=(13, 4.8))
 
     values = np.concatenate([
-        data[key] for key in data if key not in ("params", "beta_max")
+        data[key] for key in data
+        if key not in ("params", "beta_max") and not key.endswith("_shift")
     ])
     grid = np.linspace(np.log10(values.min()) - 0.5, np.log10(values.max()) + 0.5, 400)
     for name, color in (("plus", "C0"), ("cross", "C1")):
@@ -1947,6 +2025,42 @@ def plot_precessing_mismatches(data: dict) -> None:
     outfile = f"{OUTPUT_PREFIX}_precessing_mismatches.png"
     fig.savefig(outfile, dpi=150)
     print(f"Saved plot to {outfile}")
+
+
+def plot_precessing_summary(data: dict) -> None:
+    r"""One KDE panel of the :math:`h_+` mismatches of
+    :func:`precessing_mismatches` on the same binaries: aligned spins
+    (in-plane spins zeroed; time, phase and orbital-phase anchor optimised),
+    precessing optimised over time and phase, and precessing optimised over
+    time, phase and the anchor. Saved as png and pdf."""
+    curves = (
+        ("aligned_plus", "C2", r"aligned spins; $t$, $\varphi$, $\phi_{\rm ref}$ optimised"),
+        ("plus", "C0", r"precessing; $t$, $\varphi$ optimised"),
+        ("plus_anchor", "C1", r"precessing; $t$, $\varphi$, $\phi_{\rm ref}$ optimised"),
+    )
+    log_values = {key: np.log10(data[key]) for key, _, _ in curves}
+    everything = np.concatenate(list(log_values.values()))
+    grid = np.linspace(everything.min() - 0.5, everything.max() + 0.5, 400)
+    fig, ax = plt.subplots(figsize=(6.5, 4))
+    for key, color, label in curves:
+        ax.plot(
+            10**grid, gaussian_kde(log_values[key])(grid), color=color,
+            label=f"{label} (median {_sci_latex(np.median(data[key]))})",
+        )
+    ax.set_xscale("log")
+    ax.set_xlabel(r"Mismatch of $h_+$")
+    ax.set_ylabel(r"Density [per $\log_{10}$ mismatch]")
+    ax.grid(True, which="both", lw=0.3)
+    ax.legend(fontsize=8)
+    ax.set_title(
+        f"{len(data['plus'])} binaries vs. TEOBResumS, "
+        f"$f \\geq {PRECESSING_MIN_FREQUENCY_HZ:g}$ Hz", fontsize=10
+    )
+    fig.tight_layout()
+    for extension in ("png", "pdf"):
+        outfile = f"{OUTPUT_PREFIX}_precessing_summary.{extension}"
+        fig.savefig(outfile, dpi=150)
+        print(f"Saved plot to {outfile}")
 
 
 def plot_timing_benchmark(data: dict) -> None:
@@ -2152,6 +2266,7 @@ if __name__ == "__main__":
             **{key: np.asarray(value) for key, value in precessing_data.items() if key != "params"},
         )
         plot_precessing_mismatches(precessing_data)
+        plot_precessing_summary(precessing_data)
 
     if "timing" in steps:
         print("Benchmarking prediction wall-clock time (numpy vs. JAX)...")
