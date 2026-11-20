@@ -557,7 +557,24 @@ def create_and_run_tests(
     n_epochs: int,
     n_points_list: list[int],
     approximants: list[Approximant],
+    one_grid_size_at_a_time: bool = False,
 ) -> list[TestCase]:
+    """With ``one_grid_size_at_a_time``, the grid sizes in a random order,
+    each compiled, swept (every approximant, seed and epoch shuffled) and
+    then dropped (``jax.clear_caches``) before the next: every compiled JAX
+    executable holds memory mappings, and with many models, methods and
+    grid sizes alive at once they exceed the kernel's limit
+    (``vm.max_map_count``, 65530) and the compilation aborts."""
+    if one_grid_size_at_a_time:
+        order = list(n_points_list)
+        random.Random(2).shuffle(order)
+        tests: list[TestCase] = []
+        for n_points in tqdm(order, desc="grid sizes", unit="grid size"):
+            tests += create_and_run_tests(n_seeds, n_epochs, [n_points], approximants)
+            if _HAVE_JAX:
+                jax.clear_caches()
+        return tests
+
     # Factor out any one-off warm-up (jit, caches) before timing. In
     # particular, each JAX approximant's `setup` triggers a fresh JIT
     # compile (tens of seconds) the first time it sees a given `n_points`;
@@ -668,9 +685,10 @@ VARIANTS: dict[str, Callable[..., Approximant]] = {
 
 def compare_models(args: argparse.Namespace, n_points_list: list[int]) -> None:
     """Every variant of every model of ``--models`` (and TEOBResumS-SPA once,
-    or from ``--teob-cache``) in one shuffled sweep: ``<out>.npz`` of every
-    timing, and a figure per variant, ``<out>_<variant>.png``, of all the
-    models with their ``c1 + c2 N`` fits and TEOBResumS-SPA."""
+    or from ``--teob-cache``), one grid size at a time in a random order,
+    every model, variant, seed and epoch shuffled at each: ``<out>.npz`` of
+    every timing, and a figure per variant, ``<out>_<variant>.png``, of all
+    the models with their ``c1 + c2 N`` fits and TEOBResumS-SPA."""
     models = [entry.split("=", 1) for entry in args.models]
     variants = [v for v in args.variants.split(",") if v != "teob"]
     unknown = set(variants) - set(VARIANTS)
@@ -695,7 +713,9 @@ def compare_models(args: argparse.Namespace, n_points_list: list[int]) -> None:
             approximants += teob
 
     print("timing " + ", ".join(a.full_name for a in approximants))
-    tests = create_and_run_tests(args.seeds, args.epochs, n_points_list, approximants)
+    tests = create_and_run_tests(
+        args.seeds, args.epochs, n_points_list, approximants, one_grid_size_at_a_time=True
+    )
     save_tests(args.out.with_suffix(".npz"), tests, n_points_list)
     if teob and not cached and args.teob_cache is not None:
         save_tests(args.teob_cache, [t for t in tests if t.approximant in teob], n_points_list)

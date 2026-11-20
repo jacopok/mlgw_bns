@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Prediction wall-clock times of several models, on one whole node so that
 # every timing shares the same hardware and nothing else runs beside them:
-# visualization/benchmark_evaluation_time.py --models, every trial of every
-# (model, method, grid size, draw, repeat) shuffled into one sweep, on 50
+# visualization/benchmark_evaluation_time.py --models, one grid size at a time
+# in a random order, every trial of every
+# (model, method, draw, repeat) at it shuffled, on 50
 # grid sizes from 100 to 1e5 points, with a c1 + c2 N fit per curve:
 # numpy and JAX Model.predict (one waveform a call, and a jax.vmap batch of
 # 64), and the precessing model's JAX predictor (one binary, a batch of 64).
@@ -21,7 +22,7 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --job-name=timing-release
 set -euo pipefail
-[[ $# -ge 2 ]] || { sed -n '2,19p' "$0"; exit 1; }
+[[ $# -ge 2 ]] || { sed -n '2,20p' "$0"; exit 1; }
 cd "${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 NAME="$1"; shift
 OUT_DIR="${OUT_DIR:-visualization/modes_scale/timing}"
