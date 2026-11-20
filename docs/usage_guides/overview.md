@@ -25,7 +25,7 @@ default, is another name for `default_hom_lambda2000`
 | name | `lambda_1`, `lambda_2` | full-waveform mismatch, median / 90% | merger time error, median / 90% |
 |---|---|---|---|
 | `default_hom_lambda2000` (`default_hom`) | 0--2000 | 7.7e-9 / 1.2e-7 | 0.6 / 1.7 $\mu$s |
-| `default_hom_lambda4000` | 0--4000 | 2.0e-8 / 1.6e-7 | 2.4 / 5.4 $\mu$s |
+| `default_hom_lambda4000` | 0--4000 | 1.3e-8 / 1.2e-7 | 0.9 / 2.5 $\mu$s |
 | `default_hom_lambda8000` | 0--8000 | 8.6e-8 / 1.4e-6 | 4.2 / 22 $\mu$s |
 | `default_hom_lambda12000` | 0--12000 | 9.1e-7 / 1.0e-5 | 26 / 108 $\mu$s |
 
@@ -50,7 +50,11 @@ times more accurate. It also costs accuracy where $\Lambda_1$ is large,
 $\Lambda_2$ small and $q \sim 2.5$, a corner the draws sample sparsely, the
 more so the larger the range: `default_hom_lambda8000` and
 `default_hom_lambda12000` regress in $\Lambda_{1,2}$ (the latter 30
-principal components).
+principal components). All of them are least accurate where one tidal
+deformability is small, $\Lambda_1 \lesssim 5$, and the other large, with
+$q < 2$: there the median mismatch is ~2e-7 for `default_hom_lambda2000`
+and a few 1e-6 for `default_hom_lambda4000` and `default_hom_lambda8000`,
+with 5--30% of the draws above 1e-5.
 
 The models are trained from $\Lambda = 1$ and accept tidal
 deformabilities down to 0. Below 1, TEOBResumS used to switch to its

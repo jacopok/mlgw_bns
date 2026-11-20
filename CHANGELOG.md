@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     $\tilde\Lambda$ (below); up to $L = 8000$ on 60 principal components a
     mode, regressed in $\log(1 + \Lambda)$ for $L = 2000$ and 4000 (below).
     On the stored validation sets the full-waveform mismatch medians are
-    7.7e-9, 2.0e-8, 8.6e-8 and 9e-7, and the merger time is within 3, 10, 97
+    7.7e-9, 1.3e-8, 8.6e-8 and 9e-7, and the merger time is within 3, 7, 97
     and 520 $\mu$s of TEOBResumS for 99% of the range (400 uniform draws;
     for kernel ridge in $\Lambda$ on 30 components of the same waveforms,
     43, 68 and 96 $\mu$s up to
@@ -49,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `default_hom_lambda4000` regresses in $\log(1 + \Lambda_{1,2})$**
     instead of $\Lambda_{1,2}$ (`Hyperparameters.input_coordinates =
     "log_lambda"`, `neural_network.regression_inputs`, the batched
-    predictions too), with kernel widths 0.1 and 0.03. The waveform depends
+    predictions too), with kernel width 0.1. The waveform depends
     on $\Lambda$ roughly logarithmically, and a single kernel width in
     linear $\Lambda$ was too wide at small $\Lambda$ and too narrow at
     large: the merger time, linear in the principal components, was then
@@ -64,13 +64,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     kernel and a larger range: on 60 common draws there
     (`visualization/corner_scan.py`), `default_hom_lambda2000` has a
     median of 1.1e-8 (in $\Lambda$ on 30 components: 2.2e-8) and
-    `default_hom_lambda4000` 5.9e-8 (3.7e-8; worst 4.5e-6, none above
+    `default_hom_lambda4000` 5.3e-8 (3.7e-8; worst 7.3e-6, none above
     1e-5). For $L = 8000$ every width tried put 5--30% of those draws
     above 1e-5 (none in $\Lambda$), so `default_hom_lambda8000` regresses
     in $\Lambda$, on 60 components, and `default_hom_lambda12000` in
     $\Lambda$ on 30 (in $\log(1 + \Lambda)$ its merger time was worse,
-    median 75 $\mu$s against 26, for any width tried). The default
-    `Hyperparameters` are unchanged (linear $\Lambda$, 30 components).
+    median 75 $\mu$s against 26, for any width tried). All are least
+    accurate where $\Lambda_1 \lesssim 5$, $0.05 L < \Lambda_2 < 0.5 L$ and
+    $q < 2$, as in $\Lambda$ on 30 components: on 60 draws there the
+    medians are 2.4e-7, 1.8e-6 and 4.9e-6 up to $L = 8000$ (6.0e-7, 1.6e-6
+    and 4.9e-6), with 5, 13 and 32% above 1e-5 (15, 22 and 28%). The
+    default `Hyperparameters` are unchanged (linear $\Lambda$, 30
+    components).
 - **Tidal deformabilities down to 0.** The shipped models accept
     $\Lambda_1, \Lambda_2 \ge 0$ (`Model.default_for_testing` widens their
     `parameter_ranges`; the files keep the trained ones, from 1). Below 1

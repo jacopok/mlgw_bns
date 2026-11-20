@@ -282,8 +282,8 @@ of `slurm/modes/release_lambda<L>.env.example`: kernel ridge on 60
 principal components of $2^{15}$ training waveforms (domain $q \in [1, 3]$,
 $|\chi| < 0.5$, $\Lambda \in [1.001, L]$, drawn in the effective
 parameters, uniform in $\tilde\Lambda$: `SAMPLING="effective"`), in
-$\log(1 + \Lambda)$ with kernel width 0.1 for $L = 2000$ (series
-`log60g01`) and 0.03 for $L = 4000$ (`log60g003`), and in $\Lambda$ with
+$\log(1 + \Lambda)$ with kernel width 0.1 for $L = 2000$ and 4000 (series
+`log60g01`), and in $\Lambda$ with
 each mode's tuned width for $L = 8000$ (`lin60`). They are validated on
 the $2^{14}$ stored validation waveforms and end to end against
 TEOBResumS (`teob`, 1000 waveforms a distribution), and in the corner of
