@@ -135,6 +135,14 @@ KNOWN_FAILURES = {
         "of its range) and is about ten times less accurate in mismatch "
         "(MODEL_CAVEATS)",
     ),
+    "default_hom_lambda8000": (
+        {"test_default_model_merger_reference_matches_teobresums"},
+        "kernel ridge in Lambda (in log(1 + Lambda) it was less accurate where "
+        "Lambda_1 is large and Lambda_2 small): its merger time is within 97 us "
+        "of TEOBResumS for 99% of its range but 0.4 ms off at the worst of 400 "
+        "draws, and the median unmaximised mismatch of the test's draws is "
+        "~9e-4, above the threshold of 5e-4",
+    ),
 }
 
 

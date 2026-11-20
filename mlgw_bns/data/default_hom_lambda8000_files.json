@@ -1,12 +1,12 @@
 {
   "url": "https://github.com/jacopok/mlgw_bns/releases/download/models-v2.1.0/",
   "files": {
-    "default_hom_lambda8000_l2_m1_nn.pkl": "ad6a7eaf9b3547752f2736e9dab8dcefec1cf8f0fc343d8e5f39bfbf149139a0",
-    "default_hom_lambda8000_l2_m2_nn.pkl": "83fd574b6f8f4679e197d08adbbb2888480e78f174d6059a6ba1cc992d57d2ba",
-    "default_hom_lambda8000_l3_m1_nn.pkl": "faca32a1cc1bdbd3e3eb7ba1937766754bb378b2ac8c949a09497dd74e49eac5",
-    "default_hom_lambda8000_l3_m2_nn.pkl": "3b023a174fbad7ef8e076de1499112a067cbac679cdf913b824a49cfe1abdfa7",
-    "default_hom_lambda8000_l3_m3_nn.pkl": "5e06b249292509f9546f7d242a81f25eb53a59fc8b5d567a5cb3a67d5504d8f9",
-    "default_hom_lambda8000_l4_m3_nn.pkl": "48f3e5f9458af4b1101c6ea17cfa1c3d46a289acf21b19b312ced7e5723d46e5",
-    "default_hom_lambda8000_l4_m4_nn.pkl": "349e1add42f38c6a86e1d29bd73c17c9ca477d7376a7d4c414fb6a8942925051"
+    "default_hom_lambda8000_l2_m1_nn.pkl": "07f00d28e14f3e5ed8f0b2a4ebe8346fd4078e019bf7db9af4dbd63ed20631cf",
+    "default_hom_lambda8000_l2_m2_nn.pkl": "4b5c762b0b5a6ae737efbf638eff8e96e6cc5d417558c4aa22bc84faf9759748",
+    "default_hom_lambda8000_l3_m1_nn.pkl": "ba967823be156bc90fb5306c0c7189a11d7c6c41394fd450d766bd22ded39952",
+    "default_hom_lambda8000_l3_m2_nn.pkl": "d8b61d3b4c44ffc9b6fea7b8aca70775dea91d9917b4acdd2dda78c3c62fdf28",
+    "default_hom_lambda8000_l3_m3_nn.pkl": "a4222b151e6318149e9ea6ba079dc7e5617164ac1b3be8b95b57c37c525ed6d8",
+    "default_hom_lambda8000_l4_m3_nn.pkl": "4dbc0af9f3348af04612a3878f09f663d77716c7a08786b5dbb8b2b9c2230a86",
+    "default_hom_lambda8000_l4_m4_nn.pkl": "8445818c0605fb4768696d7658eae39102958cd1e0c82e576eeaa6ac7e909be9"
   }
 }

@@ -5,6 +5,7 @@ import os
 
 import numpy as np
 import pytest
+from threadpoolctl import threadpool_limits
 
 from mlgw_bns.batched import BatchedSurrogate, mode_polarizations
 from mlgw_bns.higher_order_modes import Mode
@@ -21,7 +22,11 @@ FREQUENCIES = np.geomspace(1.5, 3000.0, 240)
 # Relative agreement, per mode, between a single-row batched evaluation and
 # `Model.predict_modes_dict`, which run the regressors with the same
 # operations: what is left is the rounding of phases of up to ~1e6 rad
-# (measured: at most 7e-9).
+# (measured: at most 7e-9). Only with BLAS single-threaded on both sides,
+# as `predict_modes_dict` keeps it: a multithreaded matrix product sums in
+# another order, and the cancelling kernel sum K @ dual_coef, whose terms
+# reach 1e13-1e15 in some modes of default_hom_lambda4000 and 8000, turns
+# that into differences of up to ~4e-6.
 SINGLE_ROW_RTOL = 1e-7
 
 
@@ -65,13 +70,14 @@ def test_single_rows_match_predict_modes_dict(default_model):
     intrinsic, total_mass, distance = random_rows(6, seed=1)
     inclination = np.linspace(0.2, 2.9, len(intrinsic))
     for i in range(len(intrinsic)):
-        amp, phase = default_model.predict_modes_amp_phase(
-            intrinsic[i],
-            total_mass[i],
-            FREQUENCIES,
-            modes=ALL_MODES,
-            distance_mpc=distance[i],
-        )
+        with threadpool_limits(limits=1, user_api="blas"):
+            amp, phase = default_model.predict_modes_amp_phase(
+                intrinsic[i],
+                total_mass[i],
+                FREQUENCIES,
+                modes=ALL_MODES,
+                distance_mpc=distance[i],
+            )
         h_plus, h_cross = mode_polarizations(amp, phase, ALL_MODES, inclination[i])
         expected = default_model.predict_modes_dict(
             FREQUENCIES,
@@ -120,9 +126,10 @@ def test_other_input_coordinates_match_predict_modes_dict(default_model, monkeyp
 def test_polarizations_sum_to_predict(default_model):
     intrinsic, total_mass, distance = random_rows(1, seed=2)
     params = ParametersWithExtrinsic(*intrinsic[0], distance[0], 0.7, total_mass[0])
-    amp, phase = default_model.predict_modes_amp_phase(
-        intrinsic, total_mass, FREQUENCIES, distance_mpc=distance
-    )
+    with threadpool_limits(limits=1, user_api="blas"):  # as predict (SINGLE_ROW_RTOL)
+        amp, phase = default_model.predict_modes_amp_phase(
+            intrinsic, total_mass, FREQUENCIES, distance_mpc=distance
+        )
     h_plus, h_cross = mode_polarizations(amp, phase, default_model.modes, 0.7)
     expected_plus, expected_cross = default_model.predict(FREQUENCIES, params)
     scale = np.max(np.abs(expected_plus))

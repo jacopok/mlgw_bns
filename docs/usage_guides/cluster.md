@@ -278,16 +278,20 @@ python visualization/modes_scale.py summary visualization/modes_scale/run/runs
 
 The models shipped in the package, `default_hom_lambda<L>` for `L` in
 2000, 4000, 8000 and 12000, are trained by this pipeline with the settings
-of `slurm/modes/release_lambda<L>.env.example`: kernel ridge in
-$\log(1 + \Lambda)$ on 60 principal components of $2^{15}$ training
-waveforms (series `log60`; domain $q \in [1, 3]$, $|\chi| < 0.5$,
-$\Lambda \in [1.001, L]$, drawn in the effective parameters with
-$\tilde\Lambda$ half uniform, half log-uniform:
-`SAMPLING="effective_mixed"`), validated on the
-$2^{14}$ stored validation waveforms and end to end against TEOBResumS
-(`teob`, 1000 waveforms a distribution). `default_hom_lambda12000` is
-kernel ridge in $\Lambda$ on 30 principal components (series `krr`) of
-waveforms drawn with `SAMPLING="effective"`.
+of `slurm/modes/release_lambda<L>.env.example`: kernel ridge on 60
+principal components of $2^{15}$ training waveforms (domain $q \in [1, 3]$,
+$|\chi| < 0.5$, $\Lambda \in [1.001, L]$, drawn in the effective
+parameters, uniform in $\tilde\Lambda$: `SAMPLING="effective"`), in
+$\log(1 + \Lambda)$ with kernel width 0.1 for $L = 2000$ (series
+`log60g01`) and 0.03 for $L = 4000$ (`log60g003`), and in $\Lambda$ with
+each mode's tuned width for $L = 8000$ (`lin60`). They are validated on
+the $2^{14}$ stored validation waveforms and end to end against
+TEOBResumS (`teob`, 1000 waveforms a distribution), and in the corner of
+large $\Lambda_1$, small $\Lambda_2$ and $q \sim 2.5$, which the
+training distribution samples sparsely and where regressing in
+$\log(1 + \Lambda)$ costs accuracy, the more so with larger $L$ and
+kernel width (`visualization/corner_scan.py`). `default_hom_lambda12000`
+is kernel ridge in $\Lambda$ on 30 principal components (series `krr`).
 
 On the cluster:
 
@@ -300,8 +304,8 @@ Here, once it is done:
 
 ```bash
 rsync -av --exclude 'shards/' --exclude 'locks/' --exclude '*checkpoint*' --exclude '*.lock' \
-    cluster:$DATA/ visualization/modes_scale/release_lambda2000_effmixed/
-python visualization/modes_scale.py summary visualization/modes_scale/release_lambda2000_effmixed/runs
+    cluster:$DATA/ visualization/modes_scale/release_lambda2000/
+python visualization/modes_scale.py summary visualization/modes_scale/release_lambda2000/runs
 ```
 
 Choose the model from `runs/summary.md` (accuracy, size and evaluation
@@ -316,7 +320,7 @@ user, and memory and evaluation time grow with it. Then ship it, as
 `default_hom_lambda2000`, and publish its regressors where its manifest says:
 
 ```bash
-RUN=visualization/modes_scale/release_lambda2000_effmixed/runs/log60_32768
+RUN=visualization/modes_scale/release_lambda2000/runs/log60g01_32768
 for file in $RUN/model_l*; do cp "$file" "mlgw_bns/data/default_hom_lambda2000_${file##*/model_}"; done
 uv run pytest      # the accuracy thresholds of the tests may need recalibrating
 python -m mlgw_bns.model_files manifest default_hom_lambda2000 \

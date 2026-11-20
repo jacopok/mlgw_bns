@@ -16,56 +16,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`MODELS_AVAILABLE`). `default_hom`, the default, is now another name for
     `default_hom_lambda2000` (`model_files.MODEL_ALIASES`); the 2.0
     `default_hom` (from $\Lambda = 5$) is no longer shipped. Each is kernel
-    ridge on $2^{15}$ waveforms of $\Lambda \in [1, L]$. Up to $L = 8000$ it
-    regresses in $\log(1 + \Lambda)$ 60 principal components a mode (below):
-    the full-waveform mismatch medians are 1.1e-8, 2.4e-8 and 6.3e-8, and
-    the merger time is within 5, 13 and 23 $\mu$s of TEOBResumS for 99% of
-    the range. A prediction takes ~1.5 ms longer than with 30 components
-    (13.5 ms at 1000 frequencies), and the regressors to download are
-    ~115 MB a model. `default_hom_lambda12000` regresses in $\Lambda$ 30
-    principal components of waveforms drawn uniform in $\tilde\Lambda$
-    (mismatch median 9e-7): for it, the changes below made the merger time
-    worse (see its caveat).
+    ridge on $2^{15}$ waveforms of $\Lambda \in [1, L]$ drawn uniform in
+    $\tilde\Lambda$ (below); up to $L = 8000$ on 60 principal components a
+    mode, regressed in $\log(1 + \Lambda)$ for $L = 2000$ and 4000 (below).
+    On the stored validation sets the full-waveform mismatch medians are
+    7.7e-9, 2.0e-8, 8.6e-8 and 9e-7, and the merger time is within 3, 10, 97
+    and 520 $\mu$s of TEOBResumS for 99% of the range (400 uniform draws;
+    for kernel ridge in $\Lambda$ on 30 components of the same waveforms,
+    43, 68 and 96 $\mu$s up to
+    8000). The regressors to download are ~115 MB a model with 60
+    components (~60 MB with 30); a prediction takes as long as with 30,
+    within the noise of the benchmark.
 - The training sets of the shipped models are drawn in the effective
     parameters, as the priors of a parameter estimation are: uniform in the
-    mass ratio and in $\chi_{\rm eff}$, and in $\tilde\Lambda$ uniform for
-    half of the draws and log-uniform for the other half (only uniform for
-    `default_hom_lambda12000`), then uniformly
+    mass ratio, in $\chi_{\rm eff}$ and in $\tilde\Lambda$, then uniformly
     along the segment of constant $\tilde\Lambda$ (or $\chi_{\rm eff}$) in
     the range. A uniform draw of $\Lambda_1$ and $\Lambda_2$ left the corner
     where both are small almost empty, and the merger time was 0.1--0.5 ms
-    off there; a uniform $\tilde\Lambda$ still left little at small
-    $\tilde\Lambda$, where the surrogate's error grows by orders of
-    magnitude, and a log-uniform one too little elsewhere. New:
-    `EffectiveParameterGenerator`, `LogEffectiveParameterGenerator`,
+    off there. New: `EffectiveParameterGenerator`,
+    `LogEffectiveParameterGenerator` (log-uniform in $\tilde\Lambda$),
     `MixedParameterGenerator` (half uniform in $\Lambda_1, \Lambda_2$, half
     log-uniform in $\tilde\Lambda$) and `EffectiveMixedParameterGenerator`
+    (half uniform, half log-uniform in $\tilde\Lambda$)
     (`PARAMETER_GENERATORS`), the `sampling` of `ModesDatasetConfig`,
     `--sampling` and `--lambda-min` of `modes_scale.py init`, and the
     `SAMPLING`, `LAMBDA_MIN` and `CLUSTER_ENV` settings of the SLURM
-    pipeline (presets `slurm/modes/release_lambda<L>.env.example`).
-- **The kernel ridge of the shipped models up to $\Lambda = 8000$
-    regresses in $\log(1 + \Lambda_{1,2})$** instead of $\Lambda_{1,2}$
-    (`Hyperparameters.input_coordinates = "log_lambda"`,
-    `neural_network.regression_inputs`, the batched predictions too). The
-    waveform depends on $\Lambda$ roughly logarithmically, and a single
-    kernel width in linear $\Lambda$ was too wide at small $\Lambda$ and too
-    narrow at large: the merger time, linear in the principal components,
-    was then off by ~20 $\mu$s from the regression error of the first one
-    alone. In $\log(1 + \Lambda)$ (kernel width 0.3) the regression error
-    fell to ~1 $\mu$s, and the 30 principal components became the limit;
-    60 halve that floor (`ShardedModesDataset.train(n_components=)`,
-    `--pca-components` of `modes_scale.py train` and `--components` of
-    `modes_scale.py pca`, `PCA_COMPONENTS` of the SLURM pipeline). Over
-    the same draws, against TEOBResumS, the full-waveform mismatch
-    median of `default_hom_lambda2000` goes from 3.0e-7 to 8.1e-9 (with
-    nothing maximised, from 1.5e-2 to 3.3e-4), and above its range it
-    degrades gently (6.8e-5 at up to twice $\Lambda_{\max}$, against 1.6e-2).
-    Spread over $\Lambda$ up to 12000, the same waveforms no longer
-    sample the large deformabilities densely enough: the merger time of
-    `default_hom_lambda12000` trained so is worse (median 75 $\mu$s against
-    26, for any kernel width tried). The default `Hyperparameters` are
-    unchanged (linear $\Lambda$, 30 components).
+    pipeline (presets `slurm/modes/release_lambda<L>.env.example`). Models
+    trained on the log-uniform half of the mixed draws were less accurate
+    where $\Lambda_1$ is large and $\Lambda_2$ small, which those draws
+    leave sparse.
+- **The kernel ridge of `default_hom_lambda2000` and
+    `default_hom_lambda4000` regresses in $\log(1 + \Lambda_{1,2})$**
+    instead of $\Lambda_{1,2}$ (`Hyperparameters.input_coordinates =
+    "log_lambda"`, `neural_network.regression_inputs`, the batched
+    predictions too), with kernel widths 0.1 and 0.03. The waveform depends
+    on $\Lambda$ roughly logarithmically, and a single kernel width in
+    linear $\Lambda$ was too wide at small $\Lambda$ and too narrow at
+    large: the merger time, linear in the principal components, was then
+    off by tens of $\mu$s from the regression error of the first one alone.
+    In $\log(1 + \Lambda)$ that error falls to a few $\mu$s, and the 30
+    principal components become the limit, hence 60
+    (`ShardedModesDataset.train(n_components=)`, `--pca-components` of
+    `modes_scale.py train` and `--components` of `modes_scale.py pca`,
+    `PCA_COMPONENTS` of the SLURM pipeline). The logarithm costs accuracy
+    where $\Lambda_1$ is large, $\Lambda_2$ small and $q \sim 2.5$, a
+    corner the training draws sample sparsely, the more so with a wider
+    kernel and a larger range: on 60 common draws there
+    (`visualization/corner_scan.py`), `default_hom_lambda2000` has a
+    median of 1.1e-8 (in $\Lambda$ on 30 components: 2.2e-8) and
+    `default_hom_lambda4000` 5.9e-8 (3.7e-8; worst 4.5e-6, none above
+    1e-5). For $L = 8000$ every width tried put 5--30% of those draws
+    above 1e-5 (none in $\Lambda$), so `default_hom_lambda8000` regresses
+    in $\Lambda$, on 60 components, and `default_hom_lambda12000` in
+    $\Lambda$ on 30 (in $\log(1 + \Lambda)$ its merger time was worse,
+    median 75 $\mu$s against 26, for any width tried). The default
+    `Hyperparameters` are unchanged (linear $\Lambda$, 30 components).
 - **Tidal deformabilities down to 0.** The shipped models accept
     $\Lambda_1, \Lambda_2 \ge 0$ (`Model.default_for_testing` widens their
     `parameter_ranges`; the files keep the trained ones, from 1). Below 1
@@ -129,9 +134,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     above about 1 kHz is wrong in parts of the parameter space: against
     TEOBResumS the merger is 0.2--0.5 ms early at $q \approx 2.5$,
     $\Lambda_1 \approx 10$, and off by more than 0.2 ms for about 5% of its
-    range (none of 400 draws for the others). This is a modelling error, not
+    range (1 of 400 draws for `default_hom_lambda8000`, 0.4 ms, none for the
+    others). This is a modelling error, not
     a choice of merger reference. The accuracy tests now run on every
-    shipped model; the ones it fails are strict expected failures
+    shipped model; the ones it fails, and the merger-time test for
+    `default_hom_lambda8000`, are strict expected failures
     (`KNOWN_FAILURES` in `tests/conftest.py`), and a test checks the merger
     time in that corner of the parameter space.
 

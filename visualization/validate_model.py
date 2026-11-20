@@ -1544,10 +1544,12 @@ def teob_precessing_polarizations(
     times its ``initial_frequency``). Sets ``params.reference_phase`` to the
     one that reproduces the run (:meth:`PrecessingModel.teob_reference_phase`).
 
-    Needs the fork of TEOBResumS ``pyproject.toml`` installs: the public one
-    leaves spurious ~2 pi steps in alpha (``unwrap_HM`` in
-    ``prolong_euler_angles_FD``, see ``visualization/teob_alpha_unwrap_bug.md``)
-    that glitch the polarizations around them.
+    Needs the TEOBResumS ``pyproject.toml`` installs, or another with its
+    precession fixes (PR #12): before them, TEOBResumS left spurious ~2 pi
+    steps in alpha (``unwrap_HM`` in ``prolong_euler_angles_FD``, see
+    ``visualization/teob_alpha_unwrap_bug.md``) that glitch the
+    polarizations around them, and started gamma elsewhere than the model
+    does (at the NLO estimate of alpha, not at alpha).
     """
     from mlgw_bns.dataset_generation import eobrun
 
