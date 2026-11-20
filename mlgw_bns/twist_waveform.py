@@ -27,7 +27,7 @@ EOBPars->spin_flx == SPIN_FLX_PN (default) branch:
   - eob_spin_dyn_rhs_PN() in C/src/TEOBResumSDynamics.c  (SPIN_FLX_PN case)
   - eob_spin_dyn()               "                 "     (initial data)
   - eob_spin_dyn_alpha/beta()    "                 "
-  - alpha_initial_condition()    "                 "
+  - alpha_initial_condition()    "                 "     (since 293ed39f)
   - eob_mrg_momg()        in C/src/TEOBResumSFits.c       (stop frequency)
 
 
@@ -203,21 +203,6 @@ def eob_mrg_momg(nu, X1, X2, chi1, chi2, xp=np):
             * (1.0 + ((-0.42311 + b0 * X12) / (1.0 + b1 * X12)) * Shat
                     + (-0.066699) * Shat2)
             / (1.0 + ((-0.83053 + b2 * X12) / (1.0 + b3 * X12)) * Shat))
-
-
-def alpha_initial_condition(q, chi1x, chi1y, chi1z, chi2x, chi2y, chi2z, f0, xp=np):
-    """
-    NLO initial value of the alpha (and, per the C code, gamma) Euler
-    angle. Eq. A5 of arXiv:2111.03675. Mirrors alpha_initial_condition()
-    in C/src/TEOBResumSDynamics.c. Geometric units (G=c=M=1); `f0` is the
-    initial GW (2,2) frequency (so that the initial M*Omega_orb = pi*f0).
-    """
-    v = (np.pi * f0) ** (1.0 / 3.0)
-    alpha_x_NLO = (-3.0 * q * (chi1y + chi2y * q) * (chi1z + chi2z * q) * v
-                   + q * (chi1y * (4.0 + 3.0 * q) + chi2y * q * (3.0 + 4.0 * q)))
-    alpha_y_NLO = (3.0 * q * (chi1x + chi2x * q) * (chi1z + chi2z * q) * v
-                   - q * (chi1x * (4.0 + 3.0 * q) + chi2x * q * (3.0 + 4.0 * q)))
-    return xp.arctan2(alpha_y_NLO, alpha_x_NLO)
 
 
 def tidal_flux_coefficient(nu, lambda_1, lambda_2, xp=np):
@@ -638,8 +623,17 @@ def integrate_pn_spin_precession(nu, chi1vec, chi2vec, f0, t_max=1.0e6, max_step
     SA0 = chi1vec * MA ** 2
     SB0 = chi2vec * MB ** 2
     Lh0 = np.array([0.0, 0.0, 1.0])
-    gamma0 = alpha_initial_condition(q, *chi1vec, *chi2vec, f0)  # == alpha0 in the C code
     Momg0 = math.pi * f0
+    # gamma starts at alpha's initial value: the direction Lhat leaves z in,
+    # that of the torque dLhat/dt (alpha_initial_condition() in
+    # TEOBResumSDynamics.c, since TEOBResumS' 293ed39f; its NLO estimate
+    # before, Eq. A5 of arXiv:2111.03675, can be off by pi, which flips the
+    # sign of every odd-m multipole)
+    d_l = _pn_spin_precession_rhs(
+        nu, q, np.concatenate([SA0, SB0, Lh0, [0.0, Momg0]]),
+        tidal_flux_coefficient(nu, *lambdas),
+    )[6:8]
+    gamma0 = math.atan2(d_l[1], d_l[0])
 
     omg_stop = 1.1 * eob_mrg_momg(nu, MA, MB, chi1vec[2], chi2vec[2])
     max_step = max_step if max_step is not None else np.inf

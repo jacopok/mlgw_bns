@@ -137,6 +137,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The precessing model starts the Euler angle $\gamma$ equal to $\alpha$,
+    the direction of the torque $\dot{\hat{L}}$ at the reference frequency,
+    as TEOBResumS does since its precession fixes (PR #12), instead of the
+    next-to-leading-order estimate of $\alpha$ (eq. A5 of arXiv:2111.03675)
+    it used before. The two can differ by $\pi$, which flips the sign of
+    every odd-$m$ co-precessing multipole: against the TEOBResumS the models
+    are now generated with, the precessing $h_+$ mismatch was 1.2e-4
+    (median of 1000 binaries; 0.18 with nothing optimised), and is back to
+    ~7e-7 (2.7e-3). The NLO estimate (`twist_waveform.alpha_initial_condition`)
+    is removed.
 - A mode generated on its own, such as the (2,2) whose merger reference
     `ValidateModel.merger_reference_errors` compares, used the TEOBResumS
     settings of that mode alone, while the training data and

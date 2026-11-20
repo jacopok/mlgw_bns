@@ -63,10 +63,13 @@ conditions, at $f_{\rm ref}$:
 
 - $\beta = 0$, since $\hat{L}_0 = \hat{z}$;
 - $\alpha$ is undefined there, and is given its limit from above (the
-  direction in which $\hat{L}$ first moves off the $z$ axis);
-- $\gamma$ is the next-to-leading-order estimate of $\alpha$ of
-  [arXiv:2111.03675](https://arxiv.org/abs/2111.03675) (eq. A5), as in
-  TEOBResumS.
+  direction in which $\hat{L}$ first moves off the $z$ axis, that of the
+  torque $\dot{\hat{L}}$);
+- $\gamma$ starts equal to $\alpha$, as in TEOBResumS. (TEOBResumS used the
+  next-to-leading-order estimate of $\alpha$ of
+  [arXiv:2111.03675](https://arxiv.org/abs/2111.03675), eq. A5, for both
+  until its precession fixes of November 2026; that estimate can be off by
+  $\pi$, which flips the sign of every odd-$m$ multipole.)
 
 The integration runs from $f_{\rm ref}$ upwards, to $1.1$ times the merger
 orbital frequency of TEOBResumS' fits, and downwards, as far as the lowest
