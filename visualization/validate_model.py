@@ -2075,7 +2075,16 @@ if __name__ == "__main__":
             "couple of hundred is enough to compare two models' medians"
         ),
     )
+    STEPS = ("residuals", "mismatches", "mismatch_vs_power", "mode_subset", "precessing", "timing")
+    parser.add_argument(
+        "--steps",
+        nargs="+",
+        choices=STEPS,
+        default=list(STEPS),
+        help="validation steps to run (default: all)",
+    )
     args = parser.parse_args()
+    steps = set(args.steps)
 
     if args.n_mismatches is not None:
         N_MISMATCH_WAVEFORMS = args.n_mismatches
@@ -2090,55 +2099,61 @@ if __name__ == "__main__":
 
     model = load_model(args.model)
 
-    print("Computing mlgw-EOB residuals...")
-    plot_residuals(model)
+    if "residuals" in steps:
+        print("Computing mlgw-EOB residuals...")
+        plot_residuals(model)
 
-    print("Computing per-mode mismatches...")
-    mismatches_by_mode = per_mode_mismatches(model)
+    if "mismatches" in steps:
+        print("Computing per-mode mismatches...")
+        mismatches_by_mode = per_mode_mismatches(model)
 
-    print(
-        "Computing full-waveform mismatches and per-mode power shares "
-        f"(frequency grid down to {LOW_FREQUENCY_HZ} Hz, exercising the "
-        "post-Newtonian low-frequency extension)..."
-    )
-    full_mismatches, full_mismatches_no_opt, power_fractions = full_waveform_mismatches(
-        model
-    )
+        print(
+            "Computing full-waveform mismatches and per-mode power shares "
+            f"(frequency grid down to {LOW_FREQUENCY_HZ} Hz, exercising the "
+            "post-Newtonian low-frequency extension)..."
+        )
+        full_mismatches, full_mismatches_no_opt, power_fractions = full_waveform_mismatches(
+            model
+        )
 
-    report_weighted_mismatches(mismatches_by_mode, power_fractions, full_mismatches)
-    np.savez(
-        f"{OUTPUT_PREFIX}_mismatches.npz",
-        full=np.asarray(full_mismatches),
-        full_no_optimisation=np.asarray(full_mismatches_no_opt),
-        **{
-            f"{name} l{mode.l}_m{mode.m}": np.asarray(values)
-            for mode, pair in mismatches_by_mode.items()
-            for name, values in zip(("optimised", "regressed"), pair)
-        },
-    )
-    plot_mismatches(
-        mismatches_by_mode, full_mismatches, full_mismatches_no_opt, power_fractions
-    )
+        report_weighted_mismatches(mismatches_by_mode, power_fractions, full_mismatches)
+        np.savez(
+            f"{OUTPUT_PREFIX}_mismatches.npz",
+            full=np.asarray(full_mismatches),
+            full_no_optimisation=np.asarray(full_mismatches_no_opt),
+            **{
+                f"{name} l{mode.l}_m{mode.m}": np.asarray(values)
+                for mode, pair in mismatches_by_mode.items()
+                for name, values in zip(("optimised", "regressed"), pair)
+            },
+        )
+        plot_mismatches(
+            mismatches_by_mode, full_mismatches, full_mismatches_no_opt, power_fractions
+        )
 
-    print("Computing per-mode mismatch vs. power fraction...")
-    mismatch_vs_power = mismatch_vs_power_by_mode(model)
-    plot_mismatch_vs_power(mismatch_vs_power)
+    if "mismatch_vs_power" in steps:
+        print("Computing per-mode mismatch vs. power fraction...")
+        mismatch_vs_power = mismatch_vs_power_by_mode(model)
+        plot_mismatch_vs_power(mismatch_vs_power)
 
-    print("Computing full-waveform mismatch vs. mode subset...")
-    plot_mode_subset_boxplots(mode_subset_data(model))
+    if "mode_subset" in steps:
+        print("Computing full-waveform mismatch vs. mode subset...")
+        plot_mode_subset_boxplots(mode_subset_data(model))
 
-    print("Computing precessing mismatches against TEOBResumS' precessing h_+, h_x...")
-    precessing_data = precessing_mismatches(model, N_PRECESSING_WAVEFORMS)
-    np.savez(
-        f"{OUTPUT_PREFIX}_precessing_mismatches.npz",
-        **{key: np.asarray(value) for key, value in precessing_data.items() if key != "params"},
-    )
-    plot_precessing_mismatches(precessing_data)
+    if "precessing" in steps:
+        print("Computing precessing mismatches against TEOBResumS' precessing h_+, h_x...")
+        precessing_data = precessing_mismatches(model, N_PRECESSING_WAVEFORMS)
+        np.savez(
+            f"{OUTPUT_PREFIX}_precessing_mismatches.npz",
+            **{key: np.asarray(value) for key, value in precessing_data.items() if key != "params"},
+        )
+        plot_precessing_mismatches(precessing_data)
 
-    print("Benchmarking prediction wall-clock time (numpy vs. JAX)...")
-    timing_data = timing_benchmark(model)
-    timing_data.update(precessing_timing_benchmark(model))
-    plot_timing_benchmark(timing_data)
+    if "timing" in steps:
+        print("Benchmarking prediction wall-clock time (numpy vs. JAX)...")
+        timing_data = timing_benchmark(model)
+        timing_data.update(precessing_timing_benchmark(model))
+        plot_timing_benchmark(timing_data)
 
-    print("Benchmarking prediction wall-clock time with fit lines (full vs. reduced-mode vs. TEOB)...")
-    plot_evaluation_time_fit(os.path.basename(args.model.rstrip("/")) or "default_hom")
+        print("Benchmarking prediction wall-clock time with fit lines (full vs. reduced-mode vs. TEOB)...")
+        plot_evaluation_time_fit(os.path.basename(args.model.rstrip("/")) or "default_hom")
