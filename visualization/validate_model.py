@@ -1553,7 +1553,7 @@ def teob_precessing_polarizations(
     """
     from mlgw_bns.dataset_generation import eobrun
 
-    from mlgw_bns.higher_order_modes import mode_to_k
+    from mlgw_bns.higher_order_modes import mode_to_k, srate_interp_scaling
 
     initial_frequency = params.reference_frequency_hz / 0.95
     largest_l = max(mode.l for mode in model.modes)
@@ -1570,7 +1570,11 @@ def teob_precessing_polarizations(
         use_spins=2,
         domain=1,
         initial_frequency=initial_frequency,
-        srate_interp=4096.0,
+        # as the training data (Dataset.teobresums, teob_independent_modes):
+        # below it the m = 3, 4 mergers sit above TEOBResumS' SPA ceiling,
+        # whose linear phase continuation rings in the band
+        srate_interp=model.dataset.srate_hz * model.dataset.total_mass
+        / params.total_mass * srate_interp_scaling(model.modes),
         # TEOBResumS interpolates onto the requested grid, which must start
         # at its initial frequency; ~0.3 s instead of minutes on a uniform one
         interp_freqs="yes",
