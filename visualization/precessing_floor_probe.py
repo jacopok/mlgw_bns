@@ -15,12 +15,13 @@ optimised mismatch as in precessing_mismatches:
     model vs TEOB at 10 Hz and each of START_FREQUENCIES (training starts its ODE at 1.79 Hz) (spins given at 0.95 times that)
     JAX predictor vs predict_numpy                      (with --numpy; ~20 s each)
 
-  --anchor: aligned and precessing rows also with the orbital-phase anchor optimised
-  --no-constant-phase: with --anchor, also print it without the constant phase
+  --anchor: aligned and precessing rows also with time and reference phase
+    optimised (no constant phase); the other rows optimise time and a constant
+    phase, as validate_model did before
 
   --starts=5,3: TEOBResumS start frequencies besides 10 Hz
 
-Usage: precessing_floor_probe.py MODEL N_SEEDS [--numpy] [--anchor] [--no-constant-phase] [--starts=...]
+Usage: precessing_floor_probe.py MODEL N_SEEDS [--numpy] [--anchor] [--starts=...]
 """
 import dataclasses
 import sys
@@ -64,19 +65,13 @@ def mismatch(a, b):
 
 
 def best_anchor_mismatch(truth, params):
-    """The mismatch with the orbital-phase anchor (reference_phase) also
-    optimised: what is left is the waveform's shape, not the anchor."""
-    value, shift = vm.anchor_optimised_mismatch(
-        validator, grid, lambda p: precessing.predict(grid, p), truth, params, 0
+    """The mismatch with the reference phase optimised, over time and it only
+    (validate_model.reference_phase_optimised_mismatch)."""
+    weight = np.gradient(grid) / validator.psd_at_frequencies(grid)
+    value, shift = vm.reference_phase_optimised_mismatch(
+        grid, weight, lambda p: precessing.predict(grid, p), truth, params, 0
     )
-    print(f"    anchor shift {shift:+.2e} rad", flush=True)
-    if "--no-constant-phase" in sys.argv:
-        value_real, shift_real = vm.anchor_optimised_mismatch(
-            validator, grid, lambda p: precessing.predict(grid, p), truth, params, 0,
-            constant_phase=False,
-        )
-        print(f"    t and reference phase only: {value_real:.2e} "
-              f"(shift {shift_real:+.2e} rad)", flush=True)
+    print(f"    reference phase shift {shift:+.2e} rad", flush=True)
     return value
 
 
