@@ -1608,6 +1608,7 @@ def anchor_optimised_mismatch(
     truth: np.ndarray,
     params: PrecessingParametersWithExtrinsic,
     index: int,
+    constant_phase: bool = True,
 ) -> tuple:
     r"""Mismatch of one polarization (``index`` 0 for :math:`h_+`, 1 for
     :math:`h_\times`) optimised over time, constant phase *and* the orbital
@@ -1624,12 +1625,28 @@ def anchor_optimised_mismatch(
     :math:`e^{i m \phi_c}`).
 
     ``polarizations(params)`` returns the model's ``(h_plus, h_cross)`` on
-    the grid. Returns ``(mismatch, anchor shift)``.
+    the grid. With ``constant_phase=False`` the constant phase is not
+    optimised (the real Wiener product, time-shifted): a constant phase of
+    one polarization is no parameter of a waveform with higher modes or
+    precession, while the reference phase is. Returns ``(mismatch, anchor
+    shift)``.
     """
     from scipy.optimize import minimize_scalar
 
+    weight = np.gradient(grid) / validator.psd_at_frequencies(grid)
+
+    def real_mismatch(a: np.ndarray, b: np.ndarray) -> float:
+        norm = np.sqrt(np.sum(np.abs(a) ** 2 * weight) * np.sum(np.abs(b) ** 2 * weight))
+        cross = np.conj(a) * b * weight
+        return minimize_scalar(
+            lambda t: 1 - np.sum(cross * np.exp(2j * np.pi * grid * t)).real / norm,
+            bounds=(-1e-3, 1e-3), method="bounded", options={"xatol": 1e-12},
+        ).fun
+
     def at(shift: float) -> float:
         shifted = dataclasses.replace(params, reference_phase=params.reference_phase + shift)
+        if not constant_phase:
+            return real_mismatch(truth, polarizations(shifted)[index])
         return validator.mismatch(
             truth, polarizations(shifted)[index], frequencies=grid, max_delta_t=1e-3
         )
@@ -1655,11 +1672,13 @@ def precessing_mismatches(
     weighted by the validator's PSD, in two configurations:
 
     * **optimised**: time shift and constant phase maximised over;
-    * **anchor optimised**: also the orbital phase at the reference
-      frequency (see :func:`anchor_optimised_mismatch`);
+    * **anchor optimised**: time shift and reference phase (the orbital
+      phase at the reference frequency, see
+      :func:`anchor_optimised_mismatch`) maximised over, not the constant
+      phase, as the aligned-spin full-waveform mismatch;
     * **aligned**: the same binary with its in-plane spins zeroed, against
-      TEOBResumS run the same way, anchor optimised: the aligned-spin
-      model on the same grid, polarizations and reference;
+      TEOBResumS run the same way, time and reference phase optimised: the
+      aligned-spin model on the same grid, polarizations and reference;
     * **not optimised**: the real Wiener product as the model returns the
       polarizations, with the orbital phase anchored to TEOBResumS' run
       (:meth:`PrecessingModel.teob_reference_phase`) and nothing else
@@ -1725,12 +1744,14 @@ def precessing_mismatches(
         aligned_teob = teob_precessing_polarizations(model, precessing, aligned, grid)
         for index, name in enumerate(("plus", "cross")):
             mismatch, shift = anchor_optimised_mismatch(
-                validator, grid, polarizations, (hp_teob, hc_teob)[index], params, index
+                validator, grid, polarizations, (hp_teob, hc_teob)[index], params, index,
+                constant_phase=False,
             )
             result[f"{name}_anchor"].append(mismatch)
             result[f"{name}_anchor_shift"].append(shift)
             result[f"aligned_{name}"].append(anchor_optimised_mismatch(
-                validator, grid, polarizations, aligned_teob[index], aligned, index
+                validator, grid, polarizations, aligned_teob[index], aligned, index,
+                constant_phase=False,
             )[0])
         # the direction of L at the integration's nodes
         l_hat = np.asarray(angles(
@@ -2030,24 +2051,26 @@ def plot_precessing_mismatches(data: dict) -> None:
 def plot_precessing_summary(data: dict) -> None:
     r"""One KDE panel of the :math:`h_+` mismatches of
     :func:`precessing_mismatches` on the same binaries: aligned spins
-    (in-plane spins zeroed; time, phase and orbital-phase anchor optimised),
-    precessing optimised over time and phase, and precessing optimised over
-    time, phase and the anchor. Saved as png and pdf."""
+    (in-plane spins zeroed) and precessing optimised over time and reference
+    phase, and precessing optimised over time and constant phase. Saved as
+    png and pdf."""
     curves = (
-        ("aligned_plus", "C2", r"aligned spins; $t$, $\varphi$, $\phi_{\rm ref}$ optimised"),
-        ("plus", "C0", r"precessing; $t$, $\varphi$ optimised"),
-        ("plus_anchor", "C1", r"precessing; $t$, $\varphi$, $\phi_{\rm ref}$ optimised"),
+        ("aligned_plus", "C2", r"aligned spins; $t$, $\phi_{\rm ref}$ optimised"),
+        ("plus", "C0", r"precessing; $t$, constant phase optimised"),
+        ("plus_anchor", "C1", r"precessing; $t$, $\phi_{\rm ref}$ optimised"),
     )
     log_values = {key: np.log10(data[key]) for key, _, _ in curves}
     everything = np.concatenate(list(log_values.values()))
-    grid = np.linspace(everything.min() - 0.5, everything.max() + 0.5, 400)
-    fig, ax = plt.subplots(figsize=(6.5, 4))
+    # whole decades with one to spare on each side, so the tails are in view
+    grid = np.linspace(np.floor(everything.min()) - 1, np.ceil(everything.max()) + 1, 600)
+    fig, ax = plt.subplots(figsize=(7.5, 4))
     for key, color, label in curves:
         ax.plot(
             10**grid, gaussian_kde(log_values[key])(grid), color=color,
             label=f"{label} (median {_sci_latex(np.median(data[key]))})",
         )
     ax.set_xscale("log")
+    ax.set_xlim(10 ** grid[0], 10 ** grid[-1])
     ax.set_xlabel(r"Mismatch of $h_+$")
     ax.set_ylabel(r"Density [per $\log_{10}$ mismatch]")
     ax.grid(True, which="both", lw=0.3)

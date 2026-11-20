@@ -16,8 +16,11 @@ optimised mismatch as in precessing_mismatches:
     JAX predictor vs predict_numpy                      (with --numpy; ~20 s each)
 
   --anchor: aligned and precessing rows also with the orbital-phase anchor optimised
+  --no-constant-phase: with --anchor, also print it without the constant phase
 
-Usage: precessing_floor_probe.py MODEL N_SEEDS [--numpy] [--anchor]
+  --starts=5,3: TEOBResumS start frequencies besides 10 Hz
+
+Usage: precessing_floor_probe.py MODEL N_SEEDS [--numpy] [--anchor] [--no-constant-phase] [--starts=...]
 """
 import dataclasses
 import sys
@@ -33,7 +36,9 @@ from mlgw_bns.precessing_model import PrecessingModel
 name, n_seeds = sys.argv[1], int(sys.argv[2])
 use_numpy = "--numpy" in sys.argv
 #: TEOBResumS ODE starts (Hz) besides validate_model's 10 Hz; spins given at 0.95 times each
-START_FREQUENCIES = (5.0, 4.0, 3.0, 2.4, 1.8)
+START_FREQUENCIES = tuple(float(f) for f in next(
+    (a.split('=')[1].split(',') for a in sys.argv if a.startswith('--starts=')),
+    ['5', '4', '3', '2.4', '1.8']))
 model = Model.default_for_testing(name) if name in MODELS_AVAILABLE else vm.load_model(name)
 precessing = PrecessingModel(model)
 validator = vm.ValidateModel(model.mode_models[Mode(2, 2)])
@@ -65,6 +70,13 @@ def best_anchor_mismatch(truth, params):
         validator, grid, lambda p: precessing.predict(grid, p), truth, params, 0
     )
     print(f"    anchor shift {shift:+.2e} rad", flush=True)
+    if "--no-constant-phase" in sys.argv:
+        value_real, shift_real = vm.anchor_optimised_mismatch(
+            validator, grid, lambda p: precessing.predict(grid, p), truth, params, 0,
+            constant_phase=False,
+        )
+        print(f"    t and reference phase only: {value_real:.2e} "
+              f"(shift {shift_real:+.2e} rad)", flush=True)
     return value
 
 
