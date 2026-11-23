@@ -6,7 +6,7 @@ import numpy as np
 from mlgw_bns import Model
 from mlgw_bns.dataset_generation import eobrun
 from mlgw_bns.batched_precession import batch_arguments
-from mlgw_bns.higher_order_modes import Mode, mode_to_k
+from mlgw_bns.higher_order_modes import Mode, mode_to_k, srate_interp_scaling
 from mlgw_bns.model_validation import ValidateModel
 from mlgw_bns.precessing_model import PrecessingModel, PrecessingParametersWithExtrinsic
 
@@ -43,7 +43,10 @@ f, hp_re, hp_im, hc_re, hc_im, _, hlm, dynamics = eobrun(dict(
     domain=1,
     initial_frequency=initial_frequency,
     df=1 / 2048,
-    srate_interp=4096.0,
+    # as the training data: lower, the m = 3, 4 mergers sit above
+    # TEOBResumS' SPA ceiling, whose linear phase continuation rings in band
+    srate_interp=model.dataset.srate_hz * model.dataset.total_mass
+    / params.total_mass * srate_interp_scaling(model.modes),
     interp_uniform_grid="yes",
     use_geometric_units="no",
     output_hpc="no",

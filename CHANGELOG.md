@@ -156,8 +156,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     it used before. The two can differ by $\pi$, which flips the sign of
     every odd-$m$ co-precessing multipole: against the TEOBResumS the models
     are now generated with, the precessing $h_+$ mismatch was 1.2e-4
-    (median of 1000 binaries; 0.18 with nothing optimised), and is back to
-    ~7e-7 (2.7e-3). The NLO estimate (`twist_waveform.alpha_initial_condition`)
+    (median of 1000 binaries; 0.18 with nothing optimised), and is now
+    1.3e-8, 2.0e-8, 1.0e-7 and 1.5e-6 for `default_hom_lambda{2000,4000,8000,12000}`
+    (2.8e-3 with nothing optimised), the same as with the in-plane spins
+    zeroed: optimised over time and reference phase, from 21 Hz, with
+    TEOBResumS' `srate_interp` as in the training data (at 4096 Hz the
+    $m = 3, 4$ mergers ring in the band). The NLO estimate (`twist_waveform.alpha_initial_condition`)
     is removed.
 - A mode generated on its own, such as the (2,2) whose merger reference
     `ValidateModel.merger_reference_errors` compares, used the TEOBResumS
@@ -181,6 +185,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and slowed the rest of the call down with them. A prediction of the
     shipped model at 4000 frequencies takes ~13 ms instead of ~100; the
     waveforms are bit-for-bit unchanged.
+
+### Known issues
+
+- `default_hom_lambda12000` is poor where the heavier star is the more
+    deformable one at the edge of its box: $q \approx 3$,
+    $\Lambda_1 \gtrsim 10^4$, $\chi_{1z} \approx -0.45$, the binaries that
+    merge earliest (~500 Hz). There its merger is 1--10 ms late and the
+    mismatch, with time and reference phase optimised, is up to ~2e-3
+    (6 of 1000 validation binaries above 1e-3). Every training recipe tried
+    fails on the same binaries.
 
 ### Documentation
 
