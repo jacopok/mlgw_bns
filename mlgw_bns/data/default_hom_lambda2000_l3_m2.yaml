@@ -1,0 +1,26 @@
+extend_with_post_newtonian: true
+extend_with_zeros_at_high_frequency: true
+initial_frequency_hz: 3.5714285714285716
+multibanding: true
+nn_kind: KernelRidgeNetwork
+parameter_ranges:
+  chi1_range: !!python/tuple
+  - -0.5
+  - 0.5
+  chi2_range: !!python/tuple
+  - -0.5
+  - 0.5
+  lambda1_range: !!python/tuple
+  - 1.001
+  - 2000.0
+  lambda2_range: !!python/tuple
+  - 1.001
+  - 2000.0
+  q_range: !!python/tuple
+  - 1.0
+  - 3.0
+pca_components_number: 60
+power_weight_exponent: 1.0
+power_weighting: true
+reference_amplitude: true
+srate_hz: 5851.428571428572

@@ -66,6 +66,7 @@ from .data_management import (
 from .dataset_generation import (
     BarePostNewtonianGenerator,
     Dataset,
+    migrate_mass_range,
     ParameterGenerator,
     ParameterSet,
     UniformParameterGenerator,
@@ -211,15 +212,13 @@ class ParametersWithExtrinsic:
     def mass_sum_seconds(self) -> float:
         return self.total_mass * SUN_MASS_SECONDS
 
-    def teobresums_dict(
-        self, dataset: Dataset, use_effective_frequencies: bool = True
-    ) -> dict[str, Union[float, int, str]]:
+    def teobresums_dict(self, dataset: Dataset) -> dict[str, Union[float, int, str]]:
         """Parameter dictionary in a format compatible with
         TEOBResumS.
 
         The parameters are all converted to natural units.
         """
-        base_dict = self.intrinsic(dataset).teobresums(use_effective_frequencies)
+        base_dict = self.intrinsic(dataset).teobresums()
 
         return {
             **base_dict,
@@ -319,11 +318,16 @@ class ModeModel:
     filename : str
             Name for the model. Saved data will be saved under this name.
     initial_frequency_hz : float, optional
-            Initial frequency for the waveforms.
+            Initial frequency for the waveforms, in Hz at the reference
+            mass :attr:`Dataset.total_mass <mlgw_bns.dataset_generation.Dataset.total_mass>`
+            (2.8 solar masses); it scales as :math:`1/M` with the total mass.
+            Lower frequencies are reached through the post-Newtonian
+            extension.
     srate_hz : float, optional
             Time-domain signal rate for the waveforms,
             which is twice the maximum frequency of
-            their frequency-domain version.
+            their frequency-domain version; at the reference mass,
+            like ``initial_frequency_hz``.
     pca_components_number : int, optional
             Number of PCA components to use when reducing
             the dimensionality of the dataset.
@@ -587,10 +591,12 @@ class ModeModel:
         and free of Python references. A file written before ``nn_kind``
         was recorded simply does not carry the key, which leaves the
         constructor default in place --- and that default is the network,
-        which is what those models were trained with.
+        which is what those models were trained with. A file written
+        before 2.1, with a total-mass range, is converted by
+        :func:`~mlgw_bns.dataset_generation.migrate_mass_range`.
         """
 
-        for key, value in meta_dict.items():
+        for key, value in migrate_mass_range(meta_dict).items():
             if key == 'parameter_ranges':
                 value = from_dict(data_class=ParameterRanges, data=value)
             elif key == 'nn_kind':
@@ -1284,7 +1290,7 @@ class ModeModel:
         ratio = params.total_mass / self.dataset.total_mass
         rescaled_all = frequencies * ratio
         rescaled_frequencies = rescaled_all
-        eff_fmin_hz = self.dataset.effective_initial_frequency_hz
+        eff_fmin_hz = self.dataset.initial_frequency_hz
 
         # ----------------------------
         # Low-frequency extension

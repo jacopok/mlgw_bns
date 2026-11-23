@@ -3,6 +3,7 @@ which all other testing files can then use."""
 
 import glob
 import os
+import warnings
 
 import h5py
 import numpy as np
@@ -10,7 +11,7 @@ import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 
 from mlgw_bns import Model, ModeModel, ParametersWithExtrinsic
-from mlgw_bns.data_management import ParameterRanges
+from mlgw_bns.model import MODELS_AVAILABLE, ModelAccuracyWarning
 from mlgw_bns.dataset_generation import Dataset, TEOBResumSGenerator, WaveformParameters
 from mlgw_bns.downsampling_interpolation import GreedyDownsamplingTraining
 from mlgw_bns.higher_order_modes import Mode
@@ -24,7 +25,6 @@ def fixture_variable_dataset(request):
         srate_hz=4096.0,
         waveform_generator=TEOBResumSGenerator(EOBRunPy),
         multibanding=True,
-        parameter_ranges=ParameterRanges(mass_range=(2.8, 2.8)),
     )
 
 
@@ -35,7 +35,6 @@ def fixture_dataset():
         initial_frequency_hz=20.0,
         srate_hz=4096.0,
         waveform_generator=TEOBResumSGenerator(EOBRunPy),
-        parameter_ranges=ParameterRanges(mass_range=(2.8, 2.8)),
     )
 
 
@@ -109,10 +108,52 @@ def trained_mode_model(generated_mode_model):
     yield generated_mode_model
 
 
-@pytest.fixture(scope="session")
-def default_model():
-    """The pretrained multi-mode model shipped with the package."""
-    yield Model.default_for_testing()
+@pytest.fixture(scope="session", params=MODELS_AVAILABLE)
+def default_model(request):
+    """Each pretrained multi-mode model shipped with the package."""
+    with warnings.catch_warnings():
+        # its known caveat, tested in test_model.py
+        warnings.simplefilter("ignore", ModelAccuracyWarning)
+        model = Model.default_for_testing(request.param)
+    yield model
+
+
+#: Tests of ``default_model`` that a shipped model is known to fail, with
+#: why. Strict: a model that starts passing one (after a retrain) fails the
+#: suite until it is taken off this list.
+KNOWN_FAILURES = {
+    "default_hom_lambda12000": (
+        {
+            "test_default_model_merger_reference_matches_teobresums",
+            "test_merger_reference_matches_teobresums_at_low_lambda_1",
+            "test_full_waveform_mismatch_is_flat_in_total_mass",
+            "test_matches_teobresums",
+        },
+        "trained on Lambda up to 12000 with as many waveforms as the others, "
+        "it is not accurate enough in the late inspiral to predict the merger "
+        "(0.2-0.5 ms early at small lambda_1 and large q, above 0.2 ms for 5% "
+        "of its range) and is about ten times less accurate in mismatch "
+        "(MODEL_CAVEATS)",
+    ),
+    "default_hom_lambda8000": (
+        {"test_default_model_merger_reference_matches_teobresums"},
+        "kernel ridge in Lambda (in log(1 + Lambda) it was less accurate where "
+        "Lambda_1 is large and Lambda_2 small): its merger time is within 97 us "
+        "of TEOBResumS for 99% of its range but 0.4 ms off at the worst of 400 "
+        "draws, and the median unmaximised mismatch of the test's draws is "
+        "~9e-4, above the threshold of 5e-4",
+    ),
+}
+
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        callspec = getattr(item, "callspec", None)
+        model_name = callspec.params.get("default_model") if callspec else None
+        if model_name in KNOWN_FAILURES:
+            tests, reason = KNOWN_FAILURES[model_name]
+            if item.originalname in tests:
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
 
 
 @pytest.fixture(scope="session")

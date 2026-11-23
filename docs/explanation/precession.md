@@ -63,10 +63,13 @@ conditions, at $f_{\rm ref}$:
 
 - $\beta = 0$, since $\hat{L}_0 = \hat{z}$;
 - $\alpha$ is undefined there, and is given its limit from above (the
-  direction in which $\hat{L}$ first moves off the $z$ axis);
-- $\gamma$ is the next-to-leading-order estimate of $\alpha$ of
-  [arXiv:2111.03675](https://arxiv.org/abs/2111.03675) (eq. A5), as in
-  TEOBResumS.
+  direction in which $\hat{L}$ first moves off the $z$ axis, that of the
+  torque $\dot{\hat{L}}$);
+- $\gamma$ starts equal to $\alpha$, as in TEOBResumS. (TEOBResumS used the
+  next-to-leading-order estimate of $\alpha$ of
+  [arXiv:2111.03675](https://arxiv.org/abs/2111.03675), eq. A5, for both
+  until its precession fixes of November 2026; that estimate can be off by
+  $\pi$, which flips the sign of every odd-$m$ multipole.)
 
 The integration runs from $f_{\rm ref}$ upwards, to $1.1$ times the merger
 orbital frequency of TEOBResumS' fits, and downwards, as far as the lowest
@@ -211,10 +214,13 @@ comparison can start at 20 Hz.
 :language: python
 ```
 
-This prints mismatches of $1.4 \times 10^{-8}$ for $h_+$ and
-$1.0 \times 10^{-8}$ for $h_\times$, with the Einstein Telescope noise curve,
-optimised over a time shift and a constant phase. Leaving `reference_phase`
-at zero instead gives $6 \times 10^{-4}$.
+This prints mismatches of $2.7 \times 10^{-8}$ for $h_+$ and
+$2.0 \times 10^{-8}$ for $h_\times$, with the Einstein Telescope noise curve,
+optimised over a time shift and a constant phase. The `reference_phase` this
+TEOBResumS needs is small, $4 \times 10^{-3}$ rad here and about that on every
+binary tried, so leaving it at zero changes little ($3.8 \times 10^{-8}$); the
+versions before its precession fixes started the orbital phase elsewhere, and
+there it mattered.
 
 Both optimisations are needed, and neither comes from precession: they are
 the same with the in-plane spins set to zero, and with TEOBResumS' own
@@ -225,4 +231,5 @@ co-precessing multipoles in place of the surrogate's.
   waveforms to.
 - The constant phase is a few $10^{-3}$ rad. It is the difference between the
   $(2, 2)$ phases at the reference frequency, at the very start of
-  TEOBResumS' integration. Optimising only the time shift leaves $10^{-5}$.
+  TEOBResumS' integration. Optimising only the time shift leaves
+  $1.5 \times 10^{-5}$.

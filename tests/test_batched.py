@@ -1,9 +1,11 @@
 """Tests for the batched, per-mode evaluation (:mod:`mlgw_bns.batched`)."""
 
 import dataclasses
+import os
 
 import numpy as np
 import pytest
+from threadpoolctl import threadpool_limits
 
 from mlgw_bns.batched import BatchedSurrogate, mode_polarizations
 from mlgw_bns.higher_order_modes import Mode
@@ -20,7 +22,11 @@ FREQUENCIES = np.geomspace(1.5, 3000.0, 240)
 # Relative agreement, per mode, between a single-row batched evaluation and
 # `Model.predict_modes_dict`, which run the regressors with the same
 # operations: what is left is the rounding of phases of up to ~1e6 rad
-# (measured: at most 7e-9).
+# (measured: at most 7e-9). Only with BLAS single-threaded on both sides,
+# as `predict_modes_dict` keeps it: a multithreaded matrix product sums in
+# another order, and the cancelling kernel sum K @ dual_coef, whose terms
+# reach 1e13-1e15 in some modes of default_hom_lambda4000 and 8000, turns
+# that into differences of up to ~4e-6.
 SINGLE_ROW_RTOL = 1e-7
 
 
@@ -64,13 +70,14 @@ def test_single_rows_match_predict_modes_dict(default_model):
     intrinsic, total_mass, distance = random_rows(6, seed=1)
     inclination = np.linspace(0.2, 2.9, len(intrinsic))
     for i in range(len(intrinsic)):
-        amp, phase = default_model.predict_modes_amp_phase(
-            intrinsic[i],
-            total_mass[i],
-            FREQUENCIES,
-            modes=ALL_MODES,
-            distance_mpc=distance[i],
-        )
+        with threadpool_limits(limits=1, user_api="blas"):
+            amp, phase = default_model.predict_modes_amp_phase(
+                intrinsic[i],
+                total_mass[i],
+                FREQUENCIES,
+                modes=ALL_MODES,
+                distance_mpc=distance[i],
+            )
         h_plus, h_cross = mode_polarizations(amp, phase, ALL_MODES, inclination[i])
         expected = default_model.predict_modes_dict(
             FREQUENCIES,
@@ -86,12 +93,43 @@ def test_single_rows_match_predict_modes_dict(default_model):
             )
 
 
+def test_other_input_coordinates_match_predict_modes_dict(default_model, monkeypatch):
+    """A model whose kernel ridge regresses in either input coordinates
+    predicts the same in a batch as row by row. The shipped regressors are
+    set to the coordinates they were not trained in (linear Lambda for the
+    shipped log(1 + Lambda)): wrong for them, so their kernel sums, far from
+    their training points, cancel worse and round to ~1e-6 rather than 1e-7;
+    but they change the prediction by far more than that, on both paths."""
+    intrinsic, total_mass, distance = random_rows(2, seed=11)
+
+    def params(i):
+        return ParametersWithExtrinsic(*intrinsic[i], distance[i], 0.7, total_mass[i])
+
+    trained = [default_model.predict_modes_dict(FREQUENCIES, params(i)) for i in range(len(intrinsic))]
+    for mode_model in default_model.mode_models.values():
+        other = "linear" if mode_model.nn.input_coordinates == "log_lambda" else "log_lambda"
+        monkeypatch.setattr(mode_model.nn.hyper, "input_coordinates", other, raising=False)
+    surrogate = BatchedSurrogate(default_model, ALL_MODES)
+    for i in range(len(intrinsic)):
+        amp, phase = surrogate(intrinsic[i : i + 1], total_mass[i], FREQUENCIES, distance[i])
+        h_plus, h_cross = mode_polarizations(amp, phase, ALL_MODES, 0.7)
+        expected = default_model.predict_modes_dict(FREQUENCIES, params(i))
+        for j, mode in enumerate(ALL_MODES):
+            scale = np.max(np.abs(expected[mode]))
+            assert np.max(np.abs(expected[mode] - trained[i][mode])) / scale > 1e-2
+            np.testing.assert_allclose(
+                (h_plus[0, j] + 1j * h_cross[0, j]) / scale, expected[mode] / scale,
+                rtol=0, atol=1e-5,
+            )
+
+
 def test_polarizations_sum_to_predict(default_model):
     intrinsic, total_mass, distance = random_rows(1, seed=2)
     params = ParametersWithExtrinsic(*intrinsic[0], distance[0], 0.7, total_mass[0])
-    amp, phase = default_model.predict_modes_amp_phase(
-        intrinsic, total_mass, FREQUENCIES, distance_mpc=distance
-    )
+    with threadpool_limits(limits=1, user_api="blas"):  # as predict (SINGLE_ROW_RTOL)
+        amp, phase = default_model.predict_modes_amp_phase(
+            intrinsic, total_mass, FREQUENCIES, distance_mpc=distance
+        )
     h_plus, h_cross = mode_polarizations(amp, phase, default_model.modes, 0.7)
     expected_plus, expected_cross = default_model.predict(FREQUENCIES, params)
     scale = np.max(np.abs(expected_plus))
@@ -129,7 +167,11 @@ def test_batch_matches_single_rows_given_the_regressors(default_model):
             return_tf=True,
         )
         np.testing.assert_allclose(amp[i], row[0][0], rtol=1e-12, atol=0)
-        np.testing.assert_allclose(phase[i], row[1][0], rtol=1e-12, atol=1e-9)
+        # the phases reach ~1e6 rad: float64 rounding of those leaves ~1e-9
+        # rad where the phase crosses zero
+        np.testing.assert_allclose(
+            phase[i], row[1][0], rtol=1e-12, atol=1e-14 * np.abs(row[1][0]).max()
+        )
         np.testing.assert_allclose(tf[i], row[2][0], rtol=1e-9, atol=1e-9)
 
 
@@ -214,15 +256,34 @@ def test_frequency_regions(default_model):
 def test_out_of_range_rows_are_nan(default_model):
     intrinsic, total_mass, _ = random_rows(4, seed=8)
     intrinsic[1, 0] = 3.5  # q
-    total_mass[2] = 5.0
-    intrinsic[3, 1] = 1.0  # lambda_1 below the model's range
+    total_mass[2] = 50.0  # any total mass is in range
+    intrinsic[3, 1] = -1.0  # lambda_1 below the model's range (which starts at 0)
     surrogate = default_model.batched_surrogate(FOUR_MODES)
     np.testing.assert_array_equal(
-        surrogate.valid(intrinsic, total_mass), [True, False, False, False]
+        surrogate.valid(intrinsic, total_mass), [True, False, True, False]
     )
     amp, phase = surrogate(intrinsic, total_mass, FREQUENCIES)
-    assert np.all(np.isfinite(amp[0])) and np.all(np.isfinite(phase[0]))
-    assert np.all(np.isnan(amp[1:])) and np.all(np.isnan(phase[1:]))
+    for row in (0, 2):
+        assert np.all(np.isfinite(amp[row])) and np.all(np.isfinite(phase[row]))
+    for row in (1, 3):
+        assert np.all(np.isnan(amp[row])) and np.all(np.isnan(phase[row]))
+
+
+@pytest.mark.parametrize("total_mass", [1.0, 6.0, 20.0])
+def test_total_mass_is_an_exact_rescaling(default_model, total_mass):
+    """h(f; M) = (M / M0)^2 h(f M / M0; M0), for every mode, far outside
+    the 2-4 Msun the models used to accept: the surrogate is a function
+    of M f."""
+    intrinsic, _, _ = random_rows(2, seed=4)
+    reference = 2.8
+    frequencies = np.geomspace(20.0, 1000.0, 60) * reference / total_mass
+    surrogate = default_model.batched_surrogate(FOUR_MODES)
+    amp, phase = surrogate(intrinsic, total_mass, frequencies)
+    amp0, phase0 = surrogate(intrinsic, reference, frequencies * total_mass / reference)
+    np.testing.assert_allclose(amp, (total_mass / reference) ** 2 * amp0, rtol=1e-9, atol=0)
+    # the merger time, in seconds, scales with the mass too: compare up to
+    # the -2 pi f t_c the alignment puts on the phases, which vanishes here
+    np.testing.assert_allclose(phase, phase0, rtol=0, atol=1e-6)
 
 
 def test_parameter_ranges_setter_applies_to_every_mode():
@@ -293,7 +354,10 @@ def test_merger_is_at_zero_time_and_phase(default_model):
 def test_mode_subset_model(default_model):
     """A model loaded with a subset of the trained modes predicts them as
     the full one does."""
-    subset = Model.default_for_testing(modes=[Mode(*mode) for mode in FOUR_MODES])
+    subset = Model.default_for_testing(
+        os.path.basename(default_model.base_filename),
+        modes=[Mode(*mode) for mode in FOUR_MODES],
+    )
     params = ParametersWithExtrinsic(1.4, 300.0, 700.0, 0.1, -0.1, 100.0, 0.8, 2.8)
     expected = default_model.predict_modes_dict(FREQUENCIES, params)
     got = subset.predict_modes_dict(FREQUENCIES, params)

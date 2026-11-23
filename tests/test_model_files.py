@@ -6,12 +6,14 @@ import shutil
 import pytest
 
 from mlgw_bns import model_files
+from mlgw_bns.model import MODELS_AVAILABLE
 
 
-def test_manifest_matches_the_packaged_files():
+@pytest.mark.parametrize("model_name", MODELS_AVAILABLE)
+def test_manifest_matches_the_packaged_files(model_name):
     """After a retrain, the manifest must be written again (and the files
     published): a stale one would download other regressors."""
-    manifest = model_files.read_manifest("default_hom")
+    manifest = model_files.read_manifest(model_name)
     for name, expected in manifest["files"].items():
         path = model_files._data() / name
         if model_files._is_packaged(path):
@@ -31,7 +33,8 @@ def unpackaged(tmp_path, monkeypatch):
     # the packaged file, or the one downloaded in its place of an LFS pointer
     shutil.copy(model_files.model_file("default_hom", name), published / name)
     files = {name: manifest["files"][name]}
-    (data / "default_hom_files.json").write_text(
+    # "default_hom" is an alias: its manifest is that of the model it names
+    (data / f"{model_files.canonical_name('default_hom')}_files.json").write_text(
         json.dumps({"url": published.as_uri() + "/", "files": files})
     )
     monkeypatch.setattr(model_files, "_data", lambda: data)

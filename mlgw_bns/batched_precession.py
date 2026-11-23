@@ -61,7 +61,6 @@ from .precessing_model import (
 from .taylorf2 import SUN_MASS_SECONDS
 from .twist_waveform import (
     _pn_precession_derivatives,
-    alpha_initial_condition,
     eob_mrg_momg,
     nu_to_X1,
     tidal_flux_coefficient,
@@ -225,29 +224,26 @@ def _reference_state(binary: _Binary, chi_1, chi_2, reference_frequency_22):
     r"""The state ``y`` at the reference point, where :math:`\hat{L} = \hat{z}`,
     and :math:`\alpha` there.
 
-    :math:`\gamma` starts at TEOBResumS' NLO initial condition
-    (:func:`~mlgw_bns.twist_waveform.alpha_initial_condition`), :math:`\alpha`
-    at the direction :math:`\hat{L}` leaves :math:`\hat{z}` in, the limit
-    from above (as the numpy path, which takes the next sample's).
+    :math:`\alpha` starts at the direction :math:`\hat{L}` leaves
+    :math:`\hat{z}` in, that of the torque :math:`\dot{\hat{L}}` (the limit
+    from above, as the numpy path, which takes the next sample's), and
+    :math:`\gamma` with it, as TEOBResumS does since its 293ed39f: the
+    stored :math:`\alpha - \gamma` starts at 0.
     """
     _, jnp = _jnp()
     mass_a = nu_to_X1(binary.nu, jnp)
     mass_b = 1.0 - mass_a
-    gamma_0 = alpha_initial_condition(
-        mass_a / mass_b, *(chi_1[i] for i in range(3)), *(chi_2[i] for i in range(3)),
-        reference_frequency_22, xp=jnp,
-    )
     y0 = jnp.concatenate([
         chi_1 * mass_a**2,
         chi_2 * mass_b**2,
-        jnp.array([0.0, 0.0, 1.0]),
-        jnp.stack([0.0 * gamma_0, np.pi * reference_frequency_22]),
+        jnp.array([0.0, 0.0, 1.0, 0.0]),
+        jnp.atleast_1d(np.pi * reference_frequency_22),
     ])
     d_l = _rhs(jnp, binary, y0)[6:8]
     alpha_reference = jnp.where(
         jnp.hypot(*d_l) > 0, jnp.arctan2(d_l[1], d_l[0]), 0.0
     )
-    return y0.at[9].set(alpha_reference - gamma_0), alpha_reference
+    return y0, alpha_reference
 
 
 def integrate_angles(

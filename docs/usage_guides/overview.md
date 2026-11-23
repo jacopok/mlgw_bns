@@ -15,19 +15,81 @@ $(2,2)$, $(2,1)$, $(3,1)$, $(3,2)$, $(3,3)$, $(4,3)$ and $(4,4)$
 (shipped_models)=
 ## The shipped models
 
-Two pretrained models come with the package, listed in
-`mlgw_bns.model.MODELS_AVAILABLE`; they differ only in the range of the
-tidal polarizabilities they are trained on (see
-[below](model_parameter_ranges) for the full ranges):
+Four pretrained models come with the package, listed in
+`mlgw_bns.model.MODELS_AVAILABLE` and named by the largest tidal
+polarizability they are trained on; they differ only in that (see
+[below](model_parameter_ranges) for the full ranges). `default_hom`, the
+default, is another name for `default_hom_lambda2000`
+(`mlgw_bns.model_files.MODEL_ALIASES`).
 
 | name | `lambda_1`, `lambda_2` | full-waveform mismatch, median / 90% | merger time error, median / 90% |
 |---|---|---|---|
-| `default_hom` (the default) | 5--2000 | 2.5e-8 / 4.6e-7 | 1.4 / 8.7 $\mu$s |
-| `default_hom_lambda12000` | 5--12000 | 9.1e-7 / 9.8e-6 | 36 / 132 $\mu$s |
+| `default_hom_lambda2000` (`default_hom`) | 0--2000 | 7.7e-9 / 1.2e-7 | 0.6 / 1.7 $\mu$s |
+| `default_hom_lambda4000` | 0--4000 | 1.3e-8 / 1.2e-7 | 0.9 / 2.5 $\mu$s |
+| `default_hom_lambda8000` | 0--8000 | 8.6e-8 / 1.4e-6 | 4.2 / 22 $\mu$s |
+| `default_hom_lambda12000` | 0--12000 | 9.1e-7 / 1.0e-5 | 26 / 108 $\mu$s |
 
-Both are trained on the same number of waveforms, so the narrower range is
-sampled more densely, and is more accurate; use `default_hom_lambda12000`
-only if tidal polarizabilities above 2000 are needed.
+The mismatches are over 16384 TEOBResumS waveforms drawn as the training
+set is (below), the merger-time errors over 400 uniform draws of each
+model's range (`visualization/merger_time_release.py`). All are trained on
+the same number of waveforms, $2^{15}$, so a narrower range is sampled more
+densely and is more accurate: use the smallest one that covers the tidal
+polarizabilities needed.
+
+The training waveforms are drawn uniformly in the mass ratio, in the
+effective spin $\chi_{\rm eff}$ and in the effective tidal deformability
+$\tilde\Lambda$, then uniformly along the segment of constant
+$\tilde\Lambda$ (or $\chi_{\rm eff}$) inside the range
+(`mlgw_bns.dataset_generation.EffectiveParameterGenerator`). This fills
+the corners of the range, such as both tidal deformabilities small, better
+than a uniform draw of each. The kernel ridge regressors predict 60
+principal components of each mode, and those of `default_hom_lambda2000`
+and `default_hom_lambda4000` take $\log(1 + \Lambda_{1,2})$ as inputs
+(`Hyperparameters.input_coordinates`): it makes their merger time several
+times more accurate. It also costs accuracy where $\Lambda_1$ is large,
+$\Lambda_2$ small and $q \sim 2.5$, a corner the draws sample sparsely, the
+more so the larger the range: `default_hom_lambda8000` and
+`default_hom_lambda12000` regress in $\Lambda_{1,2}$ (the latter 30
+principal components). All of them are least accurate where one tidal
+deformability is small, $\Lambda_1 \lesssim 5$, and the other large, with
+$q < 2$: there the median mismatch is ~2e-7 for `default_hom_lambda2000`
+and a few 1e-6 for `default_hom_lambda4000` and `default_hom_lambda8000`,
+with 5--30% of the draws above 1e-5.
+
+The models are trained from $\Lambda = 1$ and accept tidal
+deformabilities down to 0. Below 1, TEOBResumS used to switch to its
+black-hole settings (no tides, a ringdown): the version they are trained
+with keeps its neutron-star settings for any $\Lambda > 0$, continuing its
+quasi-universal relations (such as the spin-induced quadrupole) smoothly to
+their black-hole values, and the models follow it there with the accuracy
+they have at $\Lambda = 1$. At exactly $\Lambda_1 = \Lambda_2 = 0$ TEOBResumS
+still gives its black-hole waveform, which differs from this limit by a
+mismatch of about $10^{-4}$ (more with spins).
+
+```{warning}
+`default_hom_lambda12000` is not accurate enough in the late inspiral to
+predict the merger reliably, and loading it raises a
+`mlgw_bns.model.ModelAccuracyWarning`. Spread over tidal deformabilities up
+to 12000, its training waveforms sample the parameter space too sparsely
+for the last few milliseconds before merger: its time to merger above
+about 1 kHz is wrong in parts of the space, worst at small tidal
+deformabilities, large mass ratios and at the $\Lambda_1 \approx 12000$,
+$q \approx 3$ edge. Compared with TEOBResumS, the merger comes 0.2--0.5 ms
+early at $q \approx 2.5$, $\Lambda_1 \approx 10$, $\Lambda_2 \approx 1500$
+(where a GW170817 posterior has a secondary mode), and more than 0.2 ms
+early or late for about 5% of uniform draws over its range, against 1 of
+400 (0.4 ms) for `default_hom_lambda8000`.
+
+This is a modelling error, not a difference of convention. The merger
+reference itself, the tangent to the $(2,2)$ phase at the top of the band,
+is arbitrary: any consistent choice would do, and the models make the
+same one. What is wrong is the phase of the surrogate between about 1 and
+2 kHz. Below 1 kHz it shows as a constant shift of the merger time, which
+a sampled or marginalised coalescence time absorbs; but the merger time,
+and anything measured from the last milliseconds before merger, are not
+reliable. The tests that fail on it are marked as expected failures in
+`tests/conftest.py` (`KNOWN_FAILURES`).
+```
 
 The fastest way to access a functional instance of a `Model` is to load
 one of them:
@@ -214,44 +276,49 @@ the band), which is the right one only for the $(2,2)$.
 (model_parameter_ranges)=
 ## The parameter ranges
 
-These may change as the package is updated. For the default pretrained
-model shipped with the package, `default_hom`, the current ranges are
+These may change as the package is updated. For the pretrained models
+shipped with the package, `default_hom_lambda<L>`, the current ranges are
 
-- `total_mass`: between 2 and 4 solar masses
 - `mass_ratio`: between 1 and 3
-- `lambda_1` (tidal polarizability of the larger star): between 5 and 2000
-- `lambda_2`: between 5 and 2000
+- `lambda_1` (tidal polarizability of the larger star): between 0 and `L`
+  (trained from 1, see [above](shipped_models))
+- `lambda_2`: between 0 and `L`
 - `chi_1` (aligned spin of the larger star): between -0.5 and 0.5
 - `chi_2`: between -0.5 and 0.5
-- frequencies: between 5 and 2048 Hz
+- frequencies: see below
 
-The other one, `default_hom_lambda12000`, has the same ranges except for
-`lambda_1` and `lambda_2`, between 5 and 12000.
+Any `total_mass` is accepted. The model is a function of the
+mass-rescaled frequency $Mf$, so changing the total mass rescales the
+waveform exactly, $\tilde h(f; M) = (M/M_0)^2 \, \tilde h(f M / M_0; M_0)$:
+what is fixed is the trained band, which in $Mf$ runs from about
+$4.9 \times 10^{-5}$ to $0.040$. For a binary of $M$ solar masses this is
+from $10\,\mathrm{Hz} \times M_\odot / M$ to
+$8192\,\mathrm{Hz} \times M_\odot / M$: 5 to 2048 Hz or wider between 2
+and 4 solar masses, 1.7 to 1365 Hz at 6. Below the band the waveform is
+continued with its post-Newtonian expression; above it, after the merger,
+it is zero.
 
 A freshly-created `Model` uses `lambda_1` and `lambda_2` between 5 and
 5000 instead, and otherwise the same ranges; they are set by
 {class}`ParameterRanges <mlgw_bns.data_management.ParameterRanges>` and
 customizable through the `parameter_ranges` argument of `ModeModel` (or of
-`Model`, which forwards it to every mode) when building a new model.
+`Model`, which forwards it to every mode) when building a new model. Its
+band is set by the `initial_frequency_hz` and `srate_hz` arguments, which
+are given at the reference mass of 2.8 solar masses.
 
 The ranges actually in effect can be checked, once a `Model` object is
 initialized as described before, by looking at the ranges of any of its modes:
 ```python
 >>> print(model.mode_models[Mode(2, 2)].parameter_ranges)
-ParameterRanges(mass_range=(2.0, 4.0), q_range=(1.0, 3.0), lambda1_range=(5.0, 2000.0), lambda2_range=(5.0, 2000.0), chi1_range=(-0.5, 0.5), chi2_range=(-0.5, 0.5))
+ParameterRanges(q_range=(1.0, 3.0), lambda1_range=(5.0, 2000.0), lambda2_range=(5.0, 2000.0), chi1_range=(-0.5, 0.5), chi2_range=(-0.5, 0.5))
 ```
-for the first six,
+and the band, in Hz at the reference mass, with
 ```python
->>> print(model.dataset.initial_frequency_hz)
-5.0
+>>> print(model.dataset.total_mass)
+2.8
+>>> print(model.dataset.initial_frequency_hz, model.dataset.srate_hz / 2)
+3.5714285714285716 2925.714285714286
 ```
-for the initial frequency and
-```python
->>> print(model.dataset.srate_hz / 2)
-2048.0
-```
-for the maximum (Nyquist) frequency.
-
-The actual array of possible frequencies, `model.dataset.frequencies_hz`
-(or `model.dataset.frequencies` in natural units)
-is wider, to accomodate the possibility of changing the total mass.
+The trained frequency array itself is `model.dataset.frequencies_hz`
+(or `model.dataset.frequencies` in natural units), again at the reference
+mass.

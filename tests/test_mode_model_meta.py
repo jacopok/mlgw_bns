@@ -13,7 +13,7 @@ def test_model_str(trained_mode_model):
         "auxiliary_data_available=True, nn_available=True, "
         "training_dataset_available=True, "
         "waveforms_available = 100, "
-        "parameter_ranges=ParameterRanges(mass_range=(2.0, 4.0), "
+        "parameter_ranges=ParameterRanges("
         "q_range=(1.0, 3.0), lambda1_range=(5.0, 5000.0), "
         "lambda2_range=(5.0, 5000.0), chi1_range=(-0.5, 0.5), "
         "chi2_range=(-0.5, 0.5)))"
@@ -58,14 +58,32 @@ def test_model_metadata_loading(generated_mode_model):
 
     generated_mode_model.save()
     generated_mode_model.initial_frequency_hz = 1000.0
-    generated_mode_model.parameter_ranges.mass_range = (1.0, 5.0)
+    generated_mode_model.parameter_ranges.q_range = (1.0, 5.0)
     generated_mode_model.multibanding = False
 
     generated_mode_model.load()
 
     assert generated_mode_model.initial_frequency_hz == 20.0
-    assert generated_mode_model.parameter_ranges.mass_range == (2.0, 4.0)
+    assert generated_mode_model.parameter_ranges.q_range == (1.0, 3.0)
     assert generated_mode_model.multibanding == True
+
+
+def test_metadata_before_2_1_is_converted():
+    """A model saved with a total-mass range keeps its frequency band."""
+    from mlgw_bns.dataset_generation import SHIPPED_BAND_HZ
+
+    model = ModeModel()
+    model.set_metadata({
+        "initial_frequency_hz": 5.0,
+        "srate_hz": 4096.0,
+        "parameter_ranges": {"mass_range": (2.0, 4.0), "q_range": (1.0, 2.0)},
+    })
+    model.dataset = model._make_dataset()
+    # the band 2.0 computed: 5 Hz at 2 Msun, 4096 Hz at 4 Msun, bit for bit
+    assert (model.initial_frequency_hz, model.srate_hz) == (5.0 * (2.0 / 2.8), 4096.0 * (4.0 / 2.8))
+    assert (model.initial_frequency_hz, model.srate_hz) == SHIPPED_BAND_HZ
+    assert model.parameter_ranges.q_range == (1.0, 2.0)
+    assert model.dataset.frequencies_hz[0] == model.initial_frequency_hz
 
 
 def test_downsampling_indices_characteristics(generated_mode_model):

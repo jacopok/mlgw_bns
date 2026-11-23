@@ -311,6 +311,18 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
     ) -> None:
         super().__init__(*args, **kwargs)
         self.eobrun_callable = eobrun_callable
+        #: Modes whose TEOBResumS settings (ODE start and ``srate_interp``, see
+        #: :func:`start_integration_early`) the single-mode calls use, as if
+        #: they were generated together; ``None`` for this generator's mode
+        #: alone. A :class:`~mlgw_bns.model.Model` sets it to its modes, so
+        #: that a mode on its own (e.g. the (2,2) of
+        #: :meth:`~mlgw_bns.model_validation.ValidateModel.merger_reference_errors`)
+        #: is the same waveform as in the training data and in
+        #: :meth:`~mlgw_bns.model.Model.get_teob_modes_dict`. The ODE start
+        #: matters at the 1e-3 rad level, and with ``srate_interp`` of the
+        #: (2,2) alone the phase gradient glitches in the last tens of Hz of
+        #: the band, where the merger reference is taken.
+        self.generation_modes: Optional[list[Mode]] = None
 
     def get_polarizations(
         self,
@@ -349,6 +361,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         params: WaveformParameters,
         modes: Iterable[Mode],
         frequencies: Optional[np.ndarray] = None,
+        settings_modes: Iterable[Mode] = (),
     ) -> Dict[Mode, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         r"""One TEOBResumS call, ``(f, amplitude, phase)`` for every requested mode.
 
@@ -366,6 +379,9 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         ``par_dict["inclination"]`` (only the summed polarizations do), so it is
         left at the :meth:`~mlgw_bns.dataset_generation.WaveformParameters.teobresums`
         default.
+        ``settings_modes`` are added to ``modes`` for the settings only, so
+        that a subset of modes is generated as within the whole set (see
+        :attr:`generation_modes`).
 
         The phase is TEOBResumS's, sign-flipped (so that the multipole is
         :math:`A e^{i\phi}`), in its own reference for time and orbital
@@ -382,7 +398,7 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
 
         par_dict: dict = params.teobresums()
 
-        to_slice = start_integration_early(par_dict, frequencies, modes)
+        to_slice = start_integration_early(par_dict, frequencies, modes + list(settings_modes))
 
         par_dict["arg_out"] = "yes"
         par_dict["use_mode_lm"] = [mode_to_k(mode) for mode in modes]
@@ -411,9 +427,9 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         ``hflm`` multipoles do not depend on it.
         """
         assert self.mode is not None
-        return self.all_modes_amplitude_phase(params, [self.mode], frequencies)[
-            self.mode
-        ]
+        return self.all_modes_amplitude_phase(
+            params, [self.mode], frequencies, self.generation_modes or ()
+        )[self.mode]
 
     def effective_one_body_waveform(
         self,
@@ -428,9 +444,9 @@ class TEOBResumSModeGenerator(BarePostNewtonianModeGenerator):
         caller) is unchanged.
         """
         assert self.mode is not None
-        return self.all_modes_amplitude_phase(params, [self.mode], frequencies)[
-            self.mode
-        ]
+        return self.all_modes_amplitude_phase(
+            params, [self.mode], frequencies, self.generation_modes or ()
+        )[self.mode]
 
 
 def spherical_harmonic_spin_2(

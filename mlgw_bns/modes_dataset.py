@@ -46,7 +46,7 @@ from typing import Callable, Iterator, Mapping, Optional, Sequence, Union
 import numpy as np
 
 from .data_management import DownsamplingIndices, ParameterRanges, PrincipalComponentData, Residuals
-from .dataset_generation import ParameterSet
+from .dataset_generation import PARAMETER_GENERATORS, SHIPPED_BAND_HZ, ParameterSet, migrate_mass_range
 from .higher_order_modes import Mode
 from .model import Model
 from .neural_network import Hyperparameters, JaxMLPNetwork, KernelRidgeNetwork
@@ -84,25 +84,38 @@ class ModesDatasetConfig:
     modes, initial_frequency_hz, srate_hz, reference_amplitude, parameter_ranges
         Of the :class:`~mlgw_bns.model.Model`; the defaults are those of
         ``hom7_big`` (make_hom7_dataset.py).
+    sampling : str
+        The distribution of the parameters within ``parameter_ranges``, a key
+        of :data:`~mlgw_bns.dataset_generation.PARAMETER_GENERATORS`:
+        ``"uniform"`` (the default, and that of every dataset made before
+        it existed) in the component parameters, ``"effective"`` uniform in
+        the effective tidal deformability and spin
+        (:class:`~mlgw_bns.dataset_generation.EffectiveParameterGenerator`).
     """
 
     n_binaries: int
     shard_size: int = 1024
     seed: int = 1
     modes: tuple = HOM7_MODES
-    initial_frequency_hz: float = 5.0
-    srate_hz: float = 4096.0
+    initial_frequency_hz: float = SHIPPED_BAND_HZ[0]
+    srate_hz: float = SHIPPED_BAND_HZ[1]
     reference_amplitude: bool = True
     parameter_ranges: ParameterRanges = field(
         default_factory=lambda: ParameterRanges(lambda1_range=(5.0, 12000.0), lambda2_range=(5.0, 12000.0))
     )
+    sampling: str = "uniform"
+
+    def __post_init__(self) -> None:
+        if self.sampling not in PARAMETER_GENERATORS:
+            raise ValueError(f"sampling {self.sampling!r} is not one of {sorted(PARAMETER_GENERATORS)}")
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self), indent=2)
 
     @classmethod
     def from_json(cls, text: str) -> "ModesDatasetConfig":
-        values = json.loads(text)
+        # a config written before 2.1 has a total-mass range
+        values = migrate_mass_range(json.loads(text))
         values["modes"] = tuple(tuple(mode) for mode in values["modes"])
         values["parameter_ranges"] = ParameterRanges(
             **{key: tuple(value) for key, value in values["parameter_ranges"].items()}
@@ -120,14 +133,16 @@ class ModesDatasetConfig:
             srate_hz=self.srate_hz,
             reference_amplitude=self.reference_amplitude,
             parameter_ranges=self.parameter_ranges,
+            parameter_generator_class=PARAMETER_GENERATORS[self.sampling],
             **kwargs,
         )
 
     def same_waveforms(self, other: "ModesDatasetConfig") -> bool:
         """Whether ``other`` has waveforms of the same model (if not the
-        same ones): what a validation set and its training set share."""
+        same ones, nor drawn the same way): what a validation set and its
+        training set share."""
         return dataclasses.replace(other, n_binaries=self.n_binaries, shard_size=self.shard_size,
-                                   seed=self.seed) == self
+                                   seed=self.seed, sampling=self.sampling) == self
 
 
 class ShardedModesDataset(ShardedStore):
@@ -328,6 +343,7 @@ class ShardedModesDataset(ShardedStore):
         modes: Optional[Sequence] = None,
         checkpoint: Optional[str] = None,
         sizes: Optional[Mapping[Mode, int]] = None,
+        n_components: int = 30,
     ) -> Optional[Model]:
         """Train a :class:`~mlgw_bns.model.Model` on the first ``n`` valid
         waveforms and save it as ``filename`` (without its training data,
@@ -361,6 +377,8 @@ class ShardedModesDataset(ShardedStore):
         sizes : mapping, optional
             Train the regressors of these modes on the first this many
             waveforms instead of ``n``.
+        n_components : int, optional
+            Principal components of each mode (30 by default).
 
         Returns
         -------
@@ -374,8 +392,9 @@ class ShardedModesDataset(ShardedStore):
         model = self.model(filename, nn_kind=KernelRidgeNetwork if kinds else nn_kind)
         for mode, kind in kinds.items():
             model.mode_models[mode].nn_kind = kind
-        pca = self.principal_components(pca_size or n)
+        pca = self.principal_components(pca_size or n, n_components)
         for mode in self.modes:
+            model.mode_models[mode].pca_components_number = n_components
             model.mode_models[mode].pca_data = pca[mode]
         for mode in self.modes if modes is None else [Mode(*m) for m in modes]:
             mode_model = model.mode_models[mode]

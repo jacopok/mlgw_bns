@@ -58,6 +58,7 @@ import numpy as np
 import optuna
 
 from mlgw_bns.data_management import Residuals
+from mlgw_bns.dataset_generation import PARAMETER_GENERATORS
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.hyperparameter_optimization import mlp_command_line, study_mlp_config
 from mlgw_bns.jax_mlp import TrainingInterrupted
@@ -72,7 +73,7 @@ from mlgw_bns.modes_dataset import (
     same_indices,
     stored_size,
 )
-from mlgw_bns.neural_network import Hyperparameters, JaxMLPNetwork, KernelRidgeNetwork
+from mlgw_bns.neural_network import INPUT_COORDINATES, Hyperparameters, JaxMLPNetwork, KernelRidgeNetwork
 from mlgw_bns.sharding import EXIT_REQUEUE, Stopped, save_arrays, save_json, stop_on_signals, write_atomically
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -129,11 +130,14 @@ def open_model(base: str) -> Model:
 
 def init(args) -> None:
     ranges = ModesDatasetConfig(n_binaries=args.n).parameter_ranges
-    if args.lambda_max is not None:
-        ranges = dataclasses.replace(ranges, lambda1_range=(5.0, args.lambda_max), lambda2_range=(5.0, args.lambda_max))
+    lambda_range = (
+        ranges.lambda1_range[0] if args.lambda_min is None else args.lambda_min,
+        ranges.lambda1_range[1] if args.lambda_max is None else args.lambda_max,
+    )
+    ranges = dataclasses.replace(ranges, lambda1_range=lambda_range, lambda2_range=lambda_range)
     config = ModesDatasetConfig(
         n_binaries=args.n, shard_size=args.shard_size, seed=args.seed, modes=tuple(args.modes),
-        parameter_ranges=ranges,
+        parameter_ranges=ranges, sampling=args.sampling,
     )
     dataset = ShardedModesDataset.create(args.dataset, config)
     if args.downsampling_from:
@@ -170,7 +174,7 @@ def status(args) -> None:
 
 def pca(args) -> None:
     stop_on_signals()
-    ShardedModesDataset(args.dataset).principal_components(args.n)
+    ShardedModesDataset(args.dataset).principal_components(args.n, args.components)
 
 
 def train(args) -> int:
@@ -210,6 +214,10 @@ def train(args) -> int:
             )
         logging.info("kernel ridge on %i waveforms: ~%.1f GB", args.n, KRR_BYTES(args.n) / 1e9)
         nn_kind, hyperparameters = KernelRidgeNetwork, None
+        if args.input_coordinates != "linear" or args.kernel_gamma is not None:
+            def hyperparameters(mode, n):
+                return Hyperparameters.default_kernel_ridge(
+                    n, mode=mode, kernel_gamma=args.kernel_gamma, input_coordinates=args.input_coordinates)
     # (while the perceptron trains, it checkpoints on them instead)
     stop_on_signals()
     start = time.time()
@@ -217,6 +225,7 @@ def train(args) -> int:
         model = dataset.train(
             args.n, args.out, nn_kind=nn_kind, hyperparameters=hyperparameters,
             pca_size=args.pca_size, modes=args.modes, sizes=sizes, checkpoint=args.checkpoint,
+            n_components=args.pca_components,
         )
     except (TrainingInterrupted, Stopped) as error:
         logging.info("stopped: %s", error)
@@ -578,6 +587,10 @@ def main() -> int:
     command.add_argument("--seed", type=int, required=True, help="different for independent datasets")
     command.add_argument("--modes", type=parse_mode, nargs="+", default=list(HOM7_MODES))
     command.add_argument("--lambda-max", type=float, help="of both stars (default: that of hom7_big, 12000)")
+    command.add_argument("--lambda-min", type=float, help="of both stars (default: that of hom7_big, 5); "
+                         "TEOBResumS switches to its BBH settings at 1 and below")
+    command.add_argument("--sampling", default="uniform", choices=sorted(PARAMETER_GENERATORS),
+                         help="distribution of the parameters in their ranges (see ModesDatasetConfig)")
     command.add_argument("--downsampling-from", help="share the downsampling of this (training) dataset")
     command.set_defaults(run=init)
 
@@ -602,6 +615,7 @@ def main() -> int:
     command = commands.add_parser("pca", help="fit the principal components of the first N waveforms")
     command.add_argument("dataset")
     command.add_argument("--n", type=int, required=True)
+    command.add_argument("--components", type=int, default=30, help="principal components of each mode")
     command.set_defaults(run=pca)
 
     command = commands.add_parser("train", help="train on the first N waveforms (and validate)")
@@ -612,6 +626,11 @@ def main() -> int:
     command.add_argument("--modes", type=parse_mode, nargs="+", help="only these (default: all)")
     command.add_argument("--max-kernel-ridge", type=int, default=65536,
                          help="refuse kernel ridge on more waveforms (memory)")
+    command.add_argument("--pca-components", type=int, default=30, help="principal components of each mode")
+    command.add_argument("--input-coordinates", choices=INPUT_COORDINATES, default="linear",
+                         help="kernel ridge: regress in these coordinates (log_lambda: log(1 + Lambda))")
+    command.add_argument("--kernel-gamma", type=float,
+                         help="kernel ridge: this kernel width for every mode (default: each mode's tuned one)")
     add_mlp_arguments(command)
     command.add_argument("--mlp-steps", type=int, help="train for about this many steps (sets the epochs)")
     command.add_argument("--checkpoint", help="base filename of the perceptrons' checkpoints")

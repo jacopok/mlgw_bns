@@ -5,7 +5,11 @@
 # waveforms for each N in SIZES, with kernel ridge and with perceptrons, each
 # validated on the whole validation set, timed, and sized.
 # Settings in cluster.env (cp slurm/modes/cluster.env.example
-# slurm/modes/cluster.env, and edit it); run from anywhere.
+# slurm/modes/cluster.env, and edit it), or in the file CLUSTER_ENV names
+# (relative to the repository; its jobs read it too), to run several
+# pipelines side by side; run from anywhere.
+#
+#   CLUSTER_ENV=slurm/modes/release_lambda2000.env slurm/modes/submit.sh
 #
 #   slurm/modes/submit.sh                          # all the stages, each after the one before
 #   slurm/modes/submit.sh downsampling generate    # only these
@@ -58,11 +62,12 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-[[ -f slurm/modes/cluster.env ]] || {
-    echo "no slurm/modes/cluster.env: cp slurm/modes/cluster.env.example slurm/modes/cluster.env and edit it" >&2
+export CLUSTER_ENV="${CLUSTER_ENV:-slurm/modes/cluster.env}"
+[[ -f "$CLUSTER_ENV" ]] || {
+    echo "no $CLUSTER_ENV: cp slurm/modes/cluster.env.example slurm/modes/cluster.env and edit it" >&2
     exit 1
 }
-source slurm/modes/cluster.env
+source "$CLUSTER_ENV"
 source slurm/lib.sh
 check_environment
 resolve_data
@@ -75,7 +80,8 @@ stages "$@"
 for dataset in "train $N_TRAIN 1" "validation $N_VALIDATION 2"; do
     read -r name n seed <<< "$dataset"
     OMP_NUM_THREADS=1 "$PYTHON" "$M" init "$DATA/$name" --n "$n" --seed "$seed" --shard-size "$SHARD_SIZE" \
-        --lambda-max "$LAMBDA_MAX" 2>/dev/null | head -1
+        --lambda-min "${LAMBDA_MIN:-5}" --lambda-max "$LAMBDA_MAX" --sampling "${SAMPLING:-uniform}" \
+        2>/dev/null | head -1
 done
 sbatch_common
 
@@ -192,6 +198,6 @@ done
 
 echo
 echo "logs in $DATA/logs; to follow, from $ROOT:"
-echo "  source slurm/modes/cluster.env   # sets DATA=$DATA"
+echo "  source $CLUSTER_ENV   # sets DATA=$DATA"
 echo "  squeue --me; tail -f \$DATA/logs/*.log"
 echo "  .venv/bin/python visualization/modes_scale.py status $DATA/train $DATA/validation"

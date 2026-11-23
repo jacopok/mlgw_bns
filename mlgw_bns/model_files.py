@@ -21,9 +21,9 @@ To publish a new model: write its manifest from the files in ``data/``,
 then upload those files where it says (here, the assets of a GitHub
 release)::
 
-    python -m mlgw_bns.model_files manifest default_hom \
-        --url https://github.com/jacopok/mlgw_bns/releases/download/default_hom-v2.0.0/
-    gh release create default_hom-v2.0.0 mlgw_bns/data/default_hom*_nn.pkl
+    python -m mlgw_bns.model_files manifest default_hom_lambda2000 \
+        --url https://github.com/jacopok/mlgw_bns/releases/download/models-v2.1.0/
+    gh release create models-v2.1.0 mlgw_bns/data/default_hom_lambda*_nn.pkl
 """
 
 from __future__ import annotations
@@ -43,13 +43,22 @@ from typing import Optional
 #: the files of a model that are downloaded instead of shipped
 HEAVY_PATTERN = "{model}_l[0-9]_m[0-9]_nn.pkl"
 
+#: Other names of shipped models: ``default_hom``, the default, is the one
+#: up to Lambda = 2000 (before 2.1 it was trained from Lambda = 5).
+MODEL_ALIASES = {"default_hom": "default_hom_lambda2000"}
+
+
+def canonical_name(model_name: str) -> str:
+    """The name of a shipped model, of its files and manifest, given that or an alias."""
+    return MODEL_ALIASES.get(model_name, model_name)
+
 
 def _data() -> Path:
     return Path(str(files(__package__).joinpath("data")))
 
 
 def manifest_path(model_name: str) -> Path:
-    return _data() / f"{model_name}_files.json"
+    return _data() / f"{canonical_name(model_name)}_files.json"
 
 
 def read_manifest(model_name: str) -> dict:
@@ -102,7 +111,7 @@ def _is_packaged(path: Path) -> bool:
 
 
 def model_file(model_name: str, filename: str) -> Path:
-    """The path of ``filename`` (as ``data/default_hom_l2_m2_nn.pkl``) of a
+    """The path of ``filename`` (as ``data/default_hom_lambda2000_l2_m2_nn.pkl``) of a
     pretrained model: in the package if it is there (and not a Git LFS
     pointer, in a checkout without git-lfs), else in the cache, downloaded
     the first time."""
@@ -130,6 +139,7 @@ def download(model_name: str) -> list:
 def write_manifest(model_name: str, url: str) -> Path:
     """The manifest of the heavy files of a model now in ``data/``, to be
     published at ``url`` (ending with ``/``)."""
+    model_name = canonical_name(model_name)
     names = sorted(glob.glob(str(_data() / HEAVY_PATTERN.format(model=model_name))))
     if not names:
         raise FileNotFoundError(f"no {HEAVY_PATTERN.format(model=model_name)} in {_data()}")

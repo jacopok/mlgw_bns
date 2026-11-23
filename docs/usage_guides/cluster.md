@@ -26,7 +26,7 @@ On the cluster, in a clone of the repository:
    compiler and GSL (`module load gsl` or similar first); after new commits
    on the branch, `uv lock --upgrade-package teobresums`.
 2. `cp slurm/modes/cluster.env.example slurm/modes/cluster.env` (or
-   `release.env.example`, see [](#release-model)), and edit it: the account and partition, and
+   a `release_lambda<L>.env.example`, see [](#release-model)), and edit it: the account and partition, and
    `DATA`, where everything goes. It must be on a filesystem that every node
    sees, with room for the training set: scratch, not home. Module loads and
    exports go at its end; the jobs source it too.
@@ -276,44 +276,54 @@ python visualization/modes_scale.py summary visualization/modes_scale/run/runs
 (release-model)=
 ## Training the model of a release
 
-The model shipped in the package, `default_hom`, is trained by this
-pipeline with the settings of `slurm/modes/release.env.example`: kernel
-ridge on the first $2^{13}$ to $2^{16}$ of $2^{16}$ training waveforms
-(same domain as `default_hom`: $q \in [1, 3]$, $|\chi| < 0.5$,
-$\Lambda \in [5, 12000]$), each model validated on the $2^{14}$ stored
-validation waveforms and end to end against TEOBResumS (`teob`, 1000
-waveforms a distribution).
+The models shipped in the package, `default_hom_lambda<L>` for `L` in
+2000, 4000, 8000 and 12000, are trained by this pipeline with the settings
+of `slurm/modes/release_lambda<L>.env.example`: kernel ridge on 60
+principal components of $2^{15}$ training waveforms (domain $q \in [1, 3]$,
+$|\chi| < 0.5$, $\Lambda \in [1.001, L]$, drawn in the effective
+parameters, uniform in $\tilde\Lambda$: `SAMPLING="effective"`), in
+$\log(1 + \Lambda)$ with kernel width 0.1 for $L = 2000$ and 4000 (series
+`log60g01`), and in $\Lambda$ with
+each mode's tuned width for $L = 8000$ (`lin60`). They are validated on
+the $2^{14}$ stored validation waveforms and end to end against
+TEOBResumS (`teob`, 1000 waveforms a distribution), and in the corner of
+large $\Lambda_1$, small $\Lambda_2$ and $q \sim 2.5$, which the
+training distribution samples sparsely and where regressing in
+$\log(1 + \Lambda)$ costs accuracy, the more so with larger $L$ and
+kernel width (`visualization/corner_scan.py`). `default_hom_lambda12000`
+is kernel ridge in $\Lambda$ on 30 principal components (series `krr`).
 
 On the cluster:
 
 ```bash
-cp slurm/modes/release.env.example slurm/modes/cluster.env   # and edit: account, partition, DATA
-slurm/modes/submit.sh        # downsampling, generate, pca, train, teob
+cp slurm/modes/release_lambda2000.env.example slurm/modes/release_lambda2000.env  # and edit: account, DATA
+CLUSTER_ENV=slurm/modes/release_lambda2000.env slurm/modes/submit.sh   # downsampling, generate, pca, train, teob
 ```
 
 Here, once it is done:
 
 ```bash
 rsync -av --exclude 'shards/' --exclude 'locks/' --exclude '*checkpoint*' --exclude '*.lock' \
-    cluster:$DATA/ visualization/modes_scale/release/
-python visualization/modes_scale.py summary visualization/modes_scale/release/runs
+    cluster:$DATA/ visualization/modes_scale/release_lambda2000/
+python visualization/modes_scale.py summary visualization/modes_scale/release_lambda2000/runs
 ```
 
 Choose the model from `runs/summary.md` (accuracy, size and evaluation
 time against the size of the training set) and from the end-to-end
-validations, `teob/krr_<N>_*` and the `logs/modes-teob_krr_<N>-*.log` (their per-mode and
+validations, `teob/<series>_<N>_*` and the `logs/modes-teob_<series>_<N>-*.log` (their per-mode and
 full-waveform mismatches, with and without the time and phase optimised).
-Size counts less than it would: the regressors (~130 MB for kernel ridge
-at $2^{16}$, half that at $2^{15}$) are not in the wheel but downloaded on
+Size counts less than it would: the regressors (kernel ridge on $2^{15}$
+waveforms: ~60 MB with 30 principal components a mode, ~115 MB with 60) are
+not in the wheel but downloaded on
 first use ({mod}`mlgw_bns.model_files`); it is still a download for every
 user, and memory and evaluation time grow with it. Then ship it, as
-`default_hom`, and publish its regressors where its manifest says:
+`default_hom_lambda2000`, and publish its regressors where its manifest says:
 
 ```bash
-RUN=visualization/modes_scale/release/runs/krr_32768
-for file in $RUN/model_l*; do cp "$file" "mlgw_bns/data/default_hom_${file##*/model_}"; done
+RUN=visualization/modes_scale/release_lambda2000/runs/log60g01_32768
+for file in $RUN/model_l*; do cp "$file" "mlgw_bns/data/default_hom_lambda2000_${file##*/model_}"; done
 uv run pytest      # the accuracy thresholds of the tests may need recalibrating
-python -m mlgw_bns.model_files manifest default_hom \
-    --url https://github.com/jacopok/mlgw_bns/releases/download/default_hom-v2.0.0/
-gh release create default_hom-v2.0.0 mlgw_bns/data/default_hom_*_nn.pkl
+python -m mlgw_bns.model_files manifest default_hom_lambda2000 \
+    --url https://github.com/jacopok/mlgw_bns/releases/download/models-v2.1.0/
+gh release create models-v2.1.0 mlgw_bns/data/default_hom_lambda*_nn.pkl
 ```

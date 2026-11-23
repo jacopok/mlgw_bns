@@ -6,14 +6,195 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-23
+
+### Changed
+
+- **New shipped models**, retrained and named by their largest tidal
+    deformability: `default_hom_lambda2000`, `default_hom_lambda4000`,
+    `default_hom_lambda8000` and `default_hom_lambda12000`
+    (`MODELS_AVAILABLE`). `default_hom`, the default, is now another name for
+    `default_hom_lambda2000` (`model_files.MODEL_ALIASES`); the 2.0
+    `default_hom` (from $\Lambda = 5$) is no longer shipped. Each is kernel
+    ridge on $2^{15}$ waveforms of $\Lambda \in [1, L]$ drawn uniform in
+    $\tilde\Lambda$ (below); up to $L = 8000$ on 60 principal components a
+    mode, regressed in $\log(1 + \Lambda)$ for $L = 2000$ and 4000 (below).
+    On the stored validation sets the full-waveform mismatch medians are
+    7.7e-9, 1.3e-8, 8.6e-8 and 9e-7, and the merger time is within 3, 7, 97
+    and 520 $\mu$s of TEOBResumS for 99% of the range (400 uniform draws;
+    for kernel ridge in $\Lambda$ on 30 components of the same waveforms,
+    43, 68 and 96 $\mu$s up to
+    8000). The regressors to download are ~115 MB a model with 60
+    components (~60 MB with 30); a prediction takes as long as with 30,
+    within the noise of the benchmark.
+- The training sets of the shipped models are drawn in the effective
+    parameters, as the priors of a parameter estimation are: uniform in the
+    mass ratio, in $\chi_{\rm eff}$ and in $\tilde\Lambda$, then uniformly
+    along the segment of constant $\tilde\Lambda$ (or $\chi_{\rm eff}$) in
+    the range. A uniform draw of $\Lambda_1$ and $\Lambda_2$ left the corner
+    where both are small almost empty, and the merger time was 0.1--0.5 ms
+    off there. New: `EffectiveParameterGenerator`,
+    `LogEffectiveParameterGenerator` (log-uniform in $\tilde\Lambda$),
+    `MixedParameterGenerator` (half uniform in $\Lambda_1, \Lambda_2$, half
+    log-uniform in $\tilde\Lambda$) and `EffectiveMixedParameterGenerator`
+    (half uniform, half log-uniform in $\tilde\Lambda$)
+    (`PARAMETER_GENERATORS`), the `sampling` of `ModesDatasetConfig`,
+    `--sampling` and `--lambda-min` of `modes_scale.py init`, and the
+    `SAMPLING`, `LAMBDA_MIN` and `CLUSTER_ENV` settings of the SLURM
+    pipeline (presets `slurm/modes/release_lambda<L>.env.example`). Models
+    trained on the log-uniform half of the mixed draws were less accurate
+    where $\Lambda_1$ is large and $\Lambda_2$ small, which those draws
+    leave sparse.
+- **The kernel ridge of `default_hom_lambda2000` and
+    `default_hom_lambda4000` regresses in $\log(1 + \Lambda_{1,2})$**
+    instead of $\Lambda_{1,2}$ (`Hyperparameters.input_coordinates =
+    "log_lambda"`, `neural_network.regression_inputs`, the batched
+    predictions too), with kernel width 0.1. The waveform depends
+    on $\Lambda$ roughly logarithmically, and a single kernel width in
+    linear $\Lambda$ was too wide at small $\Lambda$ and too narrow at
+    large: the merger time, linear in the principal components, was then
+    off by tens of $\mu$s from the regression error of the first one alone.
+    In $\log(1 + \Lambda)$ that error falls to a few $\mu$s, and the 30
+    principal components become the limit, hence 60
+    (`ShardedModesDataset.train(n_components=)`, `--pca-components` of
+    `modes_scale.py train` and `--components` of `modes_scale.py pca`,
+    `PCA_COMPONENTS` of the SLURM pipeline). The logarithm costs accuracy
+    where $\Lambda_1$ is large, $\Lambda_2$ small and $q \sim 2.5$, a
+    corner the training draws sample sparsely, the more so with a wider
+    kernel and a larger range: on 60 common draws there
+    (`visualization/corner_scan.py`), `default_hom_lambda2000` has a
+    median of 1.1e-8 (in $\Lambda$ on 30 components: 2.2e-8) and
+    `default_hom_lambda4000` 5.3e-8 (3.7e-8; worst 7.3e-6, none above
+    1e-5). For $L = 8000$ every width tried put 5--30% of those draws
+    above 1e-5 (none in $\Lambda$), so `default_hom_lambda8000` regresses
+    in $\Lambda$, on 60 components, and `default_hom_lambda12000` in
+    $\Lambda$ on 30 (in $\log(1 + \Lambda)$ its merger time was worse,
+    median 75 $\mu$s against 26, for any width tried). All are least
+    accurate where $\Lambda_1 \lesssim 5$, $0.05 L < \Lambda_2 < 0.5 L$ and
+    $q < 2$, as in $\Lambda$ on 30 components: on 60 draws there the
+    medians are 2.4e-7, 1.8e-6 and 4.9e-6 up to $L = 8000$ (6.0e-7, 1.6e-6
+    and 4.9e-6), with 5, 13 and 32% above 1e-5 (15, 22 and 28%). The
+    default `Hyperparameters` are unchanged (linear $\Lambda$, 30
+    components).
+- **Tidal deformabilities down to 0.** The shipped models accept
+    $\Lambda_1, \Lambda_2 \ge 0$ (`Model.default_for_testing` widens their
+    `parameter_ranges`; the files keep the trained ones, from 1). Below 1
+    they follow the TEOBResumS they are trained with, which no longer
+    switches to its black-hole settings there (below), with the accuracy
+    they have at $\Lambda = 1$.
+- The waveforms are generated with the upstream TEOBResumS, branch `Dali`
+    (asking for its `Giotto` model, `dataset_generation.TEOB_MODEL`; every
+    call that builds its own parameters goes through
+    `dataset_generation.eobrun`), as in its PR #12, plus the fixes of the
+    fork the 2.0 models were trained with (jacopok/teobresums, branch
+    `dali-precession-mlgw`): it matches that fork to $10^{-10}$ in the
+    (2,2) mismatch over the training range. The fork also keeps the
+    neutron-star settings of TEOBResumS for any $\Lambda > 0$: before,
+    both $\Lambda \le 1$ gave a binary black hole (no tides, a ringdown) and
+    one $\Lambda \le 1$ switched off the tides of the other star, a jump at
+    $\Lambda = 1$. Below 1 its quasi-universal relations (spin-induced
+    multipoles, higher-order Love numbers), fits in $\log\Lambda$ that
+    diverge as $\Lambda \to 0$, are continued by quadratics in $\Lambda$ to
+    their black-hole values; above 1 its waveforms are bit-for-bit those of
+    the version without this.
+- The post-Newtonian spin-induced quadrupole (`taylorf2.compute_quadrupole_yy`)
+    is continued below $\Lambda = 1$ in the same way: its Yagi-Yunes fit
+    grows without bound as $\Lambda \to 0$ (32 at $10^{-3}$), which made the
+    predictions with spins diverge there. Unchanged for $\Lambda \ge 1$.
+- There is no total-mass range any more: any total mass is accepted.
+    The surrogate is a function of the mass-rescaled frequency $Mf$, so a
+    change in the total mass is an exact rescaling of the waveform; the
+    range only ever served to size the trained frequency band, and
+    rejecting masses outside it (2--4 Msun) refused detector-frame BNS
+    masses that the model describes exactly. What is fixed is the band in
+    $Mf$ ($4.9 \times 10^{-5}$ to $0.040$ for the shipped models, 5 to
+    2048 Hz between 2 and 4 Msun); below it the PN extension and above
+    it the zeros apply as before. `ParameterRanges.mass_range` is
+    removed, and the batched predictions no longer return NaN rows for
+    the total mass.
+- **Breaking, for training:** the `initial_frequency_hz` and `srate_hz` of
+    `Dataset`, `ModeModel`, `Model` and `ModesDatasetConfig` now give the
+    trained band directly, at the reference mass `Dataset.total_mass`
+    (2.8 Msun), instead of being widened by the mass range. The default
+    `ModesDatasetConfig` and the training scripts use
+    `dataset_generation.SHIPPED_BAND_HZ`, the band of the shipped models;
+    a `ModeModel` or `Model` built with the old defaults (20 Hz,
+    4096 Hz, 2--4 Msun) now trains on 20 to 2048 Hz at 2.8 Msun rather
+    than 14.3 to 2926 Hz.
+- Models and sharded-dataset configs saved before 2.1, with a mass range,
+    are converted on loading (`dataset_generation.migrate_mass_range`) to
+    the band they were trained on, bit for bit; the metadata of the shipped
+    models is converted in the package. Their predictions are unchanged.
+- `Dataset.effective_initial_frequency_hz` and `effective_srate_hz` are
+    deprecated aliases of `initial_frequency_hz` and `srate_hz`, and the
+    `use_effective_frequencies` argument of `WaveformParameters.teobresums`
+    and `ParametersWithExtrinsic.teobresums_dict` is removed.
+
+### Added
+
+- Loading `default_hom_lambda12000` raises a `ModelAccuracyWarning`
+    (`mlgw_bns.model.MODEL_CAVEATS`): it is not accurate enough in the late
+    inspiral to predict the merger reliably. Trained on tidal deformabilities
+    up to 12000 with as many waveforms as the others, its time to merger
+    above about 1 kHz is wrong in parts of the parameter space: against
+    TEOBResumS the merger is 0.2--0.5 ms early at $q \approx 2.5$,
+    $\Lambda_1 \approx 10$, and off by more than 0.2 ms for about 5% of its
+    range (1 of 400 draws for `default_hom_lambda8000`, 0.4 ms, none for the
+    others). This is a modelling error, not
+    a choice of merger reference. The accuracy tests now run on every
+    shipped model; the ones it fails, and the merger-time test for
+    `default_hom_lambda8000`, are strict expected failures
+    (`KNOWN_FAILURES` in `tests/conftest.py`), and a test checks the merger
+    time in that corner of the parameter space.
+
 ### Fixed
 
+- The precessing model starts the Euler angle $\gamma$ equal to $\alpha$,
+    the direction of the torque $\dot{\hat{L}}$ at the reference frequency,
+    as TEOBResumS does since its precession fixes (PR #12), instead of the
+    next-to-leading-order estimate of $\alpha$ (eq. A5 of arXiv:2111.03675)
+    it used before. The two can differ by $\pi$, which flips the sign of
+    every odd-$m$ co-precessing multipole: against the TEOBResumS the models
+    are now generated with, the precessing $h_+$ mismatch was 1.2e-4
+    (median of 1000 binaries; 0.18 with nothing optimised), and is now
+    1.3e-8, 2.0e-8, 1.0e-7 and 1.5e-6 for `default_hom_lambda{2000,4000,8000,12000}`
+    (2.8e-3 with nothing optimised), the same as with the in-plane spins
+    zeroed: optimised over time and reference phase, from 21 Hz, with
+    TEOBResumS' `srate_interp` as in the training data (at 4096 Hz the
+    $m = 3, 4$ mergers ring in the band). The NLO estimate (`twist_waveform.alpha_initial_condition`)
+    is removed.
+- A mode generated on its own, such as the (2,2) whose merger reference
+    `ValidateModel.merger_reference_errors` compares, used the TEOBResumS
+    settings of that mode alone, while the training data and
+    `Model.get_teob_modes_dict` generate all the modes of a model together
+    (an earlier ODE start and a higher `srate_interp`, for the $m = 4$
+    modes). The two differ by ~1e-3 rad, and the single (2,2) has glitches
+    in its phase gradient in the last tens of Hz of the band, where the
+    merger reference is: merger-time "errors" of milliseconds to seconds at
+    a few parameters. A `Model` now sets the `generation_modes` of its
+    generators to its modes, so a mode alone is the same waveform.
+- `PrecessingModel.euler_angles(anchor_to_reference_phase=True)` samples
+    the aligned-spin (2,2) over the trained band of the source's own mass;
+    it used the band of the reference mass, which for heavier sources ran
+    past the top of the band, where the waveform is zero.
+- A mass ratio within ~1e-8 of 1, whose symmetric mass ratio can round
+    above 1/4, is treated as equal mass instead of raising or giving NaN.
 - `Model.predict` and the other single-binary predictions keep BLAS on one
     thread: the regressors' products are too small for a multithreaded BLAS,
     which spent far longer synchronizing its threads than computing them,
     and slowed the rest of the call down with them. A prediction of the
     shipped model at 4000 frequencies takes ~13 ms instead of ~100; the
     waveforms are bit-for-bit unchanged.
+
+### Known issues
+
+- `default_hom_lambda12000` is poor where the heavier star is the more
+    deformable one at the edge of its box: $q \approx 3$,
+    $\Lambda_1 \gtrsim 10^4$, $\chi_{1z} \approx -0.45$, the binaries that
+    merge earliest (~500 Hz). There its merger is 1--10 ms late and the
+    mismatch, with time and reference phase optimised, is up to ~2e-3
+    (6 of 1000 validation binaries above 1e-3). Every training recipe tried
+    fails on the same binaries.
 
 ### Documentation
 
@@ -23,6 +204,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `jax` extra. The profiling guide, the TEOBResumS comparison in the
     precession page and the README's mismatch plot are updated to the
     2.0 models.
+- The overview's parameter ranges explain that any total mass is
+    accepted, and give the trained band in $Mf$ and in Hz.
 
 ## [2.0.1] - 2026-10-21
 
@@ -624,7 +807,8 @@ loaded, and the waveforms are referenced differently in time and phase.
 - Fix `ValidateModel` frequency arrays
 - Various fixes to tests
 
-[Unreleased]: https://github.com/jacopok/mlgw_bns/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/jacopok/mlgw_bns/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/jacopok/mlgw_bns/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/jacopok/mlgw_bns/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/jacopok/mlgw_bns/compare/v1.0.1...v2.0.0
 [1.0.1]: https://github.com/jacopok/mlgw_bns/compare/v1.0.0...v1.0.1

@@ -18,7 +18,7 @@ import logging
 
 from mlgw_bns.model import DEFAULT_MODES, Model
 from mlgw_bns.neural_network import KernelRidgeNetwork
-from mlgw_bns.dataset_generation import GWPriorUniformSpinParameterGenerator
+from mlgw_bns.dataset_generation import SHIPPED_BAND_HZ, GWPriorUniformSpinParameterGenerator
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
@@ -31,7 +31,8 @@ def train(downsampling: int, pca: int, nn: int) -> None:
     model = Model(
         modes=list(DEFAULT_MODES),
         filename=TRAINING_BASENAME,
-        initial_frequency_hz=5.0,
+        initial_frequency_hz=SHIPPED_BAND_HZ[0],
+        srate_hz=SHIPPED_BAND_HZ[1],
         nn_kind=KernelRidgeNetwork,
         reference_amplitude=True,
         parameter_generator_class=GWPriorUniformSpinParameterGenerator,

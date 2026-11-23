@@ -70,7 +70,7 @@ LADDER_BAND_LO = 40.0
 
 
 def eobrun_modes(params, frequencies, f0, srate, inclination):
-    from EOBRun_module import EOBRunPy
+    from mlgw_bns.dataset_generation import eobrun
 
     inside = (frequencies >= BAND_LO) & (frequencies <= BAND_HI)
     target = frequencies[inside]
@@ -83,7 +83,7 @@ def eobrun_modes(params, frequencies, f0, srate, inclination):
         output_hpc="no", arg_out="yes", use_spins=1,
         use_mode_lm=sorted({mode_to_k(m) for m in MODES}),
     )
-    f_spa, *_, hflm, htlm, dyn = EOBRunPy(par)
+    f_spa, *_, hflm, htlm, dyn = eobrun(par)
     f_spa = np.asarray(f_spa)
     tc = float(dyn["tc"]) if "tc" in dyn else float(np.asarray(htlm["t"])[-1])
     tc_s = tc * params.total_mass * _MSUN_SECONDS
@@ -309,7 +309,7 @@ def main():
 
     model = Model(modes=MODES, filename="mlgw_bns/data/default_hom")
     model.load()
-    srate = model.dataset.effective_srate_hz
+    srate = model.dataset.srate_hz
     validator = ValidateModel(model.mode_models[Mode(2, 2)])
 
     if args.abc:

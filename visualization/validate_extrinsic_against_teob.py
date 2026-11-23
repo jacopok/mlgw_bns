@@ -209,7 +209,7 @@ def teob_independent_modes(params: ParametersWithExtrinsic, frequencies):
     TEOBResumS' ``compute_hpc`` -- absorbed by the coalescence-phase
     optimisation.
     """
-    from EOBRun_module import EOBRunPy
+    from mlgw_bns.dataset_generation import eobrun
     from mlgw_bns.special_func import spinsphericalharm
 
     inside = (frequencies >= BAND_LO) & (frequencies <= BAND_HI)
@@ -225,7 +225,7 @@ def teob_independent_modes(params: ParametersWithExtrinsic, frequencies):
         output_hpc="no", arg_out="yes", use_spins=1,
         use_mode_lm=sorted({mode_to_k(mode) for mode in MODES}),
     )
-    f_spa, *_, hflm, htlm, dyn = EOBRunPy(par)
+    f_spa, *_, hflm, htlm, dyn = eobrun(par)
     f_spa = np.asarray(f_spa)
     tc = float(dyn["tc"]) if "tc" in dyn else float(np.asarray(htlm["t"])[-1])
     tc_s = tc * params.total_mass * _MSUN_SECONDS
@@ -486,7 +486,7 @@ def main() -> None:
 
     model = Model(modes=MODES, filename="mlgw_bns/data/default_hom")
     model.load()
-    SRATE_HZ = model.dataset.effective_srate_hz
+    SRATE_HZ = model.dataset.srate_hz
 
     records = validate(model, N_WAVEFORMS)
 

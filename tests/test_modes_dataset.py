@@ -5,6 +5,7 @@ against stored waveforms."""
 
 import dataclasses
 import glob
+import json
 import os
 
 import numpy as np
@@ -19,6 +20,23 @@ from mlgw_bns.neural_network import Hyperparameters, JaxMLPNetwork
 
 #: two modes from 40 Hz, three shards (the last partial)
 CONFIG = ModesDatasetConfig(n_binaries=40, shard_size=16, seed=3, modes=((2, 2), (3, 3)), initial_frequency_hz=40.0)
+
+def test_config_before_2_1_is_converted():
+    """A dataset config written with a total-mass range keeps its band."""
+    legacy = dataclasses.asdict(CONFIG)
+    legacy.update(initial_frequency_hz=5.0, srate_hz=4096.0)
+    legacy["parameter_ranges"] = dict(legacy["parameter_ranges"], mass_range=(2.0, 4.0))
+    config = ModesDatasetConfig.from_json(json.dumps(legacy))
+    assert config == dataclasses.replace(CONFIG, initial_frequency_hz=5.0 * (2.0 / 2.8), srate_hz=4096.0 * (4.0 / 2.8))
+    # the defaults are the band of the shipped models, which the old
+    # default config (5 Hz, 4096 Hz, 2-4 Msun) also had
+    assert ModesDatasetConfig(n_binaries=1).same_waveforms(
+        ModesDatasetConfig.from_json(json.dumps(dict(
+            dataclasses.asdict(ModesDatasetConfig(n_binaries=1)), initial_frequency_hz=5.0, srate_hz=4096.0,
+            parameter_ranges=dict(dataclasses.asdict(ModesDatasetConfig(n_binaries=1))["parameter_ranges"], mass_range=(2.0, 4.0)),
+        )))
+    )
+
 
 PERCEPTRON = MLPConfig(hidden=(16, 16), epochs=20, batch_size=8)
 

@@ -17,6 +17,7 @@ import argparse
 import logging
 
 from mlgw_bns.data_management import ParameterRanges
+from mlgw_bns.dataset_generation import SHIPPED_BAND_HZ
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.model import Model
 from mlgw_bns.neural_network import KernelRidgeNetwork
@@ -45,7 +46,8 @@ def train(n_jobs: int = 1) -> None:
     model = Model(
         modes=list(MODES),
         filename=TRAINING_BASENAME,
-        initial_frequency_hz=5.0,
+        initial_frequency_hz=SHIPPED_BAND_HZ[0],
+        srate_hz=SHIPPED_BAND_HZ[1],
         nn_kind=KernelRidgeNetwork,
         reference_amplitude=True,
         parameter_ranges=ParameterRanges(

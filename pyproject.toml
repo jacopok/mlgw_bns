@@ -1,6 +1,6 @@
 [project]
 name = "mlgw_bns"
-version = "2.0.1"
+version = "2.1.0"
 description = "Accelerating gravitational wave template generation with machine learning."
 license = "GPL-3.0-only"
 authors = [
@@ -84,8 +84,9 @@ exclude = ["mlgw_bns/data/*_nn.pkl"]
 profile = "black"
 
 [tool.uv.sources]
-# the fork's initial-spa-fix branch: the public TEOBResumS aborts on some of
-# the waveforms of the training sets, and its frequency-domain precessing
-# twist leaves spurious 2 pi steps in alpha
-teobresums = { git = "https://github.com/jacopok/teobresums", branch = "initial-spa-fix", subdirectory = "Python" }
+# the fork's dali-precession-mlgw branch: upstream's Dali branch with its
+# precession fixes (teobresums/teobresums PR #12), plus the fork's root-finder
+# brackets (upstream aborts on some waveforms at small or very large Lambda)
+# and the SPA start-of-band margin. Run with model = "Giotto".
+teobresums = { git = "https://github.com/jacopok/teobresums", branch = "dali-precession-mlgw", subdirectory = "Python" }
 

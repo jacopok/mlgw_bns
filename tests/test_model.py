@@ -1,4 +1,5 @@
 import dataclasses
+import warnings
 
 import numpy as np
 import pytest
@@ -124,9 +125,9 @@ def test_model_availability_flags_before_training():
 
 
 def test_default_for_testing_loads_every_mode(default_model):
-    assert default_model.base_filename == (
-        f"{PRETRAINED_MODEL_FOLDER}{MODELS_AVAILABLE[0]}"
-    )
+    assert default_model.base_filename in [
+        f"{PRETRAINED_MODEL_FOLDER}{name}" for name in MODELS_AVAILABLE
+    ]
     assert default_model.modes == DEFAULT_MODES
     assert default_model.auxiliary_data_available
     assert default_model.nn_available
@@ -197,11 +198,70 @@ def test_default_model_merger_reference_matches_teobresums(default_model):
     assert np.max(np.abs(time_errors)) < MERGER_TIME_MAX_ERROR
 
 
+# Corner of the parameter space that the uniform draws above miss: unequal
+# masses, a stiff heavy star with a soft light one, chi_1 > 0 > chi_2.
+# The first two are posterior samples of a bajes GW170817 run with the 2.0
+# default_hom_lambda12000, at whose secondary mode (q ~ 2.5, Lambda_1 ~ 10)
+# that model merged ~1.3 ms early (the 2.1 one, 0.2-0.5 ms); the others are
+# within 0.15 ms on all of them. The total mass does not matter: the error
+# is in natural units.
+# (q, Lambda_1, Lambda_2, chi_1, chi_2).
+LOW_LAMBDA_1_CORNER = [
+    (2.50, 7.0, 1765.0, 0.22, -0.17),
+    (2.47, 8.0, 1379.0, 0.27, -0.31),
+    (2.50, 7.0, 1765.0, 0.0, 0.0),
+    (2.50, 30.0, 1500.0, 0.2, -0.2),
+    (2.50, 100.0, 1500.0, 0.2, -0.2),
+    (1.50, 7.0, 1765.0, 0.22, -0.17),
+]
+
+
+def test_lambda12000_warns_of_its_merger_time():
+    from mlgw_bns.model import ModelAccuracyWarning
+
+    with pytest.warns(ModelAccuracyWarning, match="late inspiral"):
+        Model.default_for_testing("default_hom_lambda12000", modes=[Mode(2, 2)])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ModelAccuracyWarning)
+        Model.default_for_testing("default_hom", modes=[Mode(2, 2)])
+
+
+def test_merger_reference_matches_teobresums_at_low_lambda_1(default_model):
+    """The merger time against TEOBResumS's, as in
+    :func:`test_default_model_merger_reference_matches_teobresums`, in the
+    corner of :data:`LOW_LAMBDA_1_CORNER`."""
+
+    mode_model = default_model.mode_models[Mode(2, 2)]
+    validator = ValidateModel(mode_model)
+    intrinsics = [
+        ParametersWithExtrinsic(
+            mass_ratio=q,
+            lambda_1=lambda_1,
+            lambda_2=lambda_2,
+            chi_1=chi_1,
+            chi_2=chi_2,
+            distance_mpc=100.0,
+            inclination=1.0,
+            total_mass=mode_model.dataset.total_mass,
+        ).intrinsic(mode_model.dataset)
+        for q, lambda_1, lambda_2, chi_1, chi_2 in LOW_LAMBDA_1_CORNER
+    ]
+
+    time_errors, _, _ = validator.merger_reference_errors(
+        ParameterSet.from_list_of_waveform_parameters(intrinsics)
+    )
+
+    assert len(time_errors) == len(LOW_LAMBDA_1_CORNER)
+    assert np.max(np.abs(time_errors)) < MERGER_TIME_MAX_ERROR, (
+        f"merger-time errors (us): {np.round(time_errors * 1e6)}"
+    )
+
+
 @pytest.mark.parametrize("total_mass", [2.2, 2.8, 3.6])
 def test_full_waveform_mismatch_is_flat_in_total_mass(default_model, total_mass):
     """The multi-mode mismatch must not jump when the total mass crosses
     the dataset reference (2.8): below it the rescaled grid dips under
-    ``effective_initial_frequency_hz`` and the PN low-frequency extension
+    ``initial_frequency_hz`` and the PN low-frequency extension
     fires, which used to overwrite each mode's inter-mode phase constant
     with the PN one and mis-phase the HOM modes by ~1e-4."""
 

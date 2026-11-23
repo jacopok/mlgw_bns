@@ -68,7 +68,7 @@ reproduces.
   :math:`t_c` and coalescence phase :math:`\phi_c` are applied by adding
   :math:`m \phi_c - 2\pi f t_c` to the phases.
 * **Frequencies.** Below the trained band (``f M / M_ref`` under
-  ``effective_initial_frequency_hz``) each mode is continued with its
+  ``initial_frequency_hz``) each mode is continued with its
   post-Newtonian amplitude and phase, blended in as in
   :meth:`ModeModel.predict_amplitude_phase
   <mlgw_bns.mode_model.ModeModel.predict_amplitude_phase>`; above
@@ -107,6 +107,8 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
 import numpy as np
 from scipy.interpolate import CubicSpline  # type: ignore
+
+from .neural_network import regression_inputs
 
 from .dataset_generation import AMP_SI_BASE
 from .jax_mlp import array_activation
@@ -384,6 +386,8 @@ class _ModeArrays:
     phase_nodes_natural: Any
     pn_amp_nodes: Any  # frozen reference amplitude, or None
     trained_fmax_hz: float
+    # kernel ridge: the coordinates of its inputs (neural_network.regression_inputs)
+    input_coordinates: str = "linear"
 
 
 @dataclass
@@ -395,7 +399,7 @@ class _Frozen:
     connection_natural: float
     extend_low: bool
     extend_high: bool
-    # parameter ranges: (6, 2), rows total_mass, q, lambda_1, lambda_2, chi_1, chi_2
+    # parameter ranges: (5, 2), rows q, lambda_1, lambda_2, chi_1, chi_2
     ranges: Any
     safe_row: Any
     modes_arrays: list
@@ -543,6 +547,7 @@ def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
                     mlp_activation=None,
                     target_mean=np.asarray(nn.target_scaler.mean_, dtype=float),
                     target_scale=np.asarray(nn.target_scaler.scale_, dtype=float),
+                    input_coordinates=nn.input_coordinates,
                     **common,
                 )
             )
@@ -580,7 +585,6 @@ def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
 
     range_array = np.array(
         [
-            ranges.mass_range,
             ranges.q_range,
             ranges.lambda1_range,
             ranges.lambda2_range,
@@ -594,14 +598,12 @@ def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
         modes=[(mode.l, mode.m) for mode in requested],
         reference_mass=float(dataset.total_mass),
         mass_sum_seconds=float(dataset.mass_sum_seconds),
-        eff_fmin_hz=float(dataset.effective_initial_frequency_hz),
-        connection_natural=float(
-            dataset.hz_to_natural_units(dataset.effective_initial_frequency_hz)
-        ),
+        eff_fmin_hz=float(dataset.initial_frequency_hz),
+        connection_natural=float(dataset.hz_to_natural_units(dataset.initial_frequency_hz)),
         extend_low=bool(first.extend_with_post_newtonian),
         extend_high=bool(first.extend_with_zeros_at_high_frequency),
         ranges=range_array,
-        safe_row=range_array[1:].mean(axis=1),
+        safe_row=range_array.mean(axis=1),
         modes_arrays=modes_arrays,
         reference_index=modes.index(Mode(2, 2)),
     )
@@ -776,8 +778,8 @@ class BatchedSurrogate:
     def valid(self, intrinsic, total_mass, frequencies=None):
         """Boolean mask ``(N,)`` of the rows the surrogate can evaluate.
 
-        A row is valid when its total mass and intrinsic parameters are
-        within the model's parameter ranges and, if ``frequencies`` is
+        A row is valid when its intrinsic parameters are within the
+        model's parameter ranges (any total mass is) and, if ``frequencies`` is
         given, when every positive frequency is either in the trained band
         or covered by an extension the model is configured to make.
         """
@@ -788,8 +790,7 @@ class BatchedSurrogate:
 
     def _valid(self, xp, x, total_mass, frequencies):
         fr = self._frozen
-        values = xp.concatenate([total_mass[:, None], x], axis=1)
-        ok = xp.all((values >= fr.ranges[:, 0]) & (values <= fr.ranges[:, 1]), axis=1)
+        ok = xp.all((x >= fr.ranges[:, 0]) & (x <= fr.ranges[:, 1]), axis=1)
         if frequencies is not None and not (fr.extend_low and fr.extend_high):
             f = xp.asarray(frequencies, dtype=float)
             rescaled = f * (total_mass / fr.reference_mass)[:, None]
@@ -811,7 +812,7 @@ class BatchedSurrogate:
         kernel_groups: dict = {}
         for i, ma in enumerate(modes_arrays):
             if ma.regressor_kind == "kernel_ridge":
-                key = (id(ma.kernel.x_fit), id(ma.param_mean), id(ma.param_scale))
+                key = (id(ma.kernel.x_fit), id(ma.param_mean), id(ma.param_scale), ma.input_coordinates)
                 kernel_groups.setdefault(key, []).append(i)
             else:
                 activation = (x - ma.param_mean) / ma.param_scale
@@ -825,7 +826,8 @@ class BatchedSurrogate:
                 components[i] = activation
         for indices in kernel_groups.values():
             first = modes_arrays[indices[0]]
-            scaled = (x - first.param_mean) / first.param_scale
+            inputs = regression_inputs(x, first.input_coordinates, xp)
+            scaled = (inputs - first.param_mean) / first.param_scale
             predictions = _kernel_ridge(
                 xp, scaled, [modes_arrays[i].kernel for i in indices]
             )

@@ -38,7 +38,7 @@ def test_default_model_pn_connection(default_mode_model, mass, seed):
     par = random_parameters(default_mode_model, seed)
     par.total_mass = mass
 
-    f_low = default_mode_model.dataset.effective_initial_frequency_hz * (2.8 / mass)
+    f_low = default_mode_model.dataset.initial_frequency_hz * (2.8 / mass)
 
     freqs = np.linspace(f_low - 1e-4, f_low + 1e-4, num=2000)
 

@@ -114,5 +114,7 @@ visualization/merger_conventions.npz
 /visualization/modes_scale/
 /visualization/studies_dashboard/
 /slurm/*/cluster.env
+# per-run copies of the *.env.example settings (CLUSTER_ENV)
+/slurm/*/*.env
 
 visualization/*

@@ -59,7 +59,7 @@ from tqdm import tqdm
 
 import mlgw_bns
 from mlgw_bns.higher_order_modes import SUMMED_MODES
-from mlgw_bns.model import Model
+from mlgw_bns.model import DEFAULT_MODES, MODELS_AVAILABLE, Model
 from mlgw_bns.mode_model import ParametersWithExtrinsic
 
 try:  # optional -- only needed for the LAL approximants
@@ -100,6 +100,17 @@ DEFAULT_BATCH = 128
 
 MODEL = "default_hom"
 
+
+def load_model(model_name: str, modes: Optional[list] = None) -> Model:
+    """A shipped model by name (:meth:`Model.default_for_testing`), or a
+    trained one by its base filename (e.g. ``runs/log60_32768/model``)."""
+    kwargs = {} if modes is None else {"modes": list(modes)}
+    if model_name in MODELS_AVAILABLE:
+        return Model.default_for_testing(model_name, **kwargs)
+    model = Model(modes=kwargs.get("modes", DEFAULT_MODES), filename=model_name)
+    model.load()
+    return model
+
 def random_parameters(model: Model, seed: int) -> ParametersWithExtrinsic:
     """Draw one intrinsic point from the model's own generator, then add
     a random distance (log-uniform, 0.1--1e4 Mpc) and inclination."""
@@ -134,10 +145,24 @@ class Approximant(ABC):
     #: JAX path needs O(batch * n_points) memory).
     max_points: float = float("inf")
 
-    def __init__(self, model_name: str = MODEL, modes: Optional[list] = None):
-        kwargs = {} if modes is None else {"modes": list(modes)}
-        self.model = Model.default_for_testing(model_name, **kwargs)
+    #: which model, when several are timed in one sweep (``--models``):
+    #: appended to the name, and its own family in the figures
+    label: Optional[str] = None
+
+    def __init__(
+        self, model_name: str = MODEL, modes: Optional[list] = None, label: Optional[str] = None
+    ):
+        self.model = load_model(model_name, modes)
         self.dataset = self.model.dataset
+        self.label = label
+
+    @property
+    def full_name(self) -> str:
+        return self.name if self.label is None else f"{self.name} [{self.label}]"
+
+    @property
+    def figure_family(self) -> str:
+        return self.family if self.label is None else self.full_name
 
     @abstractmethod
     def setup(self, seed: int, n_points: int) -> None:
@@ -148,10 +173,10 @@ class Approximant(ABC):
         ...
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, Approximant) and self.name == other.name
+        return isinstance(other, Approximant) and self.full_name == other.full_name
 
     def __hash__(self) -> int:
-        return hash(self.name)
+        return hash(self.full_name)
 
 
 class MlgwBns(Approximant):
@@ -178,8 +203,8 @@ class MlgwBnsReducedModes(MlgwBns):
     name = "mlgw_bns (22, 21, 33, 44 only)"
     is_reduced_modes = True
 
-    def __init__(self, model_name: str = MODEL) -> None:
-        super().__init__(model_name, modes=REDUCED_MODES)
+    def __init__(self, model_name: str = MODEL, label: Optional[str] = None) -> None:
+        super().__init__(model_name, modes=REDUCED_MODES, label=label)
 
 
 class MlgwBnsJax(Approximant):
@@ -188,8 +213,10 @@ class MlgwBnsJax(Approximant):
     name = "mlgw_bns (JAX)"
     family = "mlgw_bns (JAX)"
 
-    def __init__(self, model_name: str = MODEL, modes: Optional[list] = None) -> None:
-        super().__init__(model_name, modes=modes)
+    def __init__(
+        self, model_name: str = MODEL, modes: Optional[list] = None, label: Optional[str] = None
+    ) -> None:
+        super().__init__(model_name, modes=modes, label=label)
         import jax
 
         from mlgw_bns.jax_predict import model_to_jax_waveform
@@ -238,8 +265,8 @@ class MlgwBnsJaxReducedModes(MlgwBnsJax):
     name = "mlgw_bns (JAX, 22, 21, 33, 44 only)"
     is_reduced_modes = True
 
-    def __init__(self, model_name: str = MODEL) -> None:
-        super().__init__(model_name, modes=REDUCED_MODES)
+    def __init__(self, model_name: str = MODEL, label: Optional[str] = None) -> None:
+        super().__init__(model_name, modes=REDUCED_MODES, label=label)
 
 
 class MlgwBnsJaxBatch(Approximant):
@@ -251,8 +278,10 @@ class MlgwBnsJaxBatch(Approximant):
         batch: int = DEFAULT_BATCH,
         model_name: str = MODEL,
         modes: Optional[list] = None,
+        label: Optional[str] = None,
+        max_points: float = MAX_BATCH_POINTS,
     ) -> None:
-        super().__init__(model_name, modes=modes)
+        super().__init__(model_name, modes=modes, label=label)
         import jax
 
         from mlgw_bns.jax_predict import model_to_jax_waveform
@@ -260,7 +289,7 @@ class MlgwBnsJaxBatch(Approximant):
         self._jax = jax
         self.batch = batch
         self.n_waveforms = batch
-        self.max_points = MAX_BATCH_POINTS
+        self.max_points = max_points
         self.name = f"mlgw_bns (JAX, batch {batch})"
         self.family = self.name
         self._predict = jax.jit(
@@ -309,9 +338,92 @@ class MlgwBnsJaxBatchReducedModes(MlgwBnsJaxBatch):
 
     is_reduced_modes = True
 
-    def __init__(self, batch: int = DEFAULT_BATCH, model_name: str = MODEL) -> None:
-        super().__init__(batch, model_name, modes=REDUCED_MODES)
+    def __init__(
+        self, batch: int = DEFAULT_BATCH, model_name: str = MODEL, label: Optional[str] = None,
+        max_points: float = MAX_BATCH_POINTS,
+    ) -> None:
+        super().__init__(batch, model_name, modes=REDUCED_MODES, label=label, max_points=max_points)
         self.name = f"mlgw_bns (JAX, batch {batch}, 22, 21, 33, 44 only)"
+
+
+class PrecessingJax(Approximant):
+    """:meth:`PrecessingModel.jax_predict`, JIT-compiled, on ``batch``
+    binaries per call (one: a single binary) of
+    ``validate_model.random_precessing_parameters``, over the same band as
+    the aligned approximants; the time is divided by ``batch``."""
+
+    def __init__(
+        self, batch: int = 1, model_name: str = MODEL, label: Optional[str] = None,
+        max_points: float = float("inf"),
+    ) -> None:
+        super().__init__(model_name, label=label)
+        import jax
+
+        from mlgw_bns.batched_precession import batch_arguments
+        from mlgw_bns.precessing_model import PrecessingModel
+
+        self._jax = jax
+        self._batch_arguments = batch_arguments
+        self._predict = jax.jit(PrecessingModel(self.model).jax_predict())
+        self.batch = self.n_waveforms = batch
+        self.max_points = max_points
+        self.name = "precessing (JAX)" if batch == 1 else f"precessing (JAX, batch {batch})"
+        self.family = self.name
+        self._warm: set[int] = set()
+
+    def setup(self, seed: int, n_points: int) -> None:
+        from validate_model import random_precessing_parameters
+
+        freqs = np.linspace(
+            float(np.min(self.dataset.frequencies_hz)),
+            float(np.max(self.dataset.frequencies_hz)) - 1,
+            num=n_points,
+        )
+        self.args = self._batch_arguments(
+            [random_precessing_parameters(self.model, self.batch * seed + i) for i in range(self.batch)],
+            freqs,
+        )
+        if n_points not in self._warm:  # compile once per grid size
+            self._jax.block_until_ready(self._predict(*self.args))
+            self._warm.add(n_points)
+
+    def calculate(self) -> None:
+        self._jax.block_until_ready(self._predict(*self.args))
+
+
+class CachedTimings(Approximant):
+    """Timings of an approximant read back from an earlier run's ``.npz``
+    (``--teob-cache``): plotted beside the others, never run again."""
+
+    def __init__(self, name: str) -> None:
+        self.name = self.family = name
+
+    def setup(self, seed: int, n_points: int) -> None:
+        raise RuntimeError("cached timings are not run")
+
+    def calculate(self) -> None:
+        raise RuntimeError("cached timings are not run")
+
+
+def save_tests(path: Path, tests: list["TestCase"], n_points_list: list[int]) -> None:
+    raw = {f"{t.approximant.full_name}|{t.seed}|{t.n_points}": np.array(t.times_ms) for t in tests}
+    np.savez(path, n_points_list=n_points_list, **raw)
+    print(f"wrote {path}")
+
+
+def load_tests(path: Path) -> tuple[list["TestCase"], list[Approximant]]:
+    """The tests :func:`save_tests` wrote, as :class:`CachedTimings`."""
+    data = np.load(path)
+    approximants: dict[str, CachedTimings] = {}
+    tests = []
+    for key in data.files:
+        if key == "n_points_list":
+            continue
+        name, seed, n_points = key.rsplit("|", 2)
+        approx = approximants.setdefault(name, CachedTimings(name))
+        tests.append(TestCase(seed=int(seed), approximant=approx, n_points=int(n_points),
+                              times_ms=list(data[key])))
+    return tests, list(approximants.values())
 
 
 class TEOBResumSPA(Approximant):
@@ -445,7 +557,24 @@ def create_and_run_tests(
     n_epochs: int,
     n_points_list: list[int],
     approximants: list[Approximant],
+    one_grid_size_at_a_time: bool = False,
 ) -> list[TestCase]:
+    """With ``one_grid_size_at_a_time``, the grid sizes in a random order,
+    each compiled, swept (every approximant, seed and epoch shuffled) and
+    then dropped (``jax.clear_caches``) before the next: every compiled JAX
+    executable holds memory mappings, and with many models, methods and
+    grid sizes alive at once they exceed the kernel's limit
+    (``vm.max_map_count``, 65530) and the compilation aborts."""
+    if one_grid_size_at_a_time:
+        order = list(n_points_list)
+        random.Random(2).shuffle(order)
+        tests: list[TestCase] = []
+        for n_points in tqdm(order, desc="grid sizes", unit="grid size"):
+            tests += create_and_run_tests(n_seeds, n_epochs, [n_points], approximants)
+            if _HAVE_JAX:
+                jax.clear_caches()
+        return tests
+
     # Factor out any one-off warm-up (jit, caches) before timing. In
     # particular, each JAX approximant's `setup` triggers a fresh JIT
     # compile (tens of seconds) the first time it sees a given `n_points`;
@@ -493,10 +622,10 @@ def make_figure(
     and repeat the fit formula on every line; the opaque/faded convention
     is explained by a text annotation instead of extra legend entries.
     """
-    families = list(dict.fromkeys(a.family for a in approximants))
+    families = list(dict.fromkeys(a.figure_family for a in approximants))
     family_members: dict[str, list[Approximant]] = {f: [] for f in families}
     for a in approximants:
-        family_members[a.family].append(a)
+        family_members[a.figure_family].append(a)
 
     cmap = plt.get_cmap("viridis")
     family_colors = dict(
@@ -505,11 +634,11 @@ def make_figure(
 
     plt.figure(figsize=(7, 4.5))
     for approximant in approximants:
-        color = family_colors[approximant.family]
-        has_pair = len(family_members[approximant.family]) > 1
+        color = family_colors[approximant.figure_family]
+        has_pair = len(family_members[approximant.figure_family]) > 1
         alpha = 1.0 if (approximant.is_reduced_modes or not has_pair) else FULL_MODE_ALPHA
 
-        points = [n for n in n_points_list if n <= approximant.max_points]
+        points = sorted({t.n_points for t in tests if t.approximant == approximant})
         times = get_attribute_by_n_points_for_approx(
             tests, approximant, "avg_time", np.average
         )
@@ -527,15 +656,77 @@ def make_figure(
         Line2D([], [], color=family_colors[f], lw=1.5, label=f) for f in families
     ]
     plt.legend(handles=family_handles, fontsize=8, loc="upper left")
-    plt.gca().annotate(
-        "opaque: reduced modes (22, 21, 33, 44)\n"
-        "faint: full mode set",
-        xy=(0.02, 0.02),
-        xycoords="axes fraction",
-        fontsize=7,
-        va="bottom",
-    )
+    if any(a.is_reduced_modes for a in approximants):
+        plt.gca().annotate(
+            "opaque: reduced modes (22, 21, 33, 44)\n"
+            "faint: full mode set",
+            xy=(0.02, 0.02),
+            xycoords="axes fraction",
+            fontsize=7,
+            va="bottom",
+        )
     plt.tight_layout()
+
+
+#: ``--variants`` of a ``--models`` sweep: an approximant of one model
+VARIANTS: dict[str, Callable[..., Approximant]] = {
+    "numpy": lambda name, label, batch, cap: MlgwBns(name, label=label),
+    "numpy-reduced": lambda name, label, batch, cap: MlgwBnsReducedModes(name, label=label),
+    "jax": lambda name, label, batch, cap: MlgwBnsJax(name, label=label),
+    "jax-reduced": lambda name, label, batch, cap: MlgwBnsJaxReducedModes(name, label=label),
+    "jax-batch": lambda name, label, batch, cap: MlgwBnsJaxBatch(batch, name, label=label, max_points=cap),
+    "jax-batch-reduced": lambda name, label, batch, cap: MlgwBnsJaxBatchReducedModes(
+        batch, name, label=label, max_points=cap),
+    "precessing-jax": lambda name, label, batch, cap: PrecessingJax(1, name, label=label),
+    "precessing-jax-batch": lambda name, label, batch, cap: PrecessingJax(
+        batch, name, label=label, max_points=cap),
+}
+
+
+def compare_models(args: argparse.Namespace, n_points_list: list[int]) -> None:
+    """Every variant of every model of ``--models`` (and TEOBResumS-SPA once,
+    or from ``--teob-cache``), one grid size at a time in a random order,
+    every model, variant, seed and epoch shuffled at each: ``<out>.npz`` of
+    every timing, and a figure per variant, ``<out>_<variant>.png``, of all
+    the models with their ``c1 + c2 N`` fits and TEOBResumS-SPA."""
+    models = [entry.split("=", 1) for entry in args.models]
+    variants = [v for v in args.variants.split(",") if v != "teob"]
+    unknown = set(variants) - set(VARIANTS)
+    if unknown:
+        raise SystemExit(f"unknown variants {sorted(unknown)}: of {sorted(VARIANTS)} and teob")
+    if any(v.startswith(("jax", "precessing")) for v in variants) and not _HAVE_JAX:
+        raise SystemExit("JAX is not importable, and JAX variants were asked for")
+
+    by_variant: dict[str, list[Approximant]] = {
+        v: [VARIANTS[v](name, label, args.jax_batch, args.max_batch_points) for label, name in models]
+        for v in variants
+    }
+    approximants = [a for group in by_variant.values() for a in group]
+    teob: list[Approximant] = []
+    cached: list = []
+    if "teob" in args.variants.split(","):
+        if args.teob_cache is not None and args.teob_cache.exists():
+            cached, teob = load_tests(args.teob_cache)
+            print(f"TEOBResumS-SPA timings from {args.teob_cache}, not run again")
+        else:
+            teob = [TEOBResumSPA(models[0][1])]
+            approximants += teob
+
+    print("timing " + ", ".join(a.full_name for a in approximants))
+    tests = create_and_run_tests(
+        args.seeds, args.epochs, n_points_list, approximants, one_grid_size_at_a_time=True
+    )
+    save_tests(args.out.with_suffix(".npz"), tests, n_points_list)
+    if teob and not cached and args.teob_cache is not None:
+        save_tests(args.teob_cache, [t for t in tests if t.approximant in teob], n_points_list)
+
+    for variant, group in by_variant.items():
+        make_figure(tests + cached, group + teob, n_points_list)
+        plt.title(variant, fontsize=9)
+        out = args.out.parent / f"{args.out.name}_{variant}.png"
+        plt.savefig(out, dpi=150)
+        plt.close()
+        print(f"wrote {out}")
 
 
 def main() -> None:
@@ -583,6 +774,39 @@ def main() -> None:
         default=DEFAULT_BATCH,
     )
     parser.add_argument(
+        "--log-min",
+        type=float,
+        default=2.0,
+        help="smallest grid size is 10**log_min evaluation points",
+    )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=None,
+        metavar="LABEL=MODEL",
+        help="time these models in one shuffled sweep (a shipped name or a "
+        "trained model's base filename, each labelled), with --variants, "
+        "instead of the default single-model comparison",
+    )
+    parser.add_argument(
+        "--variants",
+        default="numpy,jax,jax-batch,precessing-jax,precessing-jax-batch,teob",
+        help="with --models, comma-separated, of: " + ", ".join(VARIANTS) + ", teob",
+    )
+    parser.add_argument(
+        "--max-batch-points",
+        type=float,
+        default=MAX_BATCH_POINTS,
+        help="largest grid of the batched approximants",
+    )
+    parser.add_argument(
+        "--teob-cache",
+        type=Path,
+        default=None,
+        help="with --models: TEOBResumS-SPA's timings are read from this .npz "
+        "if it exists (and not run again), else run on the first model and saved there",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=Path(__file__).with_name("benchmark_evaluation_time"),
@@ -595,8 +819,10 @@ def main() -> None:
         args.seeds, args.epochs, args.n_grid, args.log_max = 3, 2, 10, 4.0
 
     n_points_list = sorted(
-        {int(x) for x in np.logspace(2, args.log_max, num=args.n_grid, dtype=int)}
+        {int(x) for x in np.logspace(args.log_min, args.log_max, num=args.n_grid, dtype=int)}
     )
+    if args.models is not None:
+        return compare_models(args, n_points_list)
 
     approximants: list[Approximant] = [
         MlgwBns(),

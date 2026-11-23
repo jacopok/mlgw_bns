@@ -109,8 +109,8 @@ class ValidateModel:
         else:
             mask = np.where(
                 np.logical_and(
-                    all_frequencies < self.model.dataset.effective_srate_hz / 2,
-                    all_frequencies > self.model.dataset.effective_initial_frequency_hz,
+                    all_frequencies < self.model.dataset.srate_hz / 2,
+                    all_frequencies > self.model.dataset.initial_frequency_hz,
                 )
             )
 

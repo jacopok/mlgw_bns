@@ -11,7 +11,7 @@ from typing import Any, Callable, ClassVar, Optional, Type, Union
 
 import h5py
 import numpy as np
-from numpy.random import default_rng
+from numpy.random import Generator, default_rng
 from joblib import Parallel, delayed
 
 from .progress import joblib_progress
@@ -365,6 +365,22 @@ class BarePostNewtonianGenerator(WaveformGenerator):
         )
 
 
+#: The TEOBResumS model the waveforms are generated with: the quasi-circular
+#: one of its Dali branch, which the shipped models are trained on. Without
+#: it, the Dali branch runs its eccentric model, Dali, which has no
+#: frequency-domain output; older TEOBResumS ignore the key.
+TEOB_MODEL = "Giotto"
+
+
+def eobrun(parameters: dict) -> tuple:
+    """``EOBRunPy(parameters)``, with ``model`` :data:`TEOB_MODEL` unless
+    ``parameters`` sets one: for the callers that build their own TEOBResumS
+    parameters instead of :meth:`WaveformParameters.teobresums`."""
+    from EOBRun_module import EOBRunPy  # type: ignore
+
+    return EOBRunPy({"model": TEOB_MODEL} | parameters)
+
+
 class TEOBResumSGenerator(BarePostNewtonianGenerator):
     """Generate waveforms using the
     TEOBResumS effective-one-body code"""
@@ -538,27 +554,15 @@ class WaveformParameters:
         For the precise definition see equation 27 of `this paper <http://arxiv.org/abs/2102.00017>`__."""
         return compute_delta_lambda(self.m_1, self.m_2, self.lambda_1, self.lambda_2)
 
-    def teobresums(
-        self, use_effective_frequencies: bool = True
-    ) -> dict[str, Union[float, int, str]]:
+    def teobresums(self) -> dict[str, Union[float, int, str]]:
         """Parameter dictionary in a format compatible with
         TEOBResumS.
 
         The parameters are all converted to natural units.
         """
 
-        if use_effective_frequencies:
-            initial_freq = (
-                self.dataset.effective_initial_frequency_hz
-                * self.dataset.mass_sum_seconds
-            )
-            srate = self.dataset.effective_srate_hz * self.dataset.mass_sum_seconds
-        else:
-            initial_freq = (
-                self.dataset.initial_frequency_hz 
-                * self.dataset.mass_sum_seconds
-            )
-            srate = self.dataset.srate_hz * self.dataset.mass_sum_seconds
+        initial_freq = self.dataset.initial_frequency_hz * self.dataset.mass_sum_seconds
+        srate = self.dataset.srate_hz * self.dataset.mass_sum_seconds
 
         return {
             "q": self.mass_ratio,
@@ -580,6 +584,7 @@ class WaveformParameters:
             "output_hpc": "no",
             "time_shift_FD": "yes",
             "ode_tmax": 1e12,
+            "model": TEOB_MODEL,
         }
 
     def taylor_f2(
@@ -606,7 +611,7 @@ class WaveformParameters:
             "s2z": self.chi_2,
             "lambda1": self.lambda_1,
             "lambda2": self.lambda_2,
-            "f_min": self.dataset.effective_initial_frequency_hz, # TODO: check if this is correct
+            "f_min": self.dataset.initial_frequency_hz, # TODO: check if this is correct
             "phi_ref": 0,
             "phaseorder": 11,
             "tidalorder": 15,
@@ -984,6 +989,139 @@ class GWPriorUniformSpinParameterGenerator(GWPriorParameterGenerator):
         )
 
 
+def uniform_sum_then_position(
+    rng: Generator,
+    weights: tuple[float, float],
+    range_1: tuple[float, float],
+    range_2: tuple[float, float],
+    log_sum: bool = False,
+    sum_range: Optional[tuple[float, float]] = None,
+) -> tuple[float, float]:
+    r"""Draw :math:`(x_1, x_2)` in a box through :math:`S = w_1 x_1 + w_2 x_2`.
+
+    :math:`S` is uniform over its range on the box (or log-uniform, with
+    ``log_sum``), then the position along the segment of constant :math:`S`
+    inside the box is uniform. ``sum_range`` restricts :math:`S` to a part
+    of its range on the box. This is the chart the effective spin and
+    tidal deformability are sampled in by nessai-gw's
+    ``EffectiveSpinReparameterisation`` and
+    ``EffectiveTidalDeformabilityReparameterisation``, but with the effective
+    parameter uniform instead of following its prior: compared with a uniform
+    draw over the box, the corners where the segments are short (both
+    :math:`x_i` small, or both large) are much more densely populated.
+    """
+    w_1, w_2 = weights
+    s_lo = w_1 * range_1[0] + w_2 * range_2[0]
+    s_hi = w_1 * range_1[1] + w_2 * range_2[1]
+    if sum_range is not None:
+        s_lo, s_hi = max(s_lo, sum_range[0]), min(s_hi, sum_range[1])
+    if log_sum:
+        if s_lo <= 0:
+            raise ValueError("a log-uniform sum needs a positive lower bound")
+        s = float(np.exp(rng.uniform(np.log(s_lo), np.log(s_hi))))
+    else:
+        s = float(rng.uniform(s_lo, s_hi))
+    x_1_lo = max(range_1[0], (s - w_2 * range_2[1]) / w_1)
+    x_1_hi = min(range_1[1], (s - w_2 * range_2[0]) / w_1)
+    x_1 = float(rng.uniform(x_1_lo, x_1_hi))
+    x_2 = float(np.clip((s - w_1 * x_1) / w_2, *range_2))
+    return x_1, x_2
+
+
+class EffectiveParameterGenerator(UniformParameterGenerator):
+    r"""Training parameters drawn in the effective parameters of a PE analysis.
+
+    The mass ratio is uniform, as in :class:`UniformParameterGenerator`. The
+    deformabilities are drawn through the binary tidal deformability
+    :math:`\tilde\Lambda` (uniform over its range at the drawn mass ratio,
+    or log-uniform in :class:`LogEffectiveParameterGenerator`) and the
+    position along the line of constant :math:`\tilde\Lambda` inside the box
+    of ``lambda1_range`` and ``lambda2_range`` (uniform); the aligned spins
+    likewise, through :math:`\chi_{\rm eff} = (m_1\chi_1 + m_2\chi_2)/M`.
+    See :func:`uniform_sum_then_position`.
+
+    At fixed mass ratio both are linear maps of the component parameters, so
+    the samples still cover the same box. But where a uniform draw over the
+    box leaves the corner of two small deformabilities almost empty (both
+    :math:`\Lambda_i < 20` for :math:`\sim 10^{-5}` of the samples, with
+    :math:`\Lambda_i \in [5, 5000]`), here every value of
+    :math:`\tilde\Lambda` gets the same share.
+    """
+
+    log_lambda_tilde: bool = False
+
+    def __next__(self) -> WaveformParameters:
+        return self._draw(self.log_lambda_tilde)
+
+    def _draw(self, log_lambda_tilde: bool) -> WaveformParameters:
+        mass_ratio = self.rng.uniform(*self.q_range)
+        m_1, m_2 = mass_ratio / (1 + mass_ratio), 1 / (1 + mass_ratio)
+        lambda_weights = (compute_lambda_tilde(m_1, m_2, 1.0, 0.0),
+                          compute_lambda_tilde(m_1, m_2, 0.0, 1.0))
+        lambda_1, lambda_2 = uniform_sum_then_position(
+            self.rng, lambda_weights, self.lambda1_range, self.lambda2_range,
+            log_sum=log_lambda_tilde,
+        )
+        chi_1, chi_2 = uniform_sum_then_position(
+            self.rng, (m_1, m_2), self.chi1_range, self.chi2_range
+        )
+        return WaveformParameters(
+            mass_ratio, lambda_1, lambda_2, chi_1, chi_2, self.dataset
+        )
+
+
+class LogEffectiveParameterGenerator(EffectiveParameterGenerator):
+    r""":class:`EffectiveParameterGenerator` with :math:`\tilde\Lambda`
+    log-uniform (a named class, so it can be passed as
+    ``parameter_generator_class`` and pickled)."""
+
+    log_lambda_tilde = True
+
+
+class MixedParameterGenerator(LogEffectiveParameterGenerator):
+    r"""Half of the draws from :class:`UniformParameterGenerator`, half from
+    :class:`LogEffectiveParameterGenerator`, each draw choosing at random.
+
+    The surrogate's error grows by orders of magnitude towards small
+    :math:`\tilde\Lambda`, where a uniform draw leaves the box almost
+    empty, while a log-uniform :math:`\tilde\Lambda` takes so much from
+    the rest of the box that it does worse there than uniform draws: the
+    mixture keeps at least half the density of either everywhere.
+    """
+
+    def __next__(self) -> WaveformParameters:
+        if self.rng.uniform() < 0.5:
+            return UniformParameterGenerator.__next__(self)
+        return super().__next__()
+
+
+class EffectiveMixedParameterGenerator(EffectiveParameterGenerator):
+    r""":class:`EffectiveParameterGenerator` with :math:`\tilde\Lambda`
+    uniform for half of the draws and log-uniform for the other half, each
+    draw choosing at random.
+
+    A uniform :math:`\tilde\Lambda` fills its whole range, up to the corner
+    of two large deformabilities, but leaves little at small
+    :math:`\tilde\Lambda`, where the surrogate's error grows by orders of
+    magnitude; a log-uniform one does the opposite. The mixture keeps at
+    least half the density of either everywhere.
+    """
+
+    def __next__(self) -> WaveformParameters:
+        return self._draw(bool(self.rng.uniform() < 0.5))
+
+
+#: The training-set distributions by name, as
+#: :class:`~mlgw_bns.modes_dataset.ModesDatasetConfig` refers to them.
+PARAMETER_GENERATORS: dict[str, Type[ParameterGenerator]] = {
+    "uniform": UniformParameterGenerator,
+    "effective": EffectiveParameterGenerator,
+    "effective_log": LogEffectiveParameterGenerator,
+    "mixed": MixedParameterGenerator,
+    "effective_mixed": EffectiveMixedParameterGenerator,
+}
+
+
 class Dataset:
     r"""Metadata for a dataset.
 
@@ -1008,12 +1146,18 @@ class Dataset:
     ----------
     initial_frequency_hz : float
             Initial frequency from which the waveforms in this dataset
-            should be generated by the effective one body model.
+            should be generated by the effective one body model, in Hz
+            at the reference mass :attr:`total_mass`. For a binary of
+            total mass :math:`M` the trained band starts at
+            ``initial_frequency_hz * total_mass / M``; below it the model
+            is extended with a post-Newtonian waveform.
     srate_hz : float
-            Sampling rate in the time domain.
+            Sampling rate in the time domain, at the reference mass.
             The maximum frequency of the generated time-domain waveforms will be
             half of this value (see
-            `Nyquist frequency <https://en.wikipedia.org/wiki/Nyquist_frequency>`_).
+            `Nyquist frequency <https://en.wikipedia.org/wiki/Nyquist_frequency>`_);
+            like the initial one, it scales as :math:`1/M`. Above it the
+            model is extended with zeros.
     delta_f_hz : Optional[float]
             Frequency spacing for the generated waveforms.
             If it is not given, it defaults to the one computed through
@@ -1056,8 +1200,8 @@ class Dataset:
     Examples
     --------
     >>> dataset = Dataset(initial_frequency_hz=20., srate_hz=4096.)
-    >>> print(dataset.delta_f_hz) # should be 1/4096 Hz, doctest: +NUMBER
-    0.000244140625
+    >>> print(dataset.delta_f_hz) # should be 1/2048 Hz, doctest: +NUMBER
+    0.00048828125
 
     Class Attributes
     ----------------
@@ -1086,13 +1230,6 @@ class Dataset:
         self.reference_amplitude = reference_amplitude
         self.initial_frequency_hz = initial_frequency_hz
         self.srate_hz = srate_hz
-
-        (self.effective_initial_frequency_hz, self.effective_srate_hz) = expand_frequency_range(
-            initial_frequency_hz,
-            srate_hz,
-            parameter_ranges.mass_range,
-            self.total_mass,
-        )
         self.waveform_generator = waveform_generator
         self.current_mode = None
         if hasattr(self.waveform_generator, "mode") and self.waveform_generator.mode is not None:
@@ -1150,11 +1287,21 @@ class Dataset:
             f"{self.__class__.__name__}("
             f"initial_frequency_hz={self.initial_frequency_hz}, "
             f"srate_hz={self.srate_hz}, "
-            f"effective_initial_frequency_hz={self.effective_initial_frequency_hz}, "
-            f"effective_srate_hz={self.effective_srate_hz}, "
             f"delta_f_hz={self.delta_f_hz}"
             ")"
         )
+
+    # Until 2.1 the band was widened from these two by a total-mass range;
+    # it is now given directly, and the "effective" names are aliases.
+    @property
+    def effective_initial_frequency_hz(self) -> float:
+        """Deprecated alias of :attr:`initial_frequency_hz`."""
+        return self.initial_frequency_hz
+
+    @property
+    def effective_srate_hz(self) -> float:
+        """Deprecated alias of :attr:`srate_hz`."""
+        return self.srate_hz
 
     @property
     def waveform_length(self) -> int:
@@ -1163,7 +1310,7 @@ class Dataset:
         else:
             return (
                 int(
-                    (self.effective_srate_hz / 2 - self.effective_initial_frequency_hz)
+                    (self.srate_hz / 2 - self.initial_frequency_hz)
                     / self.delta_f_hz
                 )
                 + 1
@@ -1208,14 +1355,14 @@ class Dataset:
             # modes at inference. Finest grid satisfies 33/44; 22/21 tolerate oversampling.
             # Shared cache avoids recomputing ~519k-point array per mode (~60ms each).
             return _get_multiband_frequencies_hz(
-                self.effective_initial_frequency_hz,
-                self.effective_srate_hz,
+                self.initial_frequency_hz,
+                self.srate_hz,
                 self.f_pivot_hz,
             )
         else:
             return np.arange(
-                self.effective_initial_frequency_hz,
-                self.effective_srate_hz / 2 + self.delta_f_hz,
+                self.initial_frequency_hz,
+                self.srate_hz / 2 + self.delta_f_hz,
                 self.delta_f_hz,
             )
 
@@ -1266,7 +1413,7 @@ class Dataset:
         seglen = (
             5
             / 256
-            * (np.pi * self.effective_initial_frequency_hz) ** (-8 / 3)
+            * (np.pi * self.initial_frequency_hz) ** (-8 / 3)
             * (self.mass_sum_seconds * (1 / 4) ** (3 / 5)) ** (-5 / 3)
         )
 
@@ -1702,3 +1849,47 @@ def expand_frequency_range(
         initial_frequency * (m_min / reference_mass),
         final_frequency * (m_max / reference_mass),
     )
+
+
+def migrate_mass_range(settings: dict) -> dict:
+    """Convert model settings saved before 2.1, which had a total-mass range.
+
+    Until 2.1 :class:`~mlgw_bns.data_management.ParameterRanges` had a
+    ``mass_range``, and the trained band was ``initial_frequency_hz`` at
+    the lightest mass to ``srate_hz / 2`` at the heaviest one. The band is
+    now given directly at the reference mass: this replaces the two
+    frequencies with that band, computed as before (so a model trained then
+    has the same frequency grid, bit for bit), and drops the mass range.
+
+    Parameters
+    ----------
+    settings : dict
+        With the keys ``initial_frequency_hz``, ``srate_hz`` and
+        ``parameter_ranges`` (a dict), as a :class:`~mlgw_bns.mode_model.ModeModel`'s
+        metadata or a :class:`~mlgw_bns.modes_dataset.ModesDatasetConfig`.
+        Settings without a ``mass_range`` are returned unchanged.
+
+    Returns
+    -------
+    dict
+        A converted copy.
+    """
+    ranges = settings.get("parameter_ranges")
+    if not isinstance(ranges, dict) or "mass_range" not in ranges:
+        return settings
+    ranges = dict(ranges)
+    mass_range = tuple(ranges.pop("mass_range"))
+    initial_frequency_hz, srate_hz = expand_frequency_range(
+        settings["initial_frequency_hz"], settings["srate_hz"], mass_range, Dataset.total_mass
+    )
+    return dict(
+        settings,
+        initial_frequency_hz=initial_frequency_hz,
+        srate_hz=srate_hz,
+        parameter_ranges=ranges,
+    )
+
+
+#: ``(initial_frequency_hz, srate_hz)`` of the shipped models, at the
+#: reference mass: 5 Hz for a 2 Msun binary, up to 2048 Hz for a 4 Msun one.
+SHIPPED_BAND_HZ = expand_frequency_range(5.0, 4096.0, (2.0, 4.0), Dataset.total_mass)

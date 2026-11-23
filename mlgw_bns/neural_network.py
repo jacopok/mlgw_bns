@@ -129,6 +129,31 @@ def save_kernel_ridge_default(
 #: the kernel itself.
 KERNEL_ALPHA_GRID = np.logspace(-13.0, 0.0, 53)
 
+#: The coordinates :class:`KernelRidgeNetwork` can regress in
+#: (:attr:`Hyperparameters.input_coordinates`): ``"linear"``, the parameters
+#: as they are; ``"log_lambda"``, with each tidal deformability replaced by
+#: :math:`\log(1 + \Lambda)`.
+INPUT_COORDINATES = ("linear", "log_lambda")
+
+
+def regression_inputs(x, coordinates: str = "linear", xp=np):
+    r"""The inputs of a regressor in its ``coordinates`` (see
+    :data:`INPUT_COORDINATES`), from parameters ``x`` of shape ``(..., 5)``
+    ordered as :attr:`~mlgw_bns.dataset_generation.ParameterSet.parameter_array`
+    (:math:`q, \Lambda_1, \Lambda_2, \chi_1, \chi_2`).
+
+    With one kernel width for the whole range of the deformabilities, linear
+    coordinates resolve the waveform's fast variation at small
+    :math:`\Lambda` as coarsely as its slow one at large :math:`\Lambda`;
+    :math:`\log(1 + \Lambda)` spreads them evenly, and stays finite at
+    :math:`\Lambda = 0`. ``xp`` is the array module (numpy or jax.numpy).
+    """
+    if coordinates == "linear":
+        return x
+    if coordinates == "log_lambda":
+        return xp.concatenate([x[..., :1], xp.log1p(x[..., 1:3]), x[..., 3:]], axis=-1)
+    raise ValueError(f"Unknown input_coordinates {coordinates!r}: expected one of {INPUT_COORDINATES}.")
+
 
 @dataclass
 class KernelRidgeSelection:
@@ -342,6 +367,10 @@ class Hyperparameters:
             selection, relative to :math:`\epsilon \sum_j |K(x, x_j) a_j|`
             (0.1 by default, calibrated on the packaged regressors; 0
             selects on the leave-one-out error alone).
+    input_coordinates : str, optional
+            The coordinates :class:`KernelRidgeNetwork` regresses in:
+            ``"linear"`` (the default) or ``"log_lambda"``, see
+            :func:`regression_inputs`. Ignored by the other backends.
     mlp : MLPConfig, optional
             Architecture and training of a :class:`JaxMLPNetwork`; ``None``
             (the default) for those of :class:`~mlgw_bns.jax_mlp.MLPConfig`.
@@ -387,6 +416,10 @@ class Hyperparameters:
     #: prediction in different orders (a batch and single rows, or numpy
     #: and JAX) differ by 0.07--0.14 times ``eps * sum_j |K_j a_j|``.
     kernel_rounding_factor: float = field(default=0.1)
+    #: The coordinates :class:`KernelRidgeNetwork` regresses in, see
+    #: :func:`regression_inputs`; models from before this field existed
+    #: pick up ``"linear"``, which is how they were trained.
+    input_coordinates: str = field(default="linear")
 
     mlp: Optional[MLPConfig] = field(default=None)
     mlp_loss: str = field(default="natural")
@@ -583,6 +616,7 @@ class Hyperparameters:
         kernel_gamma: Optional[float] = None,
         kernel_alpha: Optional[float] = None,
         kernel_alpha_selection: str = "loo",
+        input_coordinates: str = "linear",
     ) -> "Hyperparameters":
         """Build a :class:`Hyperparameters` for :class:`KernelRidgeNetwork`.
 
@@ -607,11 +641,18 @@ class Hyperparameters:
         kernel_alpha_selection : str
                 ``"loo"`` (default): one penalty per output, chosen at fit
                 time; ``"fixed"``: :attr:`kernel_alpha` for all of them.
+        input_coordinates : str
+                See :attr:`input_coordinates`. The tuned defaults of
+                ``kernel_gamma`` are for ``"linear"``.
 
         Returns
         -------
         Hyperparameters
         """
+        if input_coordinates not in INPUT_COORDINATES:
+            raise ValueError(
+                f"Unknown input_coordinates {input_coordinates!r}: expected one of {INPUT_COORDINATES}."
+            )
         if kernel_gamma is None or kernel_alpha is None:
             tuned = load_kernel_ridge_defaults().get(mode_key(mode))
             if tuned is not None:
@@ -632,6 +673,7 @@ class Hyperparameters:
             kernel_gamma=kernel_gamma if kernel_gamma is not None else cls.kernel_gamma,
             kernel_alpha=kernel_alpha if kernel_alpha is not None else cls.kernel_alpha,
             kernel_alpha_selection=kernel_alpha_selection,
+            input_coordinates=input_coordinates,
         )
 
     @classmethod
@@ -963,9 +1005,20 @@ class KernelRidgeNetwork(NeuralNetwork):
             self.param_scaler: StandardScaler = param_scaler
         if target_scaler is not None:
             self.target_scaler: StandardScaler = target_scaler
+        if self.input_coordinates not in INPUT_COORDINATES:
+            raise ValueError(
+                f"Unknown input_coordinates {self.input_coordinates!r}: expected one of {INPUT_COORDINATES}."
+            )
         #: Cached row norms of ``regressor.X_fit_`` for the lean RBF
         #: evaluation in :meth:`predict` (filled on first use).
         self._xfit_sqnorm: Optional[np.ndarray] = None
+
+    @property
+    def input_coordinates(self) -> str:
+        """The coordinates of :func:`regression_inputs` the regressor works
+        in (:attr:`Hyperparameters.input_coordinates`; ``"linear"`` for
+        models from before it existed)."""
+        return getattr(self.hyper, "input_coordinates", "linear")
 
     def fit(
         self,
@@ -992,6 +1045,7 @@ class KernelRidgeNetwork(NeuralNetwork):
         silently change the effective kernel width and ridge penalty
         along with the weights.
         """
+        x_data = regression_inputs(x_data, self.input_coordinates)
         self.param_scaler = StandardScaler().fit(x_data)
         self.target_scaler = StandardScaler().fit(y_data)
 
@@ -1101,7 +1155,7 @@ class KernelRidgeNetwork(NeuralNetwork):
         """
         regressor = self.regressor
         x_fit = regressor.X_fit_
-        params = np.asarray(x_data, dtype=float)
+        params = regression_inputs(np.asarray(x_data, dtype=float), self.input_coordinates)
         scaled_x = (params - self.param_scaler.mean_) / self.param_scaler.scale_
 
         sq_norm = self._xfit_sqnorm

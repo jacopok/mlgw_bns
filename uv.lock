@@ -1226,7 +1226,7 @@ wheels = [
 
 [[package]]
 name = "mlgw-bns"
-version = "2.0.1"
+version = "2.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "dacite" },
@@ -1324,7 +1324,7 @@ dev = [
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-benchmark", specifier = ">=5.1.0" },
     { name = "snakeviz", specifier = ">=2.2.2" },
-    { name = "teobresums", git = "https://github.com/jacopok/teobresums?subdirectory=Python&branch=initial-spa-fix" },
+    { name = "teobresums", git = "https://github.com/jacopok/teobresums?subdirectory=Python&branch=dali-precession-mlgw" },
     { name = "types-pyyaml", specifier = ">=6.0.12" },
 ]
 
@@ -2540,8 +2540,8 @@ wheels = [
 
 [[package]]
 name = "teobresums"
-version = "4.4.1"
-source = { git = "https://github.com/jacopok/teobresums?subdirectory=Python&branch=initial-spa-fix#882a1649f6eff37c3f0a0edc4215a851bce0cd32" }
+version = "0.0.2"
+source = { git = "https://github.com/jacopok/teobresums?subdirectory=Python&branch=dali-precession-mlgw#163eabfe42d269b9989621d75b2dcc1b91fdacf8" }
 
 [[package]]
 name = "threadpoolctl"

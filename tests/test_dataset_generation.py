@@ -209,3 +209,32 @@ def test_true_waveforms_in_validation(dataset, parameters):
         phi_direct - phi_direct[0],
         phi_recomposed - phi_recomposed[0],
     )
+
+
+@pytest.mark.parametrize("sampling", ["effective", "effective_log", "mixed", "effective_mixed"])
+def test_effective_parameter_generator(dataset, sampling):
+    """Draws in the effective parameters stay in the box, and fill the corner
+    of two small deformabilities and the extremes of the effective spin, which
+    a uniform draw over the box leaves almost empty."""
+    from mlgw_bns.dataset_generation import PARAMETER_GENERATORS
+
+    ranges = ParameterRanges(lambda1_range=(1.0, 5000.0), lambda2_range=(1.0, 5000.0))
+    draws = {}
+    for name in ["uniform", sampling]:
+        generator = PARAMETER_GENERATORS[name](dataset, ranges, seed=3)
+        draws[name] = np.array([next(generator).array for _ in range(4096)])
+
+    q, lambda_1, lambda_2, chi_1, chi_2 = draws[sampling].T
+    assert np.all((q >= 1) & (q <= 3))
+    assert np.all((lambda_1 >= 1) & (lambda_1 <= 5000) & (lambda_2 >= 1) & (lambda_2 <= 5000))
+    assert np.all((np.abs(chi_1) <= 0.5) & (np.abs(chi_2) <= 0.5))
+
+    def corner_counts(p):
+        q, lambda_1, lambda_2, chi_1, chi_2 = p.T
+        chi_eff = (q * chi_1 + chi_2) / (1 + q)
+        return np.sum((lambda_1 < 100) & (lambda_2 < 100)), np.sum(np.abs(chi_eff) > 0.4)
+
+    (low_lambda, high_spin), (low_lambda_uniform, high_spin_uniform) = (
+        corner_counts(draws[sampling]), corner_counts(draws["uniform"]))
+    assert low_lambda > 10 * max(low_lambda_uniform, 1)
+    assert high_spin > 2 * high_spin_uniform
