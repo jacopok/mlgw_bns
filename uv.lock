@@ -2541,7 +2541,7 @@ wheels = [
 [[package]]
 name = "teobresums"
 version = "0.0.2"
-source = { git = "https://github.com/jacopok/teobresums?subdirectory=Python&branch=dali-precession-mlgw#0833a44beb9959e3af693ddbdbd0cf310b76afec" }
+source = { git = "https://github.com/jacopok/teobresums?subdirectory=Python&branch=dali-precession-mlgw#163eabfe42d269b9989621d75b2dcc1b91fdacf8" }
 
 [[package]]
 name = "threadpoolctl"
