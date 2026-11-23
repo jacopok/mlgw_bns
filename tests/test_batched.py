@@ -167,7 +167,11 @@ def test_batch_matches_single_rows_given_the_regressors(default_model):
             return_tf=True,
         )
         np.testing.assert_allclose(amp[i], row[0][0], rtol=1e-12, atol=0)
-        np.testing.assert_allclose(phase[i], row[1][0], rtol=1e-12, atol=1e-9)
+        # the phases reach ~1e6 rad: float64 rounding of those leaves ~1e-9
+        # rad where the phase crosses zero
+        np.testing.assert_allclose(
+            phase[i], row[1][0], rtol=1e-12, atol=1e-14 * np.abs(row[1][0]).max()
+        )
         np.testing.assert_allclose(tf[i], row[2][0], rtol=1e-9, atol=1e-9)
 
 
