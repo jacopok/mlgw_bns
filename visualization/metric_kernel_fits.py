@@ -358,47 +358,84 @@ def learn_linear(z, targets, steps=150, n=1024, components=20):
 # -- fits ---------------------------------------------------------------------
 
 
-def kernels(spec, cache, metric_data, name, x, xv, cached):
-    """``gamma -> (training kernel, validation kernel)`` of a spec, and a label."""
-    parts = spec.split(":")
-    kind, coord = (parts[0], parts[1]) if len(parts) > 1 else ("stationary", parts[0])
+def standardized(coord, x, xv):
     scaler = StandardScaler().fit(coordinates(x, coord))
-    z, zv = (scaler.transform(coordinates(v, coord)) for v in (x, xv))
+    return scaler, scaler.transform(coordinates(x, coord)), scaler.transform(coordinates(xv, coord))
+
+
+def split(spec):
+    parts = spec.split(":")
+    return parts if len(parts) > 1 else ["stationary", parts[0]]
+
+
+def mapped(spec, cache, metric_data, name, x, xv, cached):
+    """The inputs (training, validation) of the stationary kernel of a spec."""
+    parts = split(spec)
+    kind, coord = parts[:2]
+    scaler, z, zv = standardized(coord, x, xv)
     if kind == "stationary":
-        a, b = z, zv
-    elif kind == "learned":
+        return z, zv
+    if kind == "learned":
         key = (coord, len(x))
         if key not in cached:
             # on the (2,2), whatever the mode regressed
             targets = StandardScaler().fit_transform(cache["l2_m2_train"][: len(x)])
             cached[key] = learn_linear(z, targets)
-        a, b = normalize(z @ cached[key], zv @ cached[key])
-    else:
-        metric = Metric(metric_data, scaler, coord, parts[2], parts[3], float(parts[4]), name)
-        if kind == "constant":
-            lower = linear_map(metric.g.mean(axis=0))
-            a, b = normalize(z @ lower, zv @ lower)
-        elif kind == "embed":
-            key = (spec, len(x)) if parts[3] == "sum" else (spec, len(x), name)
-            if key not in cached:
-                cached[key] = fit_embedding(metric)
-            phi = cached[key]
-            a, b = normalize(phi(z), phi(zv))
-        elif kind == "gibbs":
-            sigma = fit_local(metric)
-            sa, sb = sigma(z), sigma(zv)
-            q, p = gibbs_parts(z, sa, z, sa)
-            qv, pv = gibbs_parts(zv, sb, z, sa)
-            # mean squared distance as that of standardized inputs (10)
-            scale = 10 / np.mean(q[: 1024, : 1024])
-            return lambda gamma: (np.exp(p - gamma * scale * q), np.exp(pv - gamma * scale * qv))
-        else:
-            raise ValueError(spec)
+        return normalize(z @ cached[key], zv @ cached[key])
+    metric = Metric(metric_data, scaler, coord, parts[2], parts[3], float(parts[4]), name)
+    if kind == "constant":
+        lower = linear_map(metric.g.mean(axis=0))
+        return normalize(z @ lower, zv @ lower)
+    if kind == "embed":
+        key = (spec, len(x)) if parts[3] == "sum" else (spec, len(x), name)
+        if key not in cached:
+            cached[key] = fit_embedding(metric)
+        return normalize(cached[key](z), cached[key](zv))
+    raise ValueError(spec)
+
+
+def kernels(spec, cache, metric_data, name, x, xv, cached):
+    """``gamma -> (training kernel, validation kernel)`` of a spec."""
+    parts = split(spec)
+    if parts[0] == "gibbs":
+        scaler, z, zv = standardized(parts[1], x, xv)
+        sigma = fit_local(Metric(metric_data, scaler, parts[1], parts[2], parts[3], float(parts[4]), name))
+        sa, sb = sigma(z), sigma(zv)
+        q, p = gibbs_parts(z, sa, z, sa)
+        qv, pv = gibbs_parts(zv, sb, z, sa)
+        # mean squared distance as that of standardized inputs (10)
+        scale = 10 / np.mean(q[: 1024, : 1024])
+        return lambda gamma: (np.exp(p - gamma * scale * q), np.exp(pv - gamma * scale * qv))
+    a, b = mapped(spec, cache, metric_data, name, x, xv, cached)
     dt, dv = euclidean_distances(a, squared=True), euclidean_distances(b, a, squared=True)
     return lambda gamma: (np.exp(-gamma * dt), np.exp(-gamma * dv))
 
 
-def summary(e, share):
+def farthest_points(points, n, seed):
+    """Indices of ``n`` of the ``points``, each the farthest from those before
+    it (the first one drawn), in random order."""
+    rng = np.random.default_rng(seed)
+    chosen = [int(rng.integers(len(points)))]
+    distance = np.full(len(points), np.inf)
+    for _ in range(n - 1):
+        distance = np.minimum(distance, np.sum((points - points[chosen[-1]]) ** 2, axis=1))
+        chosen.append(int(np.argmax(distance)))
+    return rng.permutation(chosen)
+
+
+def boxes(x):
+    """Regions of the parameters where errors are given apart."""
+    q, l1, l2, s1, s2 = x.T
+    return {
+        "q_near_1": q < 1.15,
+        "corner": (q > 2) & (l1 > 1000) & (l2 < 500),
+        "small_lambda": np.minimum(l1, l2) < 50,
+        "spin_edge": np.maximum(abs(s1), abs(s2)) > 0.45,
+        "high_q": q > 2.5,
+    }
+
+
+def summary(e, share, x):
     n_select = len(share) // SELECT_FRACTION
     rest = slice(n_select, None)
     out = {}
@@ -406,6 +443,12 @@ def summary(e, share):
         out.update({f"{key}_{q}": float(np.quantile(v[rest], p)) for q, p in (("50", .5), ("90", .9), ("99", .99), ("max", 1.0))})
     out["weighted_99"] = float(np.quantile((e["mismatch"] * share)[rest], .99))
     out["weighted_mean"] = float(np.mean((e["mismatch"] * share)[rest]))
+    for box, inside in boxes(x[rest]).items():
+        out[f"{box}_n"] = int(inside.sum())
+        for q, p in (("50", .5), ("99", .99)):
+            out[f"{box}_mismatch_{q}"] = float(np.quantile(e["mismatch"][rest][inside], p))
+            out[f"{box}_weighted_{q}"] = float(np.quantile((e["mismatch"] * share)[rest][inside], p))
+            out[f"{box}_time_{q}"] = float(np.quantile(e["time"][rest][inside], p))
     # what the width is chosen on: the mean log mismatch, and its tail
     out["select"] = float(np.mean(np.log10(e["mismatch"][:n_select] + 1e-18)) + 0.5 * np.log10(np.quantile(e["mismatch"][:n_select], .99)))
     return out
@@ -413,6 +456,10 @@ def summary(e, share):
 
 def fit(args):
     cache = dict(np.load(args.cache))
+    if args.also:
+        with np.load(args.also) as more:  # of the same training set
+            assert np.array_equal(more["x_train"], cache["x_train"])
+            cache["l2_m2_train"] = more["l2_m2_train"]
     metric_data = dict(np.load(args.metric)) if args.metric else None
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -423,11 +470,19 @@ def fit(args):
             for offset in args.offsets:
                 for l, m in modes:
                     name = f"l{l}_m{m}"
-                    path = out / f"{spec.replace(':', '_')}__{name}__{n}__{offset}.json"
+                    path = out / f"{spec.replace(':', '_')}__{name}__{n}__{offset}{'__fps' if args.placement else ''}.json"
                     if path.exists():
                         continue
                     start = time.time()
-                    rows = slice(offset, offset + n)
+                    if args.placement:  # the offset is the seed
+                        pool = cache["x_train"]
+                        key = ("placement", n)
+                        if key not in (store := cached.setdefault(offset, {})):
+                            points, _ = mapped(args.placement, cache, metric_data, name, pool, pool[:1], {})
+                            store[key] = farthest_points(points, n, offset)
+                        rows = store[key]
+                    else:
+                        rows = slice(offset, offset + n)
                     x, xv = cache["x_train"][rows], cache["x_validation"]
                     sub = {**cache, "l2_m2_train": cache["l2_m2_train"][rows]} if "l2_m2_train" in cache else cache
                     kernel = kernels(spec, sub, metric_data, name, x, xv, cached.setdefault(offset, {}))
@@ -436,18 +491,20 @@ def fit(args):
                     weight = cache.get(f"{name}_weight")
                     weight = None if weight is None else weight[rows]
                     rng = np.random.default_rng(0).choice(n, 256, replace=False)
-                    results = []
+                    results, predictions = [], {}
                     for gamma in args.gammas:
                         k, kv = kernel(gamma)
                         noise_rows = k[rng].copy()
                         dual, selection = kernel_ridge_leave_one_out(
                             k, targets, sample_weight=weight, noise_rows=noise_rows)
-                        e = errors(cache, name, m, scaler.inverse_transform(kv @ dual))
+                        e = errors(cache, name, m, predictions.setdefault(gamma, scaler.inverse_transform(kv @ dual)))
                         results.append({"gamma": gamma, "dual": float(np.abs(dual).sum(axis=0).max()),
-                                        "loo": float(np.median(selection.expected_error)), **summary(e, cache[f"{name}_share"])})
+                                        "loo": float(np.median(selection.expected_error)), **summary(e, cache[f"{name}_share"], xv)})
                         del k, kv
                     best = min(results, key=lambda r: r["select"])
-                    path.write_text(json.dumps({"spec": spec, "mode": name, "n": n, "offset": offset, "best": best, "all": results}))
+                    if args.save_predictions:
+                        np.save(path.with_suffix(".npy"), predictions[best["gamma"]])
+                    path.write_text(json.dumps({"spec": spec + ("@fps" if args.placement else ""), "mode": name, "n": n, "offset": offset, "best": best, "all": results}))
                     print(f"{spec:>38} {name} {n:6d} ({time.time() - start:.0f} s): gamma {best['gamma']}, mismatch median "
                           f"{best['mismatch_50']:.2e} 99% {best['mismatch_99']:.2e}, unaligned {best['unaligned_50']:.2e}, "
                           f"time {best['time_50'] * 1e6:.2f} us 99% {best['time_99'] * 1e6:.1f}, dual {best['dual']:.1e}", flush=True)
@@ -455,6 +512,7 @@ def fit(args):
 
 def table(args):
     rows = [json.loads(p.read_text()) for p in sorted(Path(args.out).glob("*.json"))]
+    rows = [r for r in rows if "mode" in r]  # (not the full waveforms)
     for mode in sorted({r["mode"] for r in rows}):
         for n in sorted({r["n"] for r in rows}):
             chosen = [r for r in rows if r["mode"] == mode and r["n"] == n]
@@ -469,6 +527,66 @@ def table(args):
                 g = lambda key, s=1.0: s * np.exp(np.mean([np.log(v[key]) for v in b]))  # noqa: E731
                 print(f"{spec:>40}  {g('gamma'):6.3f} | {g('mismatch_50'):.1e} {g('mismatch_90'):.1e} {g('mismatch_99'):.1e} {g('mismatch_max'):.1e} | "
                       f"{g('unaligned_50'):.1e} {g('unaligned_99'):.1e} | {g('time_50', 1e6):7.2f} {g('time_99', 1e6):7.1f} | {g('dual'):.0e}")
+
+
+class StoredPredictions:
+    """In place of a regressor: its predictions, by the parameters."""
+
+    class hyper:
+        pc_exponent = 0
+
+    def __init__(self, x, predictions):
+        self.rows = {row.tobytes(): i for i, row in enumerate(x)}
+        self.predictions = predictions
+
+    def predict(self, x):
+        return self.predictions[[self.rows[row.tobytes()] for row in np.asarray(x, dtype=float)]]
+
+
+def full(args):
+    """Full waveform mismatches (``stored_waveform_mismatches``) of every
+    regressor of which all modes were predicted (``fit --save-predictions``), on
+    the validation waveforms that did not select the width; first the
+    references (validations of models on the same set)."""
+    from mlgw_bns.model_validation import stored_waveform_mismatches
+
+    train, validation = ShardedModesDataset(args.dataset + "/train"), ShardedModesDataset(args.dataset + "/validation")
+    parameters, residuals = validation.load_residuals(args.n_validation)
+    start = args.n_validation // SELECT_FRACTION
+    score = slice(start, args.n_validation)
+    regions = boxes(parameters[score])
+
+    def report(label, result, file):
+        out = {"label": label}
+        for region, inside in {"all": np.ones(len(parameters[score]), bool), **regions}.items():
+            v = result["full"][inside]
+            out[region] = {"n": len(v), **{k: float(np.quantile(v, p)) for k, p in (("50", .5), ("90", .9), ("99", .99), ("max", 1))}}
+        Path(file).write_text(json.dumps(out))
+        print(label, {k: f"{v['50']:.1e}/{v['99']:.1e}/{v['max']:.1e}" for k, v in out.items() if k != "label"}, flush=True)
+
+    out = Path(args.out)
+    for reference in args.reference:
+        with np.load(reference) as data:
+            assert np.array_equal(data["parameters"][: len(parameters)], parameters)
+            # (isotropic inclinations are drawn for the whole set)
+            report(Path(reference).stem, {"full": data["mismatches"][score]}, out / f"full_{Path(reference).stem}.json")
+            inclinations = data["inclination"][score]
+    model = train.model()
+    pca = train.principal_components(args.pca_size, args.components)
+    for mode in train.modes:
+        model.mode_models[mode].pca_data = pca[mode]
+    names = [f"l{m.l}_m{m.m}" for m in train.modes]
+    stems = sorted(p.stem for p in out.glob("*__l2_m2__*.npy"))
+    for i, stem in enumerate(stems):
+        file = out / f"full_{stem.replace('__l2_m2', '')}.json"
+        paths = [out / f"{stem.replace('l2_m2', name)}.npy" for name in names]
+        if i % args.shards != args.shard or file.exists() or not all(p.exists() for p in paths):
+            continue
+        for mode, path in zip(train.modes, paths):
+            model.mode_models[mode].nn = StoredPredictions(np.asarray(parameters, dtype=float), np.load(path))
+        result = stored_waveform_mismatches(
+            model, parameters[score], {m: v[score] for m, v in residuals.items()}, inclinations, n_jobs=args.jobs)
+        report(stem.replace("__l2_m2", ""), result, file)
 
 
 def truncate(args):
@@ -520,7 +638,21 @@ def main():
     c.add_argument("--specs", nargs="+", required=True)
     c.add_argument("--gammas", type=float, nargs="+", default=list(GAMMAS))
     c.add_argument("--modes", type=parse_mode, nargs="+")
+    c.add_argument("--also", help="a cache of the same training set with the (2,2) (for learned maps)")
+    c.add_argument("--placement", metavar="SPEC", help="train on farthest points of the whole set in this map (offsets are seeds)")
+    c.add_argument("--save-predictions", action="store_true")
     c.set_defaults(run=fit)
+    c = commands.add_parser("full")
+    c.add_argument("out")
+    c.add_argument("--dataset", required=True)
+    c.add_argument("--reference", nargs="+", required=True, help="validate_*.npz of models on the same validation set")
+    c.add_argument("--n-validation", type=int, default=8192)
+    c.add_argument("--pca-size", type=int, default=32768)
+    c.add_argument("--components", type=int, default=60)
+    c.add_argument("--shard", type=int, default=0)
+    c.add_argument("--shards", type=int, default=1)
+    c.add_argument("--jobs", type=int, default=16)
+    c.set_defaults(run=full)
     c = commands.add_parser("truncate")
     c.add_argument("out")
     c.add_argument("--model", default="default_hom_lambda2000")
