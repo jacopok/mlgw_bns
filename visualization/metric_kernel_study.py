@@ -191,12 +191,12 @@ def metrics(f, weights, m, amp, d_amp, d_phase, d_res):
     return {k: np.array(v) for k, v in out.items()}, rho2 / rho2.sum()
 
 
-def open_oracle():
-    return Model.default_for_testing(ORACLE)
+def open_oracle(name=ORACLE):
+    return Model.default_for_testing(name)
 
 
 def metric_command(args):
-    model = open_oracle()
+    model = open_oracle(args.oracle)
     f, weights = quadrature(args.psd_dir, model)
     derivatives = Derivatives(model, f)
     m = np.array([mode.m for mode in derivatives.modes], dtype=float)
@@ -297,7 +297,7 @@ def check_mismatch_command(args):
     displacements, (2,2), at a single mass."""
     from scipy.optimize import minimize_scalar
 
-    model = open_oracle()
+    model = open_oracle(args.oracle)
     f, weights = quadrature(None, model)
     w = weights[args.weights][0]
     derivatives = Derivatives(model, f)
@@ -325,10 +325,14 @@ def check_mismatch_command(args):
         print(np.round(x, 3), "mismatch / quadratic form at 1e-3, 1e-4, 1e-5:", np.round(ratios, 3), flush=True)
 
 
+def lengths(g):
+    return " ".join(f"{v:9.2e}" for v in np.sqrt(np.diagonal(g)))
+
+
 def check_teob_command(args):
     """The ``residual`` metric from central differences of TEOBResumS waveforms,
     against the model's, ET from 5 Hz."""
-    model = open_oracle()
+    model = open_oracle(args.oracle)
     f, weights = quadrature(None, model)
     derivatives = Derivatives(model, f)
     m = np.array([q.m for q in derivatives.modes], dtype=float)
@@ -341,6 +345,7 @@ def check_teob_command(args):
     x = np.clip(x, BOX[:, 0] + margin + np.array([0, 4, 4, 0, 0]), BOX[:, 1] - margin)
     step = np.column_stack([np.full(len(x), 4e-3), np.minimum(.02 * (x[:, 1] + 20), x[:, 1] - 1.01),
                             np.minimum(.02 * (x[:, 2] + 20), x[:, 2] - 1.01), *np.full((2, len(x)), 4e-3)])
+    step *= args.step
     moved = np.concatenate([x[:, None] + s * step[:, :, None] * np.eye(5) for s in (1, -1)], axis=1)  # (n, 10, 5)
     params = ParameterSet(moved.reshape(-1, 5)).waveform_parameters(model.dataset)
     indices = {mode: model.mode_models[mode].downsampling_indices for mode in model.modes}
@@ -349,6 +354,8 @@ def check_teob_command(args):
         params, model.dataset.frequencies, indices, references, n_jobs=args.jobs, keep_invalid=True)
     amp, d_amp, d_phase, d_res = derivatives(x)
     fd_amp, fd_res = np.array(d_amp), np.array(d_res)
+    import jax.numpy as jnp
+    model_residuals = derivatives.surrogate._residuals(jnp, jnp.asarray(x))
     for i, mode in enumerate(model.modes):
         frozen = derivatives.surrogate._frozen.modes_arrays[i]
         for name, raw, nodes, target in (("a", amplitudes[mode], frozen.amp_spline, fd_amp), ("p", phases[mode], frozen.phase_spline, fd_res)):
@@ -358,20 +365,24 @@ def check_teob_command(args):
             if name == "p":
                 target[:, :, i] = diff @ grid(f).T
             else:  # times the reference amplitude, in the units of the model's
-                model_res = np.asarray(derivatives.surrogate._residuals(np, np.asarray(x))[i][0])
-                scale = np.nanmedian(amp[:, i] / (model_res @ grid(f).T), axis=0)
-                target[:, :5, i] = diff @ grid(f).T * scale
+                reference = np.asarray(frozen.pn_amp_nodes)
+                model_amp = (np.asarray(model_residuals[i][0]) * reference) @ grid(f).T
+                target[:, :5, i] = (diff * reference) @ grid(f).T * np.nanmedian(amp[:, i] / model_amp)
     for j in range(len(x)):
         if not (np.isfinite(fd_amp[j]).all() and np.isfinite(fd_res[j]).all()):
-            print(np.round(x[j], 3), "TEOBResumS failed")
+            print(np.round(x[j], 3), "TEOBResumS failed, or outside of the range of the oracle")
             continue
         a = metrics(f, weights["ET_5"], m, amp[j], d_amp[j], d_phase[j], d_res[j])[0]["residual"]
         b = metrics(f, weights["ET_5"], m, amp[j], fd_amp[j], d_phase[j], fd_res[j])[0]["residual"]
+        difference = metrics(f, weights["ET_5"], m, amp[j], d_amp[j] - fd_amp[j], d_phase[j], d_res[j] - fd_res[j])[0]["residual"]
         a, b = (in_coordinates(g[None], x[j : j + 1], "linear")[0] for g in (a, b))
         floors = [floored(g, 1e-4) for g in (a[:1], b[:1])]
         print(np.round(x[j], 3), f"|g_jax - g_teob| / |g_teob| all {np.linalg.norm(a[0] - b[0]) / np.linalg.norm(b[0]):.1e}"
               f"  (2,2) {np.linalg.norm(a[1] - b[1]) / np.linalg.norm(b[1]):.1e}"
-              f"  log distance ratio, floored 1e-4: {np.abs(log_ratios(*floors)).max():.3f}", flush=True)
+              f"  log distance ratio, floored 1e-4: {np.abs(log_ratios(*floors)).max():.3f}"
+              # the lengths of the five derivatives, in units of the box: the model's, TEOBResumS's, and of their difference
+              f"\n    jax {lengths(a[0])}\n   teob {lengths(b[0])}"
+              f"\n   diff {lengths(in_coordinates(difference[None], x[j : j + 1], 'linear')[0][0])}", flush=True)
 
 
 def main():
@@ -393,7 +404,10 @@ def main():
     c = commands.add_parser("check-teob")
     c.add_argument("--n", type=int, default=20)
     c.add_argument("--jobs", type=int, default=8)
+    c.add_argument("--step", type=float, default=1.0, help="multiplies the finite-difference steps")
     c.set_defaults(run=check_teob_command)
+    for c in commands.choices.values():
+        c.add_argument("--oracle", default=ORACLE, help="shipped model the derivatives are of")
     args = parser.parse_args()
     args.run(args)
 

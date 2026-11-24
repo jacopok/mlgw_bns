@@ -14,6 +14,6 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 PYTHON="${PYTHON:-.venv/bin/python}"
 export PYTHONPATH="$PWD" PYTHONUNBUFFERED=1 MPLBACKEND=Agg JAX_PLATFORMS=cpu OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
-echo "$(hostname) $(git rev-parse --short HEAD): $*"
+echo "$(hostname) $*"
 "$PYTHON" -c "import mlgw_bns; print(mlgw_bns.__file__)"
 exec "$PYTHON" visualization/metric_kernel_study.py "$@"
