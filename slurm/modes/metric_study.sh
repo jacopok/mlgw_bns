@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One command of visualization/metric_kernel_study.py on a Draco node, with the
+# One command of visualization/metric_kernel_study.py (or of SCRIPT) on a Draco node, with the
 # repository this is submitted from (PYTHONPATH, so that a worktree can share
 # the environment of the main clone: PYTHON=~/mlgw_bns/.venv/bin/python).
 #
@@ -16,4 +16,4 @@ PYTHON="${PYTHON:-.venv/bin/python}"
 export PYTHONPATH="$PWD" PYTHONUNBUFFERED=1 MPLBACKEND=Agg JAX_PLATFORMS=cpu OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 echo "$(hostname) $*"
 "$PYTHON" -c "import mlgw_bns; print(mlgw_bns.__file__)"
-exec "$PYTHON" visualization/metric_kernel_study.py "$@"
+exec "$PYTHON" "${SCRIPT:-visualization/metric_kernel_study.py}" "$@"
