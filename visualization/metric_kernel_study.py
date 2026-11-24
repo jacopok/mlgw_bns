@@ -5,6 +5,10 @@ regressors? Stage 1: the metric itself, and how much the PSD matters.
 
     M=visualization/metric_kernel_study.py
     python $M metric OUT.npz --n 2048 --psd-dir DIR   # the metrics at N points (JAX)
+    # from TEOBResumS instead (the surrogate's derivatives are wrong at small
+    # Lambda): stencils of waveforms around N points (resumable), their metrics
+    python $M stencils DIR --n 1024 --lambda-max 2000 --jobs 32 --oracle default_hom_lambda2000
+    python $M metric OUT.npz --stencils DIR --lambda-max 2000 --oracle default_hom_lambda2000 --psd-dir DIR
     python $M report OUT.npz                          # spectra, variation, PSD dependence
     python $M check-mismatch                          # quadratic form against mismatches
     python $M check-teob --n 20 --jobs 32             # derivatives against TEOBResumS
@@ -58,14 +62,14 @@ LAMBDA_MAX = 5000.0  # of the data of stage 2
 BOX = np.array([[1.0, 3.0], [1.001, LAMBDA_MAX], [1.001, LAMBDA_MAX], [-0.5, 0.5], [-0.5, 0.5]])
 F_MAX = 2048.0
 MASS_RANGE, N_MASSES = (2.0, 4.0), 8
-MASSES = MASS_RANGE[0] + np.ptp(MASS_RANGE) * (np.arange(N_MASSES) + 0.5) / N_MASSES
 SINGLE_MASSES = (2.0, 2.8, 4.0)
 
 
-def quadrature(psd_dir, model, n_grid=1024):
+def quadrature(psd_dir, model, n_grid=1024, n_masses=N_MASSES):
     """Frequencies of the model (at its reference mass), and ``name -> (masses,
     k)`` weights of the inner product at each of the masses to average over."""
     reference = float(model.dataset.total_mass)
+    all_masses = MASS_RANGE[0] + np.ptp(MASS_RANGE) * (np.arange(n_masses) + 0.5) / n_masses
     knots = model.dataset.frequencies_hz
     f = np.geomspace(
         max(5.0 * MASS_RANGE[0] / reference, knots[0]), min(F_MAX * MASS_RANGE[1] / reference, knots[-1]), n_grid
@@ -91,20 +95,21 @@ def quadrature(psd_dir, model, n_grid=1024):
                 continue
             table = np.log(np.loadtxt(path))
             inverse = lambda x, t=table: np.exp(-np.interp(np.log(x), t[:, 0], t[:, 1]))  # noqa: E731
-        weights[name] = at(inverse, f_min, MASSES)
+        weights[name] = at(inverse, f_min, all_masses)
         if name in ("ET_5", "aLIGO_20"):
             for mass in SINGLE_MASSES:
                 weights[f"{name}_M{mass:g}"] = at(inverse, f_min, [mass])
     return f, weights
 
 
-def sample(n, seed=0):
-    """Half uniform in Lambda, half in log(1 + Lambda)."""
+def sample(n, seed=0, lower=None):
+    """Half uniform in Lambda, half in log(1 + Lambda), in the box (above ``lower``)."""
     from scipy.stats import qmc
 
     u = qmc.Sobol(6, seed=seed).random(n)
-    x = BOX[:, 0] + u[:, :5] * (BOX[:, 1] - BOX[:, 0])
-    log = np.expm1(np.log1p(BOX[1:3, 0]) + u[:, 1:3] * np.diff(np.log1p(BOX[1:3]), axis=1)[:, 0])
+    box = BOX if lower is None else np.column_stack([lower, BOX[:, 1]])
+    x = box[:, 0] + u[:, :5] * (box[:, 1] - box[:, 0])
+    log = np.expm1(np.log1p(box[1:3, 0]) + u[:, 1:3] * np.diff(np.log1p(box[1:3]), axis=1)[:, 0])
     x[:, 1:3] = np.where(u[:, 5:] < 0.5, log, x[:, 1:3])
     return x
 
@@ -166,27 +171,30 @@ def metrics(f, weights, m, amp, d_amp, d_phase, d_res):
     ``(masses, k)`` to average over."""
     if weights.ndim == 2:
         parts = [metrics(f, w, m, amp, d_amp, d_phase, d_res) for w in weights]
-        return {k: np.mean([g[k] for g, _ in parts], axis=0) for k in KINDS}, np.mean([r for _, r in parts], axis=0)
+        return {k: np.mean([g[k] for g, _ in parts], axis=0) for k in parts[0][0]}, np.mean([r for _, r in parts], axis=0)
     root = np.sqrt(weights)  # (k,)
     rho2 = np.sum(amp**2 * weights, axis=1)
     flat = lambda re, im: np.concatenate([re * root, im * root], axis=-1)  # noqa: E731
-    dh = flat(d_amp, amp * d_phase)                # (6, modes, 2k)
+    full = d_phase is not None
+    if full:
+        dh = flat(d_amp, amp * d_phase)            # (6, modes, 2k)
     dr = flat(d_amp[:5], amp * d_res)              # (5, modes, 2k)
     zero = np.zeros_like(amp)
     t = flat(zero, amp * 2 * np.pi * f)            # (modes, 2k)
     phi = flat(zero, amp * m[:, None])
     size = flat(amp, zero)
-    out = {kind: [] for kind in KINDS}
+    out = {kind: [] for kind in KINDS if full or kind.startswith("residual")}
     for scope in [slice(None)] + [slice(i, i + 1) for i in range(len(m))]:
         pick = lambda v: v[..., scope, :].reshape(*v.shape[:-2], -1)  # noqa: E731
-        wave, mass = pick(dh)[:5], pick(dh)[5]
         shifts = [pick(t), pick(phi)]
-        for kind, vectors in (
-            ("full", project(wave, np.array(shifts + [pick(size), mass]))),
-            ("full_fixed_mass", project(wave, np.array(shifts + [pick(size)]))),
-            ("residual", pick(dr)),
-            ("residual_shifted", project(pick(dr), np.array(shifts))),
-        ):
+        kinds = [("residual", pick(dr)), ("residual_shifted", project(pick(dr), np.array(shifts)))]
+        if full:
+            wave, mass = pick(dh)[:5], pick(dh)[5]
+            kinds += [
+                ("full", project(wave, np.array(shifts + [pick(size), mass]))),
+                ("full_fixed_mass", project(wave, np.array(shifts + [pick(size)]))),
+            ]
+        for kind, vectors in kinds:
             out[kind].append(vectors @ vectors.T / rho2.sum())
     return {k: np.array(v) for k, v in out.items()}, rho2 / rho2.sum()
 
@@ -195,27 +203,95 @@ def open_oracle(name=ORACLE):
     return Model.default_for_testing(name)
 
 
+STENCIL_STEPS = np.array([4e-3, 0.02, 0.02, 4e-3, 4e-3])  # those of Lambda: relative to 20 + Lambda
+
+
+def stencils_command(args):
+    """Residuals of the modes at each of N points (the first of 11 waveforms)
+    and at a step above, and below, along each parameter, in shards."""
+    model = open_oracle(args.oracle)
+    x = sample(args.n, lower=[1.005, 2.0, 2.0, -0.5, -0.5])
+    step = np.tile(STENCIL_STEPS, (len(x), 1))
+    step[:, 1:3] *= 20 + x[:, 1:3]
+    unit = np.concatenate([np.zeros((1, 5)), np.eye(5), -np.eye(5)])
+    points = x[:, None] + step[:, None] * unit
+    indices = {mode: model.mode_models[mode].downsampling_indices for mode in model.modes}
+    references = {mode: model.mode_models[mode].dataset.amplitude_reference_parameters for mode in model.modes}
+    directory = Path(args.directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    for k, start in enumerate(range(0, len(x), args.shard)):
+        rows = slice(start, start + args.shard)
+        path = directory / f"{k:04d}.npz"
+        if path.exists():
+            continue
+        began = time.time()
+        params = ParameterSet(points[rows].reshape(-1, 5)).waveform_parameters(model.dataset)
+        _, amplitudes, phases = model._multimode_mode_residuals(
+            params, model.dataset.frequencies, indices, references, n_jobs=args.jobs, keep_invalid=True)
+        n = len(x[rows])
+        arrays = {}
+        for mode in model.modes:
+            arrays[f"amplitude_l{mode.l}_m{mode.m}"] = np.asarray(amplitudes[mode]).reshape(n, 11, -1)
+            arrays[f"phase_l{mode.l}_m{mode.m}"] = np.asarray(phases[mode]).reshape(n, 11, -1)
+        temporary = path.with_suffix(".tmp.npz")
+        np.savez(temporary, parameters=x[rows], steps=step[rows], **arrays)
+        temporary.rename(path)
+        print(f"{path}: {time.time() - began:.0f} s", flush=True)
+
+
+def stencil_derivatives(directory, model, f):
+    """As :class:`Derivatives` gives them (but for the phases), shard by shard:
+    ``x, steps, A, dA, None, dphase_residual``; points that failed left out."""
+    frozen = model.batched_surrogate(backend="numpy")._frozen.modes_arrays
+    for path in sorted(Path(directory).glob("[0-9][0-9][0-9][0-9].npz")):
+        with np.load(path) as data:
+            x, steps = data["parameters"], data["steps"]
+            amp, d_amp, d_res, ok = [], [], [], np.ones(len(x), bool)
+            for mode, arrays in zip(model.modes, frozen):
+                name = f"l{mode.l}_m{mode.m}"
+                values = []
+                for key, spline, factor in (("amplitude", arrays.amp_spline, arrays.pn_amp_nodes), ("phase", arrays.phase_spline, 1.0)):
+                    raw = np.asarray(data[f"{key}_{name}"], dtype=float) * factor
+                    ok &= np.isfinite(raw).all(axis=(1, 2))
+                    grid = CubicSpline(spline.knots, np.eye(len(spline.knots)), axis=0)(f)
+                    values.append((raw[:, 0] @ grid.T, (raw[:, 1:6] - raw[:, 6:]) / (2 * steps[:, :, None]) @ grid.T))
+                amp.append(values[0][0])
+                d_amp.append(values[0][1])
+                d_res.append(values[1][1])
+        yield x[ok], np.stack(amp, 1)[ok], np.stack(d_amp, 2)[ok], np.stack(d_res, 2)[ok]
+
+
 def metric_command(args):
     model = open_oracle(args.oracle)
-    f, weights = quadrature(args.psd_dir, model)
-    derivatives = Derivatives(model, f)
-    m = np.array([mode.m for mode in derivatives.modes], dtype=float)
-    x = sample(args.n)
-    results = {f"{p} {k}": [] for p in weights for k in KINDS}
-    powers = {p: [] for p in weights}
+    f, weights = quadrature(args.psd_dir, model, n_masses=args.masses)
+    modes = list(model.modes)
+    m = np.array([mode.m for mode in modes], dtype=float)
+
+    def rows():
+        if args.stencils:
+            for x, amp, d_amp, d_res in stencil_derivatives(args.stencils, model, f):
+                for i in range(len(x)):
+                    yield x[i], (amp[i], d_amp[i], None, d_res[i])
+        else:
+            derivatives = Derivatives(model, f)
+            x = sample(args.n)
+            for i in range(0, len(x), args.batch):
+                yield from zip(x[i : i + args.batch], zip(*derivatives(x[i : i + args.batch])))
+
+    parameters, results, powers = [], {}, {p: [] for p in weights}
     start = time.time()
-    for i in range(0, len(x), args.batch):
-        parts = derivatives(x[i : i + args.batch])
-        for row in zip(*parts):
-            for p, w in weights.items():
-                g, rho2 = metrics(f, w, m, *row)
-                powers[p].append(rho2)
-                for k in KINDS:
-                    results[f"{p} {k}"].append(g[k])
-        print(f"{i + args.batch}/{len(x)}: {time.time() - start:.0f} s", flush=True)
+    for x, row in rows():
+        parameters.append(x)
+        for p, w in weights.items():
+            g, share = metrics(f, w, m, *row)
+            powers[p].append(share)
+            for k in g:
+                results.setdefault(f"{p} {k}", []).append(g[k])
+        if len(parameters) % 64 == 0:
+            print(f"{len(parameters)}: {time.time() - start:.0f} s", flush=True)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     np.savez(
-        args.out, parameters=x, modes=np.array([(q.l, q.m) for q in derivatives.modes]),
+        args.out, parameters=np.array(parameters), modes=np.array([(q.l, q.m) for q in modes]), box=BOX,
         psds=list(weights), **{k: np.array(v) for k, v in results.items()},
         **{f"{p} power": np.array(v) for p, v in powers.items()},
     )
@@ -254,12 +330,15 @@ def log_ratios(a, b):
 def report_command(args):
     data = np.load(args.out)
     x, psds = data["parameters"], [str(p) for p in data["psds"]]
+    if "box" in data:
+        BOX[:] = data["box"]
+    kinds = [k for k in KINDS if f"ET_5 {k}" in data]
     for floor in args.floors:
         print(f"\n##### eigenvalue floor {floor:g} of the median largest")
         print("\n== spectrum (median over the box of sqrt(eigenvalue / largest), ET_5, all modes) and "
               "variation over the box (std of the log ratio of distances to the log-Euclidean mean; "
               "0 is a constant metric), by coordinates")
-        for kind in KINDS:
+        for kind in kinds:
             for coordinates in ("linear", "log_lambda"):
                 g = floored(in_coordinates(data[f"ET_5 {kind}"][:, 0], x, coordinates), floor)
                 values = np.linalg.eigvalsh(g)[:, ::-1]
@@ -271,7 +350,7 @@ def report_command(args):
                       + f"  variation {ratio.std():.2f} (of the overall scale {ratio.mean(1).std():.2f})")
         print("\n== PSD dependence: std, and 1/99% range, of the log ratio of distances to ET_5's, "
               "a constant overall scale removed (linear coordinates, all modes)")
-        for kind in KINDS:
+        for kind in kinds:
             reference = floored(in_coordinates(data[f"ET_5 {kind}"][:, 0], x, "linear"), floor)
             for p in psds:
                 ratio = log_ratios(floored(in_coordinates(data[f"{p} {kind}"][:, 0], x, "linear"), floor), reference)
@@ -392,8 +471,16 @@ def main():
     c.add_argument("out")
     c.add_argument("--n", type=int, default=2048)
     c.add_argument("--batch", type=int, default=16)
+    c.add_argument("--stencils", help="from the waveforms of this directory instead")
+    c.add_argument("--masses", type=int, default=N_MASSES, help="to average over")
     c.add_argument("--psd-dir")
     c.set_defaults(run=metric_command)
+    c = commands.add_parser("stencils")
+    c.add_argument("directory")
+    c.add_argument("--n", type=int, default=1024)
+    c.add_argument("--shard", type=int, default=32)
+    c.add_argument("--jobs", type=int, default=8)
+    c.set_defaults(run=stencils_command)
     c = commands.add_parser("report")
     c.add_argument("out")
     c.add_argument("--floors", type=float, nargs="+", default=[1e-6, 1e-4, 1e-2])
@@ -408,7 +495,9 @@ def main():
     c.set_defaults(run=check_teob_command)
     for c in commands.choices.values():
         c.add_argument("--oracle", default=ORACLE, help="shipped model the derivatives are of")
+        c.add_argument("--lambda-max", type=float, default=LAMBDA_MAX, help="of the box")
     args = parser.parse_args()
+    BOX[1:3, 1] = args.lambda_max
     args.run(args)
 
 
