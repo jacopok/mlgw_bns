@@ -20,6 +20,13 @@ inner product is the sum over modes of 4 int da db* / S_n. With
 * ``residual``: :math:`d\phi` is of the phase residual (what is regressed);
 * ``residual_shifted``: the same, projecting out time and orbital phase.
 
+The model is evaluated at a reference total mass, and rescaled: at total mass
+M (detector frame) its frequency f is seen by the detector at f M_ref / M, so
+that the PSD and the edges of the band shift under it. Every metric (after the
+projections and the normalization, which depend on M) is the average over
+masses uniform in 2--4 solar masses; those of single masses (``ET_5_M2`` ...)
+are for comparison.
+
 Each is computed for the sum of the modes and for each mode alone. They are in
 the coordinates of the parameter array (q, Lambda_1, Lambda_2, chi_1, chi_2).
 """
@@ -50,24 +57,44 @@ PSDS = {
 LAMBDA_MAX = 5000.0  # of the data of stage 2
 BOX = np.array([[1.0, 3.0], [1.001, LAMBDA_MAX], [1.001, LAMBDA_MAX], [-0.5, 0.5], [-0.5, 0.5]])
 F_MAX = 2048.0
+MASS_RANGE, N_MASSES = (2.0, 4.0), 8
+MASSES = MASS_RANGE[0] + np.ptp(MASS_RANGE) * (np.arange(N_MASSES) + 0.5) / N_MASSES
+SINGLE_MASSES = (2.0, 2.8, 4.0)
 
 
-def quadrature(psd_dir, n_grid=768):
-    """Frequencies and ``name -> weights`` of the inner product."""
-    f = np.geomspace(5.0, F_MAX, n_grid)
+def quadrature(psd_dir, model, n_grid=1024):
+    """Frequencies of the model (at its reference mass), and ``name -> (masses,
+    k)`` weights of the inner product at each of the masses to average over."""
+    reference = float(model.dataset.total_mass)
+    knots = model.dataset.frequencies_hz
+    f = np.geomspace(
+        max(5.0 * MASS_RANGE[0] / reference, knots[0]), min(F_MAX * MASS_RANGE[1] / reference, knots[-1]), n_grid
+    )
+    f[0], f[-1] = f[0] * (1 + 1e-9), f[-1] * (1 - 1e-9)  # inside the trained band, whatever the rounding
     trapezoid = _trapezoid_weights(f)
+
+    def at(inverse, f_min, masses):
+        # the frequencies seen by the detector, for each mass; edges within
+        # rounding of the band's are in it
+        seen = f * reference / np.asarray(masses)[:, None]
+        inside = (seen >= f_min * (1 - 1e-6)) & (seen <= F_MAX * (1 + 1e-6))
+        return 4 * trapezoid * inverse(seen) * inside
+
     weights = {}
     for name, (file, f_min) in PSDS.items():
         if file is None:
-            inverse = np.ones_like(f)
+            inverse = np.ones_like
         else:
             path = PSD_PATH / "ET_psd.txt" if file == "ET" else Path(psd_dir or ".") / f"{file}_psd.txt"
             if not path.exists():
                 print(f"no {path}: skipping {name}", file=sys.stderr)
                 continue
-            table = np.loadtxt(path)
-            inverse = 1 / np.exp(np.interp(np.log(f), np.log(table[:, 0]), np.log(table[:, 1])))
-        weights[name] = 4 * trapezoid * inverse * (f >= f_min)
+            table = np.log(np.loadtxt(path))
+            inverse = lambda x, t=table: np.exp(-np.interp(np.log(x), t[:, 0], t[:, 1]))  # noqa: E731
+        weights[name] = at(inverse, f_min, MASSES)
+        if name in ("ET_5", "aLIGO_20"):
+            for mass in SINGLE_MASSES:
+                weights[f"{name}_M{mass:g}"] = at(inverse, f_min, [mass])
     return f, weights
 
 
@@ -135,7 +162,11 @@ def project(vectors, columns):
 
 def metrics(f, weights, m, amp, d_amp, d_phase, d_res):
     """``kind -> (scopes, 5, 5)`` of one waveform: the sum of the modes, then
-    each alone; and the rho^2 of each mode."""
+    each alone; and each mode's share of rho^2. ``weights`` of one mass, or
+    ``(masses, k)`` to average over."""
+    if weights.ndim == 2:
+        parts = [metrics(f, w, m, amp, d_amp, d_phase, d_res) for w in weights]
+        return {k: np.mean([g[k] for g, _ in parts], axis=0) for k in KINDS}, np.mean([r for _, r in parts], axis=0)
     root = np.sqrt(weights)  # (k,)
     rho2 = np.sum(amp**2 * weights, axis=1)
     flat = lambda re, im: np.concatenate([re * root, im * root], axis=-1)  # noqa: E731
@@ -157,7 +188,7 @@ def metrics(f, weights, m, amp, d_amp, d_phase, d_res):
             ("residual_shifted", project(pick(dr), np.array(shifts))),
         ):
             out[kind].append(vectors @ vectors.T / rho2.sum())
-    return {k: np.array(v) for k, v in out.items()}, rho2
+    return {k: np.array(v) for k, v in out.items()}, rho2 / rho2.sum()
 
 
 def open_oracle():
@@ -165,8 +196,8 @@ def open_oracle():
 
 
 def metric_command(args):
-    f, weights = quadrature(args.psd_dir)
     model = open_oracle()
+    f, weights = quadrature(args.psd_dir, model)
     derivatives = Derivatives(model, f)
     m = np.array([mode.m for mode in derivatives.modes], dtype=float)
     x = sample(args.n)
@@ -245,7 +276,7 @@ def report_command(args):
             for p in psds:
                 ratio = log_ratios(floored(in_coordinates(data[f"{p} {kind}"][:, 0], x, "linear"), floor), reference)
                 ratio -= ratio.mean()
-                print(f"{kind:>17} {p:>9}: std {ratio.std():.2f}  1-99% [{np.quantile(ratio, .01):+.2f}, {np.quantile(ratio, .99):+.2f}]"
+                print(f"{kind:>17} {p:>13}: std {ratio.std():.2f}  1-99% [{np.quantile(ratio, .01):+.2f}, {np.quantile(ratio, .99):+.2f}]"
                       f"  per point scale {ratio.mean(1).std():.2f}")
     print("\n== each mode's metric against the sum's (residual, ET_5, log ratio std; normalized by the mode's own power)")
     reference = floored(in_coordinates(data["ET_5 residual"][:, 0], x, "linear"), 1e-4)
@@ -263,12 +294,13 @@ def report_command(args):
 
 def check_mismatch_command(args):
     """1 - overlap, maximized over time and phase, against d^T g d / 2 for small
-    displacements, (2,2), ET from 5 Hz."""
+    displacements, (2,2), at a single mass."""
     from scipy.optimize import minimize_scalar
 
-    f, weights = quadrature(None)
-    w = weights["ET_5"]
-    derivatives = Derivatives(open_oracle(), f)
+    model = open_oracle()
+    f, weights = quadrature(None, model)
+    w = weights[args.weights][0]
+    derivatives = Derivatives(model, f)
     m = np.array([q.m for q in derivatives.modes], dtype=float)
     i22 = [(q.l, q.m) for q in derivatives.modes].index((2, 2))
     rng = np.random.default_rng(1)
@@ -296,8 +328,8 @@ def check_mismatch_command(args):
 def check_teob_command(args):
     """The ``residual`` metric from central differences of TEOBResumS waveforms,
     against the model's, ET from 5 Hz."""
-    f, weights = quadrature(None)
     model = open_oracle()
+    f, weights = quadrature(None, model)
     derivatives = Derivatives(model, f)
     m = np.array([q.m for q in derivatives.modes], dtype=float)
     x = sample(args.n, seed=5)
@@ -356,6 +388,7 @@ def main():
     c.add_argument("--floors", type=float, nargs="+", default=[1e-6, 1e-4, 1e-2])
     c.set_defaults(run=report_command)
     c = commands.add_parser("check-mismatch")
+    c.add_argument("--weights", default="ET_5_M4", help="those of a single mass")
     c.set_defaults(run=check_mismatch_command)
     c = commands.add_parser("check-teob")
     c.add_argument("--n", type=int, default=20)
