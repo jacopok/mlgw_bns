@@ -471,6 +471,34 @@ def table(args):
                       f"{g('unaligned_50'):.1e} {g('unaligned_99'):.1e} | {g('time_50', 1e6):7.2f} {g('time_99', 1e6):7.1f} | {g('dual'):.0e}")
 
 
+def truncate(args):
+    """Copies of a shipped model with its kernel ridge cut to the first N
+    training points, and nothing else changed: their predictions are garbage,
+    their cost is that of models trained on N waveforms (the coordinates of
+    the inputs, and a 5 x 5 map of them, cost nothing next to the kernel)."""
+    import shutil
+
+    import mlgw_bns
+    from mlgw_bns.model import Model
+
+    data = Path(mlgw_bns.__file__).parent / "data"
+    for n in args.n:
+        model = Model.default_for_testing(args.model)
+        base = Path(args.out) / f"n{n}" / "model"
+        base.parent.mkdir(parents=True, exist_ok=True)
+        for mode, mode_model in model.mode_models.items():
+            name = f"l{mode.l}_m{mode.m}"
+            for end in (".yaml", "_arrays.h5"):
+                shutil.copy(data / f"{args.model}_{name}{end}", f"{base}_{name}{end}")
+            regressor = mode_model.nn.regressor
+            # (Fortran order, as the fits leave it)
+            regressor.X_fit_ = np.array(regressor.X_fit_[:n])
+            regressor.dual_coef_ = np.asfortranarray(regressor.dual_coef_[:n])
+            mode_model.nn.save(f"{base}_{name}_nn.pkl")
+        size = sum(f.stat().st_size for f in base.parent.glob("*_nn.pkl"))
+        print(f"{base}: regressors {size / 1e6:.1f} MB", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(required=True)
@@ -493,6 +521,11 @@ def main():
     c.add_argument("--gammas", type=float, nargs="+", default=list(GAMMAS))
     c.add_argument("--modes", type=parse_mode, nargs="+")
     c.set_defaults(run=fit)
+    c = commands.add_parser("truncate")
+    c.add_argument("out")
+    c.add_argument("--model", default="default_hom_lambda2000")
+    c.add_argument("--n", type=int, nargs="+", default=[1024, 2048, 4096, 8192, 16384])
+    c.set_defaults(run=truncate)
     c = commands.add_parser("table")
     c.add_argument("out")
     c.set_defaults(run=table)
