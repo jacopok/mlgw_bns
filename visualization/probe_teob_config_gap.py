@@ -58,7 +58,7 @@ MODES = [Mode(2, 2), Mode(2, 1), Mode(3, 3), Mode(4, 4)]
 M_VALUES = np.array([m.m for m in MODES])
 BAND_LO, BAND_HI = 20.0, 2048.0
 F0 = 15.0
-_MSUN_SECONDS = 4.925490947e-6
+from mlgw_bns.constants import SUN_MASS_SECONDS as _MSUN_SECONDS, TEOBRESUMS_MASS_FACTOR  # noqa: E402
 
 #: ODE start frequencies (Hz, the (2,2) GW frequency) for ``--ladder``.
 F0_GRID = [3.0, 4.0, 5.0, 7.0, 10.0, 13.0, 15.0, 18.0]
@@ -76,7 +76,7 @@ def eobrun_modes(params, frequencies, f0, srate, inclination):
     target = frequencies[inside]
     par = dict(
         q=params.mass_ratio, LambdaAl2=params.lambda_1, LambdaBl2=params.lambda_2,
-        chi1=params.chi_1, chi2=params.chi_2, M=params.total_mass,
+        chi1=params.chi_1, chi2=params.chi_2, M=params.total_mass * TEOBRESUMS_MASS_FACTOR,
         distance=params.distance_mpc, inclination=inclination,
         initial_frequency=f0, srate_interp=srate, use_geometric_units="no",
         domain=1, interp_freqs="yes", freqs=list(target), coalescence_angle=0.0,

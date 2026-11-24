@@ -15,7 +15,7 @@ from .frequency_of_merger import frequency_of_merger
 if TYPE_CHECKING:
     from .dataset_generation import WaveformParameters
 
-SUN_MASS_SECONDS: float = 4.92549094830932e-6  # M_sun * G / c**3
+from .constants import SUN_MASS_SECONDS  # noqa: F401 (G M_sun / c^3, IAU; re-exported)
 EULER_GAMMA = 0.57721566490153286060
 _LOG2 = 0.69314718055994528623
 _LOG3 = 1.0986122886681097821

@@ -1562,6 +1562,7 @@ def teob_precessing_polarizations(
     polarizations around them, and started gamma elsewhere than the model
     does (at the NLO estimate of alpha, not at alpha).
     """
+    from mlgw_bns.constants import TEOBRESUMS_MASS_FACTOR
     from mlgw_bns.dataset_generation import eobrun
 
     from mlgw_bns.higher_order_modes import mode_to_k, srate_interp_scaling
@@ -1569,7 +1570,7 @@ def teob_precessing_polarizations(
     initial_frequency = params.reference_frequency_hz / 0.95
     largest_l = max(mode.l for mode in model.modes)
     _, hp_re, hp_im, hc_re, hc_im, _, hlm, dynamics = eobrun(dict(
-        M=params.total_mass,
+        M=params.total_mass * TEOBRESUMS_MASS_FACTOR,  # TEOBResumS' MSUN_S -> IAU
         q=params.mass_ratio,
         LambdaAl2=params.lambda_1,
         LambdaBl2=params.lambda_2,

@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 
+from mlgw_bns.constants import TEOBRESUMS_MASS_FACTOR
 from mlgw_bns.dataset_generation import ParameterSet, TEOBResumSGenerator
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.mode_model import ModeModel, ParametersWithExtrinsic
@@ -84,6 +85,7 @@ def test_model_nn_prediction(
 
     teob_dict = parameters_with_extrinsic.teobresums_dict(model.dataset)
     teob_dict["use_geometric_units"] = "no"
+    teob_dict["M"] *= TEOBRESUMS_MASS_FACTOR
     teob_dict["initial_frequency"] /= parameters_with_extrinsic.mass_sum_seconds
     teob_dict["srate_interp"] /= parameters_with_extrinsic.mass_sum_seconds
     teob_dict["df"] /= parameters_with_extrinsic.mass_sum_seconds
@@ -143,6 +145,7 @@ def test_model_nn_prediction_random_extrinsic(
     teob_dict = params.teobresums_dict(model.dataset)
 
     teob_dict["use_geometric_units"] = "no"
+    teob_dict["M"] *= TEOBRESUMS_MASS_FACTOR
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
     teob_dict["srate_interp"] /= params.mass_sum_seconds
     teob_dict["df"] /= params.mass_sum_seconds / 1024.0

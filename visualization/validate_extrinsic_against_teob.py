@@ -175,7 +175,7 @@ DATA_PATH = "visualization/validate_extrinsic_against_teob.npz"
 
 
 #: One solar mass in seconds, for the geometric -> SI merger time.
-_MSUN_SECONDS = 4.925490947e-6
+from mlgw_bns.constants import SUN_MASS_SECONDS as _MSUN_SECONDS, TEOBRESUMS_MASS_FACTOR  # noqa: E402
 
 
 def teob_independent_modes(params: ParametersWithExtrinsic, frequencies):
@@ -217,7 +217,7 @@ def teob_independent_modes(params: ParametersWithExtrinsic, frequencies):
 
     par = dict(
         q=params.mass_ratio, LambdaAl2=params.lambda_1, LambdaBl2=params.lambda_2,
-        chi1=params.chi_1, chi2=params.chi_2, M=params.total_mass,
+        chi1=params.chi_1, chi2=params.chi_2, M=params.total_mass * TEOBRESUMS_MASS_FACTOR,
         distance=params.distance_mpc, inclination=params.inclination,
         initial_frequency=F0_TEOB * initial_frequency_scaling(MODES),
         srate_interp=SRATE_HZ, use_geometric_units="no",

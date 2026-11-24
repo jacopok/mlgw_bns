@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .dataset_generation import WaveformParameters
 
-MTSUN_SI = 4.925491025543576e-06
+from .constants import SUN_MASS_SECONDS as MTSUN_SI  # noqa: F401 (kept for compatibility)
 
 
 def frequency_of_merger(params: "WaveformParameters") -> float:

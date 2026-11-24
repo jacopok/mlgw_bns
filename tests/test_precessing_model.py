@@ -11,6 +11,7 @@ import dataclasses
 import numpy as np
 import pytest
 
+from mlgw_bns.constants import TEOBRESUMS_MASS_FACTOR
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.model import Model
 from mlgw_bns.precessing_model import (
@@ -333,7 +334,7 @@ def test_twist_reproduces_teobresums_frequency_domain_polarizations():
 
     frequencies, real_hp, imag_hp, real_hc, imag_hc = eobrun(dict(
         q=params.mass_ratio, LambdaAl2=params.lambda_1, LambdaBl2=params.lambda_2,
-        M=params.total_mass, distance=params.distance_mpc,
+        M=params.total_mass * TEOBRESUMS_MASS_FACTOR, distance=params.distance_mpc,
         initial_frequency=initial_frequency, srate_interp=4096.0,
         use_geometric_units="no", interp_uniform_grid="yes", domain=1, df=1.0 / 128.0,
         # mirror of compute_hpc's pi/2 - azimuth, see

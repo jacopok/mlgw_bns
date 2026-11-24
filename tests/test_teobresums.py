@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from EOBRun_module import EOBRunPy  # type: ignore
 
+from mlgw_bns.constants import TEOBRESUMS_MASS_FACTOR
 from mlgw_bns.dataset_generation import ParameterSet
 from mlgw_bns.mode_model import ParametersWithExtrinsic
 
@@ -29,6 +30,7 @@ def test_geometric_units_normalization(dataset, teob_generator):
     wf = hpr - 1j * hpi
 
     teob_dict["use_geometric_units"] = "no"
+    teob_dict["M"] *= TEOBRESUMS_MASS_FACTOR
     teob_dict["initial_frequency"] /= params.mass_sum_seconds
     teob_dict["srate_interp"] /= params.mass_sum_seconds
     teob_dict["df"] /= params.mass_sum_seconds
