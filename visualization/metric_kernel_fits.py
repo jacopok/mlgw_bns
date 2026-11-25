@@ -139,29 +139,47 @@ def errors(cache, name, m, predicted):
 # -- kernels ------------------------------------------------------------------
 
 
-def coordinates(x, name):
+LAMBDA_POWERS = {"linear": (1.0, 1.0), "sqrt": (1 / 2, 1 / 2), "cbrt": (1 / 3, 1 / 3)}
+SPIN_WARP = ((-0.13, 0.4), (-0.05, 0.5))  # center and width of the metric's trend along each spin
+
+
+def warp(x, name):
+    """The coordinates ``name`` of the parameters, and their derivatives: that
+    of the Lambdas (``log``, a power, or ``pA,B`` for two exponents), then any
+    of ``+logq``, ``+delta`` ((q-1)/(q+1)), ``+eta``, ``+asinh`` (the spins)."""
+    first, *rest = name.split("+")
     x = np.array(x, dtype=float)
-    if name == "log":
-        x[:, 1:3] = np.log1p(x[:, 1:3])
-    elif name == "sqrt":
-        x[:, 1:3] = np.sqrt(x[:, 1:3])
-    elif name == "cbrt":
-        x[:, 1:3] = np.cbrt(x[:, 1:3])
-    elif name != "linear":
-        raise ValueError(name)
-    return x
+    u, j = x.copy(), np.ones_like(x)
+    if first == "log":
+        u[:, 1:3], j[:, 1:3] = np.log1p(x[:, 1:3]), 1 / (1 + x[:, 1:3])
+    else:
+        powers = LAMBDA_POWERS.get(first) or tuple(float(v) for v in first[1:].split(","))
+        for k, a in zip((1, 2), powers):
+            u[:, k], j[:, k] = x[:, k] ** a, a * x[:, k] ** (a - 1)
+    q = x[:, 0]
+    for part in rest:
+        if part == "logq":
+            u[:, 0], j[:, 0] = np.log(q), 1 / q
+        elif part == "delta":
+            u[:, 0], j[:, 0] = (q - 1) / (q + 1), 2 / (q + 1) ** 2
+        elif part == "eta":
+            u[:, 0], j[:, 0] = q / (1 + q) ** 2, (1 - q) / (1 + q) ** 3
+        elif part == "asinh":
+            for k, (center, width) in zip((3, 4), SPIN_WARP):
+                t = (x[:, k] - center) / width
+                u[:, k], j[:, k] = np.arcsinh(t), 1 / (width * np.sqrt(1 + t**2))
+        else:
+            raise ValueError(name)
+    return u, j
+
+
+def coordinates(x, name):
+    return warp(x, name)[0]
 
 
 def jacobian(x, name):
     """d(coordinate)/d(parameter), (n, 5)."""
-    j = np.ones_like(x)
-    if name == "log":
-        j[:, 1:3] = 1 / (1 + x[:, 1:3])
-    elif name == "sqrt":
-        j[:, 1:3] = 0.5 / np.sqrt(x[:, 1:3])
-    elif name == "cbrt":
-        j[:, 1:3] = np.cbrt(x[:, 1:3]) ** -2 / 3
-    return j
+    return warp(x, name)[1]
 
 
 def tempered(g, beta, floor=FLOOR):
