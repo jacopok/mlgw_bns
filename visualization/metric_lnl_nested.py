@@ -37,6 +37,70 @@ def known(pattern, inner=False):
     return out, bool(parts[0]["phase_flip"])
 
 
+def own_phase(run, target):
+    """In place of ``TEOBResumSRun._fit_delta``, which turns TEOBResumS to the
+    orbital phase of largest overlap with the surrogate: the turn for which its
+    (2,2) phase at the top of the trained band is what the merger convention
+    makes it. The surrogate has that phase by construction, whatever its errors
+    (its tangent there has no intercept), so nothing is fitted to it."""
+    from mlgw_bns.higher_order_modes import Mode, mode_to_k
+
+    top = np.asarray(run.top)
+    grid = np.union1d(np.geomspace(top[1] / 2, top[1], 16), top)
+    at = int(np.searchsorted(grid, top[1]))
+
+    def phase(delta):
+        hp = run.run(grid, [mode_to_k(Mode(2, 2))], delta)[0]
+        return np.angle(hp[at] * np.exp(-2j * np.pi * run.merger_time(0.0) * grid[at]))
+
+    # (2,2) alone: plus polarization of the surrogate at the same frequency
+    reference = np.angle(own_phase.surrogate(np.array([top[1]]))[0])
+    start = phase(0.0)
+    sign = np.sign(np.angle(np.exp(1j * (phase(0.2) - start))))  # each mode turns by sign m delta
+    delta = sign * np.angle(np.exp(1j * (reference - start))) / 2  # modulo pi: the odd modes choose
+    grid_fit = np.geomspace(25.0, 2000.0, 400)
+    hp_s, hc_s = target(grid_fit)
+    overlaps = [float(np.sum(np.conj(run.polarisations(grid_fit, d)[0]) * hp_s * grid_fit ** (-4 / 3)).real) for d in (delta, delta + np.pi)]
+    run.overlap = np.nan
+    return delta if overlaps[0] > overlaps[1] else delta + np.pi
+
+
+def initialize_teob(fine):
+    """Workers of the raw TEOBResumS likelihood (``--teob``)."""
+    import bilby_xG.teobresums_mlgw as tm
+    import surrogate_fine_nested as s
+
+    source = tm.mlgw_bns_individual_modes
+    make = tm.TEOBResumSRun.__init__
+
+    def init(run, model, start, f0, minimum_frequency, target):
+        P = start  # aligned: the surrogate's (2,2) alone, at the binary of the run
+
+        def surrogate(f):
+            out = source(f, P.total_mass, P.mass_ratio, P.chi_1[2], P.chi_2[2], P.lambda_1, P.lambda_2,
+                         P.distance_mpc, P.inclination, initialize_teob.angle, mode_array=[(2, 2)])
+            return out["2,2"]["plus"]
+
+        own_phase.surrogate = surrogate
+        make(run, model, start, f0, minimum_frequency, target)
+
+    tm.TEOBResumSRun.__init__ = init
+    tm.TEOBResumSRun._fit_delta = own_phase
+    initialize_teob.angle = 0.0
+    original = tm.teobresums_mlgw_individual_modes
+
+    def teob(frequency_array, M, q, chi1z, chi2z, LambdaAl2, LambdaBl2, distance, inclination, coalescence_angle, **kwargs):
+        initialize_teob.angle = coalescence_angle
+        return original(frequency_array, M, q, chi1z, chi2z, LambdaAl2, LambdaBl2, distance, inclination, coalescence_angle, **kwargs)
+
+    teob.evaluates_on_bin_edges = True
+    tm.teobresums_mlgw_individual_modes = teob
+    if hasattr(s, "marginal"):
+        s.marginal = lambda *_: (np.nan, np.nan, np.nan)
+    s.MODELS = ["mlgw", "teob"]
+    s._init(fine, {})
+
+
 def initialize(fine):
     import surrogate_fine_nested as s
     s.MODELS = ["mlgw"]
@@ -48,7 +112,7 @@ def initialize(fine):
 def work(task):
     import surrogate_fine_nested as s
     i, theta = task
-    e = s.evaluate(s.ST["fine"]["mlgw"], theta)
+    e = s.evaluate(s.ST["fine"]["teob" if os.environ.get("LNL_TEOB") else "mlgw"], theta)
     # summed over interferometers: what a turn of the orbital phase needs
     return i, [e[k] for k in ("lnl", "max", "dt", "dphi")], e["z"].sum(0), e["G"].sum(0)
 
@@ -62,6 +126,8 @@ def nested_samples(run_dir):
 
 
 def run(a):
+    if a.teob:
+        os.environ["LNL_TEOB"] = "1"
     table, flip = known(a.parts)
     nested, keys, fixed = nested_samples(a.run_dir)
     weights = np.asarray(nested["weights"], dtype=float)
@@ -80,7 +146,7 @@ def run(a):
     print(mlgw_bns.__file__, len(index), "samples, flip", flip, flush=True)
     values = {}
     tasks = [(int(j), dict(fixed, **{key: float(nested[key][j]) for key in keys})) for j in index]
-    with ProcessPoolExecutor(a.npool, mp_context=multiprocessing.get_context("spawn"), initializer=initialize, initargs=(fine,)) as pool:
+    with ProcessPoolExecutor(a.npool, mp_context=multiprocessing.get_context("spawn"), initializer=initialize_teob if a.teob else initialize, initargs=(fine,)) as pool:
         for j, *v in pool.map(work, tasks, chunksize=4):
             values[j] = v
             if len(values) % 500 == 0:
@@ -149,6 +215,7 @@ if __name__ == "__main__":
     c.add_argument("--chunk", default="0/1")
     c.add_argument("--npool", type=int, default=24)
     c.add_argument("--limit", type=int)
+    c.add_argument("--teob", action="store_true", help="TEOBResumS instead, with its own orbital phase")
     c.add_argument("--min-weight", type=float, default=1e-3)
     c.set_defaults(run=run)
     c = commands.add_parser("report")
