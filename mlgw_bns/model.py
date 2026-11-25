@@ -550,7 +550,8 @@ class Model:
         ----------
         model_name : str, optional
             Name of the model to load: one of :data:`MODELS_AVAILABLE`, or
-            of :data:`MODEL_ALIASES`. Defaults to ``"default_hom"``.
+            of :data:`MODEL_ALIASES`, or of any model whose files were put
+            in the package's data folder. Defaults to ``"default_hom"``.
 
             The models are trained on tidal deformabilities from 1: below
             that TEOBResumS used to switch to its black-hole settings, and
@@ -576,7 +577,8 @@ class Model:
         Raises
         ------
         ValueError
-            If ``model_name`` is not in :data:`MODELS_AVAILABLE`.
+            If ``model_name`` is not in :data:`MODELS_AVAILABLE`, and not in
+            the package's data folder.
 
         Warns
         -----
@@ -588,7 +590,10 @@ class Model:
             model_name = "default_hom"
         model_name = canonical_name(model_name)
 
-        if model_name not in MODELS_AVAILABLE:
+        # or a model whose files were put in the package's data folder
+        if model_name not in MODELS_AVAILABLE and not files(__name__).joinpath(
+            f"{PRETRAINED_MODEL_FOLDER}{model_name}_l2_m2.yaml"
+        ).is_file():
             raise ValueError(f"Model {model_name} not available!")
         if model_name in MODEL_CAVEATS:
             warnings.warn(MODEL_CAVEATS[model_name], ModelAccuracyWarning, stacklevel=2)
