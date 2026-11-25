@@ -86,6 +86,13 @@ MODELS_AVAILABLE = [
 ]
 
 
+#: Half-width, relative to the frequency, and points of the window in which
+#: :meth:`Model.teob_modes_amp_phase` fits TEOBResumS' (2,2) phase at the time
+#: reference frequency.
+TIME_REFERENCE_WINDOW = 2e-3
+TIME_REFERENCE_POINTS = 513
+
+
 class ModelAccuracyWarning(UserWarning):
     """A shipped model is used where it is known not to be accurate."""
 
@@ -1004,7 +1011,10 @@ class Model:
         """The (2,2) reference line of ``params``, see
         :meth:`ModeModel.merger_reference`."""
         mode_model = self.mode_models[Mode(2, 2)]
-        return mode_model.merger_reference(params.intrinsic(mode_model.dataset))
+        return mode_model.merger_reference(
+            params.intrinsic(mode_model.dataset),
+            frequency_hz=params.rescaled_time_reference(mode_model.dataset),
+        )
 
     def _mode_amplitudes_and_phases(
         self,
@@ -1223,7 +1233,9 @@ class Model:
         Combines the predictions of every per-mode :class:`ModeModel` into the
         two observer-frame polarizations :math:`h_+, h_\times`, using the
         inclination contained in ``params``. The merger is at
-        ``params.merger_time``, with orbital phase ``params.coalescence_phase``.
+        ``params.merger_time``, with orbital phase ``params.coalescence_phase``
+        (or the time and orbital phase when the (2,2) emits
+        ``params.time_reference_frequency_hz``).
 
         Parameters
         ----------
@@ -1333,6 +1345,7 @@ class Model:
         modes: Optional[Sequence] = None,
         distance_mpc: Union[float, np.ndarray] = 1.0,
         return_tf: bool = False,
+        time_reference_frequency_hz: Union[float, np.ndarray, None] = None,
     ) -> tuple[np.ndarray, ...]:
         r"""Amplitude and phase of individual modes, for a batch of binaries.
 
@@ -1365,6 +1378,10 @@ class Model:
             Also return the time :math:`t_{\ell m}(f) = -\frac{1}{2\pi}
             \partial_f \phi_{\ell m}` at which each mode emits each
             frequency, in seconds relative to the merger.
+        time_reference_frequency_hz : float or np.ndarray, optional
+            Put :math:`t = 0`, and zero orbital phase, where the (2,2) emits
+            this frequency (in Hz) instead of at the merger. Defaults to
+            ``None``, the merger.
 
         Returns
         -------
@@ -1374,7 +1391,8 @@ class Model:
             are NaN.
         """
         return self.batched_surrogate(modes)(
-            intrinsic, total_mass, frequencies, distance_mpc, return_tf=return_tf
+            intrinsic, total_mass, frequencies, distance_mpc, return_tf=return_tf,
+            time_reference_frequency_hz=time_reference_frequency_hz,
         )
 
     def jax_modes_amp_phase(
@@ -1382,8 +1400,8 @@ class Model:
     ) -> Callable:
         """A pure JAX function computing :meth:`predict_modes_amp_phase`.
 
-        Returns ``f(intrinsic, total_mass, frequencies, distance_mpc=1.0)``
-        with the same shapes and conventions as
+        Returns ``f(intrinsic, total_mass, frequencies, distance_mpc=1.0,
+        time_reference_frequency_hz=None)`` with the same shapes and conventions as
         :meth:`predict_modes_amp_phase`, for fixed ``modes`` and
         ``return_tf``. A single waveform is the batch ``N = 1``, i.e.
         ``intrinsic`` of shape ``(1, 5)``. Wrap it in :func:`jax.jit`;
@@ -1393,9 +1411,13 @@ class Model:
         """
         surrogate = self.batched_surrogate(modes, backend="jax")
 
-        def predict(intrinsic, total_mass, frequencies, distance_mpc=1.0):
+        def predict(
+            intrinsic, total_mass, frequencies, distance_mpc=1.0,
+            time_reference_frequency_hz=None,
+        ):
             return surrogate(
-                intrinsic, total_mass, frequencies, distance_mpc, return_tf=return_tf
+                intrinsic, total_mass, frequencies, distance_mpc, return_tf=return_tf,
+                time_reference_frequency_hz=time_reference_frequency_hz,
             )
 
         return predict
@@ -1542,14 +1564,23 @@ class Model:
         f_natural = frequencies * params.mass_sum_seconds
 
         # Two more points at the top of the trained band, for the merger
-        # reference of the (2,2): the tangent there, as in `merger_reference`.
+        # reference of the (2,2): the tangent there, as in `merger_reference`;
+        # or a window about the time reference frequency, its points close
+        # enough for TEOBResumS' phase not to slip by 2 pi between them.
         reference_model = self.mode_models[Mode(2, 2)]
         f_top = float(
             reference_model.dataset.frequencies[
                 reference_model.downsampling_indices.phase_indices[-1]
             ]
         )
-        top = np.array([f_top * (1 - 1e-3), f_top])
+        f_ref = params.time_reference_frequency_hz
+        if f_ref is None:
+            top = np.array([f_top * (1 - 1e-3), f_top])
+        else:
+            f_ref = f_ref * params.mass_sum_seconds
+            top = f_ref * np.linspace(
+                1 - TIME_REFERENCE_WINDOW, 1 + TIME_REFERENCE_WINDOW, TIME_REFERENCE_POINTS
+            )
         grid = np.union1d(f_natural, top)
         modes = list(self.modes)
         generator = self.mode_models[modes[0]].waveform_generator
@@ -1557,8 +1588,17 @@ class Model:
         at_top = np.searchsorted(grid, top)
         at_request = np.searchsorted(grid, f_natural)
         phase_22 = waveforms[Mode(2, 2)][2]
-        slope = (phase_22[at_top[1]] - phase_22[at_top[0]]) / (top[1] - top[0])
-        intercept = phase_22[at_top[1]] - slope * f_top
+        if f_ref is None:
+            slope = (phase_22[at_top[1]] - phase_22[at_top[0]]) / (top[1] - top[0])
+            intercept = phase_22[at_top[1]] - slope * f_top
+        else:
+            near = phase_22[at_top]
+            centre = near[len(near) // 2]
+            fit = np.polynomial.Polynomial.fit(
+                (top / f_ref - 1) / TIME_REFERENCE_WINDOW, near - centre, 4, domain=[-1, 1]
+            )
+            slope = fit.deriv()(0.0) / (TIME_REFERENCE_WINDOW * f_ref)
+            intercept = centre + fit(0.0) - slope * f_ref
 
         eta = params.intrinsic(dataset).eta
         prefactor = dataset.mlgw_bns_prefactor(eta, params.total_mass) / params.distance_mpc

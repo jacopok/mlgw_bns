@@ -5,6 +5,7 @@ MODEL is a shipped name (default: all of them) or a saved base path
 
     python visualization/merger_time_release.py [N [MODEL ...]]
 """
+import os
 import sys
 import warnings
 from multiprocessing import get_context
@@ -49,7 +50,7 @@ def errors(args):
 
 if __name__ == "__main__":
     jobs = [(n, c) for n in NAMES for c in [-1, *range(CHUNKS)]]
-    with get_context("fork").Pool(8) as pool:
+    with get_context("fork").Pool(int(os.environ.get("N_JOBS", "8"))) as pool:
         out = pool.map(errors, jobs)
     for name in NAMES:
         corner = np.concatenate([dt for n, c, dt, _ in out if n == name and c < 0])

@@ -368,7 +368,7 @@ def batch_arguments(
 
 def _reference_rotation(
     predict_reference, keys, aligned, total_mass, distance_mpc, reference_phase,
-    reference_frequency_hz,
+    reference_frequency_hz, time_reference_frequency_hz=None,
 ):
     r"""The rotation :math:`\phi_0 - \phi_{\rm orb}` that brings the orbital
     phase at the reference frequency to ``reference_phase``: co-precessing
@@ -380,7 +380,9 @@ def _reference_rotation(
     """
     _, jnp = _jnp()
     centres = jnp.stack([key[1] / 2.0 * reference_frequency_hz for key in keys], axis=1)
-    _, reference, time = predict_reference(aligned, total_mass, centres, distance_mpc)
+    _, reference, time = predict_reference(
+        aligned, total_mass, centres, distance_mpc, time_reference_frequency_hz
+    )
     transforms = {
         key: reference[:, i, i] + 2 * np.pi * centres[:, i] * time[:, i, i]
         for i, key in enumerate(keys)
@@ -438,6 +440,7 @@ def precessing_mode_components(
     model: "Model",
     modes: Optional[Sequence] = None,
     n_steps: int = N_STEPS,
+    return_tf: bool = False,
 ) -> Callable:
     r"""A JAX function giving each co-precessing multipole and its twist,
     batched.
@@ -462,6 +465,10 @@ def precessing_mode_components(
     ``modes``. ``angles``, from :func:`precession_angles`, are the
     precession angles to use; by default they are integrated from the
     lowest frequency of each row.
+    With ``return_tf`` a fourth array holds the time :math:`t_{\ell m}(f)` of
+    each co-precessing multipole (seconds from the merger, or from
+    ``merger_time`` with ``time_reference_frequency_hz``), from the
+    surrogate's own phase.
     ``coprecessing`` already has its orbital phase set at the reference
     frequency and the merger-time shift; :func:`precessing_waveform` is
     ``(sum(c_plus * coprecessing), sum(c_cross * coprecessing))`` over the
@@ -476,11 +483,13 @@ def precessing_mode_components(
     n_steps : int
         Steps of each leg of the precession integration
         (:func:`integrate_angles`).
+    return_tf : bool
+        Also return the times of the multipoles.
     """
     jax, jnp = _jnp()
     modes = [tuple(int(i) for i in lm) for lm in (model.modes if modes is None else modes)]
     integrate = precession_angles(model, n_steps)
-    predict_modes = model.jax_modes_amp_phase(modes)
+    predict_modes = model.jax_modes_amp_phase(modes, return_tf=return_tf)
     # from the model's multipoles, as the numpy path, whichever are twisted:
     # the odd-m one picks the branch of the orbital phase
     keys = reference_phase_keys(model.modes)
@@ -507,6 +516,7 @@ def precessing_mode_components(
         reference_frequency_hz,
         merger_time=0.0,
         angles=None,
+        time_reference_frequency_hz=None,
     ):
         intrinsic = jnp.atleast_2d(jnp.asarray(intrinsic, jnp.float64))
         n_rows = intrinsic.shape[0]
@@ -528,10 +538,12 @@ def precessing_mode_components(
         aligned = jnp.stack([intrinsic[:, i] for i in (0, 1, 2, 5, 8)], axis=1)
         rotation = _reference_rotation(
             predict_reference, keys, aligned, total_mass, distance_mpc,
-            reference_phase, reference_frequency_hz,
+            reference_phase, reference_frequency_hz, time_reference_frequency_hz,
         )
 
-        amp, phase = predict_modes(aligned, total_mass, frequencies, distance_mpc)
+        amp, phase, *times = predict_modes(
+            aligned, total_mass, frequencies, distance_mpc, time_reference_frequency_hz
+        )
         emms = jnp.asarray([m for _, m in modes], dtype=float)
         phase = (
             phase
@@ -545,7 +557,7 @@ def precessing_mode_components(
         c_plus, c_cross = jax.vmap(one_binary)(
             angles, frequencies, total_mass * SUN_MASS_SECONDS, inclination, azimuth,
         )
-        return amp * jnp.exp(1j * phase), c_plus, c_cross
+        return (amp * jnp.exp(1j * phase), c_plus, c_cross, *times)
 
     return predict
 
@@ -560,8 +572,8 @@ def precessing_waveform(
 
     Returns ``predict(intrinsic, frequencies, total_mass, distance_mpc,
     inclination, azimuth, reference_phase, reference_frequency_hz,
-    merger_time=0.0) -> (h_plus, h_cross)``, where ``intrinsic`` has shape
-    ``(N, 9)``, rows :math:`[q, \Lambda_1, \Lambda_2, \vec{\chi}_1,
+    merger_time=0.0, time_reference_frequency_hz=None) -> (h_plus,
+    h_cross)``, where ``intrinsic`` has shape ``(N, 9)``, rows :math:`[q, \Lambda_1, \Lambda_2, \vec{\chi}_1,
     \vec{\chi}_2]`, ``frequencies`` ``(k,)`` or ``(N, k)`` (positive and
     increasing, in Hz) and the rest are scalars or of shape ``(N,)``; the
     polarizations have shape ``(N, k)``. The parameters are those of

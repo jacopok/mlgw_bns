@@ -67,6 +67,14 @@ reproduces.
   <mlgw_bns.mode_model.ModeModel.merger_reference>`; a merger time
   :math:`t_c` and coalescence phase :math:`\phi_c` are applied by adding
   :math:`m \phi_c - 2\pi f t_c` to the phases.
+
+  With ``time_reference_frequency_hz`` :math:`= f_0`, the tangent is taken
+  at :math:`f_0` instead: :math:`t = 0` is when the (2,2) emits
+  :math:`f_0` (:math:`t_{22}(f_0) = 0`), and :math:`t_c` becomes
+  :math:`t_{f_0}`, :math:`\phi_c` the orbital phase then. The merger is the
+  worst-determined time of a signal, both in the data (it moves with the
+  masses, spins and tides) and in TEOBResumS, whose time-frequency map is
+  smooth in the parameters to ~0.02 us below the merger but not above.
 * **Frequencies.** Below the trained band (``f M / M_ref`` under
   ``initial_frequency_hz``) each mode is continued with its
   post-Newtonian amplitude and phase, blended in as in
@@ -108,6 +116,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 import numpy as np
 from scipy.interpolate import CubicSpline  # type: ignore
 
+from .mode_model import DERIVATIVE_STEPS, DERIVATIVE_WEIGHTS
 from .neural_network import regression_inputs
 
 from .dataset_generation import AMP_SI_BASE
@@ -856,6 +865,7 @@ class BatchedSurrogate:
         frequencies,
         distance_mpc=1.0,
         return_tf: bool = False,
+        time_reference_frequency_hz=None,
     ):
         r"""Amplitude and phase of the requested modes for ``N`` binaries.
 
@@ -873,6 +883,10 @@ class BatchedSurrogate:
             Luminosity distance in Mpc. Defaults to 1.
         return_tf : bool
             Whether to also return :math:`t_{\ell m}(f)`.
+        time_reference_frequency_hz : array, shape ``(N,)`` or scalar, optional
+            Put :math:`t = 0`, and zero orbital phase, where the (2,2) emits
+            this frequency (in Hz) instead of at the merger. Defaults to
+            ``None``, the merger.
 
         Returns
         -------
@@ -881,7 +895,7 @@ class BatchedSurrogate:
             model's range are NaN.
         tf : array, shape ``(N, n_modes, k)``
             Only if ``return_tf``: the time, in seconds relative to the
-            merger, at which each mode emits each frequency.
+            merger (or the reference frequency), at which each mode emits each frequency.
         """
         xp = self._xp
         x = xp.atleast_2d(xp.asarray(intrinsic, dtype=float))
@@ -891,9 +905,13 @@ class BatchedSurrogate:
         f = xp.asarray(frequencies, dtype=float)
         f = xp.broadcast_to(f if f.ndim == 2 else f[None, :], (n_rows, f.shape[-1]))
 
+        f_ref = time_reference_frequency_hz
+        if f_ref is not None:
+            f_ref = xp.broadcast_to(xp.asarray(f_ref, dtype=float), (n_rows,))
+
         chunk = self.chunk_rows
         if xp is not np or n_rows <= chunk:
-            return self._evaluate(xp, x, total_mass, f, distance, return_tf)
+            return self._evaluate(xp, x, total_mass, f, distance, return_tf, f_ref)
 
         # numpy: independent row chunks, on a thread pool (numpy and BLAS
         # release the GIL); BLAS itself is kept single-threaded meanwhile.
@@ -906,7 +924,8 @@ class BatchedSurrogate:
         def run(start):
             rows = slice(start, start + chunk)
             return self._evaluate(
-                xp, x[rows], total_mass[rows], f[rows], distance[rows], return_tf
+                xp, x[rows], total_mass[rows], f[rows], distance[rows], return_tf,
+                None if f_ref is None else f_ref[rows],
             )
 
         workers = self.n_threads or os.cpu_count() or 1
@@ -915,11 +934,20 @@ class BatchedSurrogate:
                 parts = list(pool.map(run, starts))
         return tuple(np.concatenate(pieces, axis=0) for pieces in zip(*parts))
 
-    def _evaluate(self, xp, x, total_mass, f, distance, return_tf):
+    def _evaluate(self, xp, x, total_mass, f, distance, return_tf, f_ref=None):
         fr = self._frozen
         n_rows = x.shape[0]
 
         valid = self._valid(xp, x, total_mass, f)
+        if f_ref is not None:
+            reference = fr.modes_arrays[fr.reference_index]
+            rescaled_ref = f_ref * total_mass / fr.reference_mass
+            low_ref = rescaled_ref < fr.eff_fmin_hz
+            valid = valid & (f_ref > 0) & (
+                rescaled_ref <= reference.phase_spline.knots[-1]
+            )
+            if not fr.extend_low:
+                valid = valid & ~low_ref
         # Invalid rows are evaluated at a harmless point and blanked out
         # at the end, so that they cannot raise or warn along the way.
         x = xp.where(valid[:, None], x, fr.safe_row[None, :])
@@ -985,7 +1013,21 @@ class BatchedSurrogate:
                     requests.append(
                         _PNRequest(lm, low_natural * (1 - _TF_RELATIVE_STEP))
                     )
+        if f_ref is not None:
+            # ... and the (2,2) at the time reference, which may be there too
+            rescaled_ref = xp.where(valid, rescaled_ref, fr.eff_fmin_hz)[:, None]
+            low_ref = low_ref[:, None]
+            ref_natural = rescaled_ref * fr.mass_sum_seconds
+            requests[:0] = [
+                _PNRequest(reference.mode, points)
+                for points in (
+                    xp.full((1, 1), fr.connection_natural),
+                    ref_natural * (1 + DERIVATIVE_STEPS),
+                )
+            ]
         pn = iter(_post_newtonian(xp, self._psi, x, requests))
+        if f_ref is not None:
+            pn_ref_connection, pn_ref = next(pn)[1], next(pn)[1]
 
         residuals = self._residuals(xp, x)
         nodes = []
@@ -1005,13 +1047,28 @@ class BatchedSurrogate:
             )
 
         # --- the merger reference: the tangent to the (2,2) phase at the
-        # top knot, as a function of the frequency at the reference mass
+        # top knot (or at the time reference frequency), as a function of the
+        # frequency at the reference mass
         reference = fr.modes_arrays[fr.reference_index]
         _, reference_phase, reference_slopes = nodes[fr.reference_index]
-        merger_slope = reference_slopes[:, -1:]
-        merger_intercept = (
-            reference_phase[:, -1:] - merger_slope * reference.phase_spline.knots[-1]
-        )
+        if f_ref is None:
+            merger_slope = reference_slopes[:, -1:]
+            merger_intercept = (
+                reference_phase[:, -1:]
+                - merger_slope * reference.phase_spline.knots[-1]
+            )
+        else:
+            value, merger_slope = _spline_eval(
+                xp, reference.phase_spline, reference_phase, reference_slopes,
+                xp.where(low_ref, fr.eff_fmin_hz, rescaled_ref), True,
+            )
+            value = xp.where(low_ref, pn_ref[:, 2:3] - pn_ref_connection + value, value)
+            merger_slope = xp.where(
+                low_ref,
+                (pn_ref @ DERIVATIVE_WEIGHTS)[:, None] / rescaled_ref,
+                merger_slope,
+            )
+            merger_intercept = value - merger_slope * rescaled_ref
 
         amps, phases, tfs = [], [], []
         for ma, (amp_nodes, phase_nodes, phase_slopes) in zip(

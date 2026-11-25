@@ -353,6 +353,79 @@ def test_merger_is_at_zero_time_and_phase(default_model):
     np.testing.assert_allclose(tf, 0.0, atol=1e-12)
 
 
+@pytest.mark.parametrize("f_ref", [8.0, 25.0, 100.0, 900.0])
+def test_time_reference_frequency(default_model, f_ref):
+    """The (2,2) emits the reference frequency (here below and in the band)
+    at t = 0 with zero orbital phase, and the waveform is the
+    merger-referenced one shifted in time and rotated in phase."""
+    intrinsic, _, distance = random_rows(3, seed=13)
+    total_mass = np.array([2.2, 2.8, 3.6])
+    frequencies = np.sort(np.append(np.geomspace(15.0, 1500.0, 60), f_ref))
+    at = np.searchsorted(frequencies, f_ref)
+    kwargs = dict(modes=FOUR_MODES, distance_mpc=distance, return_tf=True)
+    with threadpool_limits(1):
+        amp, phase, tf = default_model.predict_modes_amp_phase(
+            intrinsic, total_mass, frequencies, **kwargs)
+        amp_ref, phase_ref, tf_ref = default_model.predict_modes_amp_phase(
+            intrinsic, total_mass, frequencies,
+            time_reference_frequency_hz=f_ref, **kwargs)
+    np.testing.assert_array_equal(amp, amp_ref)
+    np.testing.assert_allclose(tf_ref[:, 0, at], 0.0, atol=1e-6)
+    # the tangent there has zero intercept: phase = 2 pi f t = 0
+    np.testing.assert_allclose(phase_ref[:, 0, at], 0.0, atol=1e-5)
+    t_ref = tf[:, 0, at]
+    np.testing.assert_allclose(tf_ref, tf - t_ref[:, None, None], atol=1e-6)
+    intercept = phase[:, 0, at] + 2 * np.pi * f_ref * t_ref
+    emms = np.array([m for _, m in FOUR_MODES])
+    expected = (
+        phase
+        + 2 * np.pi * frequencies * t_ref[:, None, None]
+        - emms[:, None] / 2 * intercept[:, None, None]
+    )
+    # 2 pi f times the ~1e-7 s of the finite differences below the band
+    np.testing.assert_allclose(phase_ref, expected, atol=1e-2 if f_ref < 20 else 1e-5)
+
+    # the single-binary path
+    params = ParametersWithExtrinsic(
+        *intrinsic[0], distance[0], 1.0, total_mass[0],
+        time_reference_frequency_hz=f_ref)
+    single = default_model.predict_amplitude_phase_mode(Mode(3, 3), frequencies, params)
+    np.testing.assert_allclose(single[1], phase_ref[0, 2], atol=1e-5)
+
+    # a reference above the band is NaN, as any out-of-range row
+    out = default_model.predict_modes_amp_phase(
+        intrinsic, total_mass, frequencies, modes=[(2, 2)],
+        time_reference_frequency_hz=np.array([f_ref, f_ref, 1e4]))
+    assert np.all(np.isfinite(out[1][:2])) and np.all(np.isnan(out[1][2]))
+
+
+def test_time_reference_frequency_teobresums(default_model):
+    """The surrogate and TEOBResumS agree at fixed time and phase when both
+    are referenced below the merger."""
+    frequencies = np.geomspace(50.0, 800.0, 60)
+    params = ParametersWithExtrinsic(
+        1.4, 500.0, 900.0, 0.1, -0.1, 100.0, 1.0, 2.8,
+        coalescence_phase=0.3, merger_time=1e-3, time_reference_frequency_hz=100.0)
+    _, phase = default_model.teob_modes_amp_phase(frequencies, params)[Mode(2, 2)]
+    _, predicted = default_model.predict_amplitude_phase_mode(
+        Mode(2, 2), frequencies, params)
+    difference = np.angle(np.exp(1j * (phase - predicted)))
+    assert np.max(np.abs(difference)) < 5e-2
+
+
+def test_time_reference_frequency_jax(default_model):
+    jax = pytest.importorskip("jax")
+    intrinsic, total_mass, distance = random_rows(3, seed=14)
+    predict = jax.jit(default_model.jax_modes_amp_phase(FOUR_MODES, return_tf=True))
+    f_ref = np.array([8.0, 60.0, 100.0])
+    frequencies = np.geomspace(20.0, 1000.0, 30)
+    _, phase, tf = predict(intrinsic, total_mass, frequencies, distance, f_ref)
+    _, want, want_tf = default_model.predict_modes_amp_phase(
+        intrinsic, total_mass, frequencies, FOUR_MODES, distance, True, f_ref)
+    np.testing.assert_allclose(tf, want_tf, atol=2e-6)
+    np.testing.assert_allclose(phase, want, atol=2e-2)
+
+
 def test_mode_subset_model(default_model):
     """A model loaded with a subset of the trained modes predicts them as
     the full one does."""

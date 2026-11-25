@@ -25,8 +25,8 @@ def model_to_jax_waveform(model: "Model", modes: Optional[Sequence] = None) -> C
     r"""A JAX function reproducing :meth:`Model.predict <mlgw_bns.model.Model.predict>`.
 
     Returns ``predict(params, frequencies_hz, total_mass, distance_mpc,
-    inclination, coalescence_phase=0.0, merger_time=0.0) -> (h_plus,
-    h_cross)``, where
+    inclination, coalescence_phase=0.0, merger_time=0.0,
+    time_reference_frequency_hz=None) -> (h_plus, h_cross)``, where
     ``params`` is ``[q, lambda_1, lambda_2, chi_1, chi_2]`` with shape
     ``(5,)`` or ``(n, 5)``; the other arguments are scalars or shape
     ``(n,)``. The output has shape ``(k,)`` for a single row, ``(n, k)``
@@ -53,6 +53,7 @@ def model_to_jax_waveform(model: "Model", modes: Optional[Sequence] = None) -> C
         inclination,
         coalescence_phase=0.0,
         merger_time=0.0,
+        time_reference_frequency_hz=None,
     ):
         params = jnp.atleast_2d(jnp.asarray(params, jnp.float64))
         n_rows = params.shape[0]
@@ -61,6 +62,7 @@ def model_to_jax_waveform(model: "Model", modes: Optional[Sequence] = None) -> C
             jnp.broadcast_to(jnp.asarray(total_mass, jnp.float64), (n_rows,)),
             frequencies_hz,
             jnp.broadcast_to(jnp.asarray(distance_mpc, jnp.float64), (n_rows,)),
+            time_reference_frequency_hz,
         )
         # the coalescence phase rotates mode (l, m) by exp(i m phi_c); the
         # merger time is a time shift, the same for every mode

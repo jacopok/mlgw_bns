@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `time_reference_frequency_hz`: the time (and orbital phase) parameter of a
+    waveform can be those at which the (2,2) emits a given frequency, instead
+    of the merger's, which moves with the masses, spins and tides and is where
+    TEOBResumS is noisiest. A field of `ParametersWithExtrinsic` and
+    `PrecessingParametersWithExtrinsic` (there the time only), and an argument
+    of `Model.predict_modes_amp_phase` and of the JAX functions.
+- `precessing_mode_components` and `PrecessingModel.jax_predict_modes`:
+    `return_tf`, the time-frequency map of each co-precessing multipole.
+
 ## [2.1.0] - 2026-11-23
 
 ### Changed

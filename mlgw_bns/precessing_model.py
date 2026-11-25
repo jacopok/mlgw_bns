@@ -233,6 +233,10 @@ class PrecessingParametersWithExtrinsic:
         ``reference_frequency_hz`` is ``None``. Defaults to 0.
     merger_time : float
         Time of the merger, in seconds. Defaults to 0.
+    time_reference_frequency_hz : float, optional
+        If given, ``merger_time`` is instead the time at which the
+        co-precessing (2,2) emits this frequency (in Hz); unrelated to
+        ``reference_frequency_hz``. Defaults to ``None``, the merger.
     reference_frequency_hz : float, optional
         The :math:`(2, 2)` gravitational-wave frequency, in Hz, at which
         ``chi_1``, ``chi_2``, :math:`\hat{L}_0 = \hat{z}` and
@@ -257,6 +261,7 @@ class PrecessingParametersWithExtrinsic:
     reference_phase: float = 0.0
     merger_time: float = 0.0
     reference_frequency_hz: Optional[float] = None
+    time_reference_frequency_hz: Optional[float] = None
 
     @classmethod
     def from_lvk(
@@ -350,6 +355,7 @@ class PrecessingParametersWithExtrinsic:
                 self.reference_phase if self.reference_frequency_hz is None else 0.0
             ),
             merger_time=self.merger_time,
+            time_reference_frequency_hz=self.time_reference_frequency_hz,
         )
 
 
@@ -967,17 +973,19 @@ class PrecessingModel:
         self,
         modes: Optional[Sequence] = None,
         n_steps: Optional[int] = None,
+        return_tf: bool = False,
     ) -> Callable:
         r"""A pure JAX function giving each co-precessing multipole and its
         twist, for a batch of binaries.
 
         See :func:`mlgw_bns.batched_precession.precessing_mode_components`;
-        the arguments are those of :meth:`jax_predict`.
+        the arguments are those of :meth:`jax_predict`, and ``return_tf``,
+        to also return the times of the multipoles.
         """
         from .batched_precession import N_STEPS, precessing_mode_components
 
         return precessing_mode_components(
-            self.model, modes, N_STEPS if n_steps is None else n_steps
+            self.model, modes, N_STEPS if n_steps is None else n_steps, return_tf
         )
 
     def mode_components(
@@ -1261,7 +1269,10 @@ class PrecessingModel:
             import jax
 
             self._jitted_predict = jax.jit(self.jax_predict())
-        h_plus, h_cross = self._jitted_predict(*batch_arguments([params], frequencies))
+        h_plus, h_cross = self._jitted_predict(
+            *batch_arguments([params], frequencies),
+            time_reference_frequency_hz=params.time_reference_frequency_hz,
+        )
         return np.asarray(h_plus[0]), np.asarray(h_cross[0])
 
     def predict_numpy(

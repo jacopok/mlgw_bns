@@ -161,6 +161,10 @@ class ParametersWithExtrinsic:
             mode is rotated by :math:`e^{i m \phi_c}`. Defaults to 0.
     merger_time : float
             Time of the merger, in seconds. Defaults to 0.
+    time_reference_frequency_hz : float, optional
+            If given, ``merger_time`` and ``coalescence_phase`` are instead
+            the time at which the (2,2) mode emits this frequency (in Hz) and
+            the orbital phase then. Defaults to ``None``, the merger.
 
     Notes
     -----
@@ -179,6 +183,14 @@ class ParametersWithExtrinsic:
     total_mass: float
     coalescence_phase: float = 0.0
     merger_time: float = 0.0
+    time_reference_frequency_hz: Optional[float] = None
+
+    def rescaled_time_reference(self, dataset: Dataset) -> Optional[float]:
+        """:attr:`time_reference_frequency_hz` at the total mass of
+        ``dataset``, or ``None``."""
+        if self.time_reference_frequency_hz is None:
+            return None
+        return self.time_reference_frequency_hz * self.total_mass / dataset.total_mass
 
     def intrinsic(self, dataset: Dataset) -> WaveformParameters:
         return WaveformParameters(
@@ -230,6 +242,15 @@ class ParametersWithExtrinsic:
         }
         # TODO figure out if it is possible to also pass
         # the phase and the time shift to TEOB.
+
+
+#: Five-point stencil (relative frequency steps, and weights) of the slope of
+#: the post-Newtonian phase at a time reference frequency below the band. The
+#: phase is ~1e6 rad there: two points close enough for their truncation error
+#: to be below 1 us would not have a rounding error below it.
+_DERIVATIVE_STEP = 1e-3
+DERIVATIVE_STEPS = _DERIVATIVE_STEP * np.arange(-2.0, 3.0)
+DERIVATIVE_WEIGHTS = np.array([1.0, -8.0, 0.0, 8.0, -1.0]) / (12 * _DERIVATIVE_STEP)
 
 
 def mode_power_weights(
@@ -1209,7 +1230,10 @@ class ModeModel:
         )
 
     def merger_reference(
-        self, intrinsic_params, phase_nodes: Optional[np.ndarray] = None
+        self,
+        intrinsic_params,
+        phase_nodes: Optional[np.ndarray] = None,
+        frequency_hz: Optional[float] = None,
     ) -> tuple[float, float]:
         r"""The line :math:`s f + b` this mode's phase tends to at the merger.
 
@@ -1226,18 +1250,50 @@ class ModeModel:
         intrinsic_params : WaveformParameters
         phase_nodes : np.ndarray, optional
             The phase at the nodes, if already computed.
+        frequency_hz : float, optional
+            Take the tangent at this frequency (Hz at the reference mass)
+            instead: the line of the time reference frequency of
+            :class:`ParametersWithExtrinsic`. Below the trained band, of
+            the post-Newtonian continuation.
 
         Returns
         -------
         tuple[float, float]
             ``(slope, intercept)``.
+
+        Raises
+        ------
+        FrequencyTooLowError, FrequencyTooHighError
+            If ``frequency_hz`` is below (above) the trained band and the
+            model is not configured to extend it there (above, always).
         """
         assert self.downsampling_indices is not None
         if phase_nodes is None:
             _, phase_nodes = self._nodes(intrinsic_params)
         knots = self.dataset.frequencies_hz[self.downsampling_indices.phase_indices]
-        slope = float(CubicSpline(knots, phase_nodes)(knots[-1], 1))
-        return slope, float(phase_nodes[-1] - slope * knots[-1])
+        spline = CubicSpline(knots, phase_nodes)
+        at = float(knots[-1] if frequency_hz is None else frequency_hz)
+        if at > knots[-1]:
+            raise FrequencyTooHighError(
+                f"The time reference frequency {at} Hz is above the trained band."
+            )
+        f_min = self.dataset.initial_frequency_hz
+        if at >= f_min:
+            slope, value = float(spline(at, 1)), float(spline(at))
+        else:
+            if not self.extend_with_post_newtonian:
+                raise FrequencyTooLowError(
+                    "ModeModel not configured to extend with post-Newtonian waveform."
+                )
+            pn_phase = self.dataset.waveform_generator.post_newtonian_phase(
+                intrinsic_params,
+                self.dataset.hz_to_natural_units(
+                    np.append(at * (1 + DERIVATIVE_STEPS), f_min)
+                ),
+            )
+            slope = float(DERIVATIVE_WEIGHTS @ pn_phase[:-1]) / at
+            value = float(pn_phase[2] - pn_phase[-1] + spline(f_min))
+        return slope, value - slope * at
 
     @_with_single_row_config
     def predict_amplitude_phase(
@@ -1337,7 +1393,9 @@ class ModeModel:
         intrinsic_params = params.intrinsic(self.dataset)
         amp_ds, phi_ds = self._nodes(intrinsic_params)
         if merger_reference is None:
-            merger_reference = self.merger_reference(intrinsic_params, phi_ds)
+            merger_reference = self.merger_reference(
+                intrinsic_params, phi_ds, params.rescaled_time_reference(self.dataset)
+            )
         slope, intercept = merger_reference
 
         ds = self.downsampling_indices
