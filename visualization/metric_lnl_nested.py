@@ -24,10 +24,16 @@ import numpy as np
 sys.path.insert(0, os.getcwd())
 
 
-def known(pattern):
+def known(pattern, inner=False):
     parts = [np.load(f) for f in sorted(glob.glob(pattern)) if "partial" not in f]
     keys = [f"{m}/{k}" for m in ("mlgw", "teob") for k in ("lnl", "max", "dt", "dphi")]
     out = {k: np.concatenate([p[k] for p in parts]) for k in ["index", "stored"] + keys}
+    if inner:
+        m = np.array([int(str(v).split(",")[1]) for v in parts[0]["modes"]])
+        for model in ("mlgw", "teob"):
+            out[f"{model}/phase"] = np.concatenate(
+                [phase_maximum(p[f"{model}/z"].sum(1), p[f"{model}/G"].sum(1), m) for p in parts])
+        out["m"] = m
     return out, bool(parts[0]["phase_flip"])
 
 
@@ -43,7 +49,8 @@ def work(task):
     import surrogate_fine_nested as s
     i, theta = task
     e = s.evaluate(s.ST["fine"]["mlgw"], theta)
-    return i, [e[k] for k in ("lnl", "max", "dt", "dphi")]
+    # summed over interferometers: what a turn of the orbital phase needs
+    return i, [e[k] for k in ("lnl", "max", "dt", "dphi")], e["z"].sum(0), e["G"].sum(0)
 
 
 def nested_samples(run_dir):
@@ -74,12 +81,29 @@ def run(a):
     values = {}
     tasks = [(int(j), dict(fixed, **{key: float(nested[key][j]) for key in keys})) for j in index]
     with ProcessPoolExecutor(a.npool, mp_context=multiprocessing.get_context("spawn"), initializer=initialize, initargs=(fine,)) as pool:
-        for j, v in pool.map(work, tasks, chunksize=4):
+        for j, *v in pool.map(work, tasks, chunksize=4):
             values[j] = v
             if len(values) % 500 == 0:
                 print(len(values), flush=True)
-    array = np.array([values[int(j)] for j in index])
-    np.savez(a.out, index=index, **{k: array[:, c] for c, k in enumerate(("lnl", "max", "dt", "dphi"))})
+    array = np.array([values[int(j)][0] for j in index])
+    z, G = (np.array([values[int(j)][c] for j in index]) for c in (1, 2))
+    np.savez(a.out, index=index, z=z, G=G, **{k: array[:, c] for c, k in enumerate(("lnl", "max", "dt", "dphi"))})
+
+
+def phase_maximum(z, G, m):
+    """ln L maximized over the orbital phase alone, the time fixed (the TEOBResumS
+    here are turned, sample by sample, to match the run's own surrogate: as
+    evaluated they are not comparable to other models)."""
+    grid = np.linspace(-0.03, 0.03, 601)  # rad
+    out = np.empty(len(z))
+    for start in range(0, len(z), 512):
+        rows = slice(start, start + 512)
+        e = np.exp(1j * np.outer(grid, m))
+        lnl = (z[rows] @ e.T).real - 0.5 * np.einsum("nkl,pk,pl->np", G[rows], e, e.conj(), optimize=True).real
+        i = np.clip(lnl.argmax(axis=1), 1, len(grid) - 2)
+        a, b, c = (lnl[np.arange(len(i)), i + k] for k in (-1, 0, 1))
+        out[rows] = b - (a - c) ** 2 / (8 * (a - 2 * b + c))  # vertex of the parabola
+    return out
 
 
 def efficiency(w, e):
@@ -91,7 +115,7 @@ def efficiency(w, e):
 
 
 def report(a):
-    table, _ = known(a.parts)
+    table, _ = known(a.parts, inner=True)
     weights = np.asarray(nested_samples(a.run_dir)[0]["weights"], dtype=float)
     position = {int(j): n for n, j in enumerate(table["index"])}
     models = {"run's model, all samples": None}
@@ -99,15 +123,16 @@ def report(a):
     for name, parts in models.items():
         if parts is None:
             rows = np.arange(len(table["index"]))
-            values = {k: table[f"mlgw/{k}"] for k in ("lnl", "max", "dt", "dphi")}
+            values = {k: table[f"mlgw/{k}"] for k in ("lnl", "phase", "max", "dt", "dphi")}
         else:
             index = np.concatenate([p["index"] for p in parts])
             rows = np.array([position[int(j)] for j in index])
             values = {k: np.concatenate([p[k] for p in parts]) for k in ("lnl", "max", "dt", "dphi")}
+            values["phase"] = np.concatenate([phase_maximum(p["z"], p["G"], table["m"]) for p in parts])
         w = weights[table["index"][rows]]
         print(name, f"({len(rows)} samples, weight {w.sum() / weights.sum():.4f})")
         for label, reference in (("", values), *([("   the run's model, same samples", {k: table[f'mlgw/{k}'][rows] for k in values})] if parts else [])):
-            for k in ("lnl", "max"):
+            for k in ("lnl", "phase", "max"):
                 e = table[f"teob/{k}"][rows] - reference[k]
                 print(f"  {label} {k}: efficiency %.4f, mean %+.4f, std %.4f" % efficiency(w, e))
             dt = 1e6 * (table["teob/dt"][rows] - reference["dt"])
