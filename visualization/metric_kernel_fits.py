@@ -650,7 +650,7 @@ def model(args):
     from mlgw_bns.neural_network import Hyperparameters
 
     train = SelectedRows(args.dataset + "/train")
-    pool = np.load(args.cache)["x_train"]
+    pool = np.asarray(train.load(args.pool, ("parameters",))["parameters"], dtype=float)
     train.rows, _, lower = constant_map(args.spec, dict(np.load(args.metric)), pool, args.n, args.seed)
     coord, x = split(args.spec)[1], pool[train.rows]
 
@@ -734,11 +734,11 @@ def main():
     c.add_argument("--n", type=int, nargs="+", default=[1024, 2048, 4096, 8192, 16384])
     c.set_defaults(run=truncate)
     c = commands.add_parser("model", help=model.__doc__)
-    c.add_argument("cache")
     c.add_argument("--dataset", required=True)
     c.add_argument("--metric", required=True)
     c.add_argument("--spec", required=True)
     c.add_argument("--n", type=int, required=True)
+    c.add_argument("--pool", type=int, default=32768)
     c.add_argument("--gamma", type=float, default=0.3)
     c.add_argument("--seed", type=int, default=0)
     c.add_argument("--out", required=True)
