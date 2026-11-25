@@ -29,7 +29,7 @@ OUT_DIR="${OUT_DIR:-visualization/modes_scale/timing}"
 mkdir -p "$OUT_DIR"
 export MPLBACKEND=Agg PYTHONUNBUFFERED=1 TQDM_MININTERVAL=60
 echo "node $(hostname), $(nproc) cores, $(lscpu | sed -n 's/^Model name: *//p')"
-.venv/bin/python visualization/benchmark_evaluation_time.py --models "$@" \
-    --n-grid 50 --log-min 2 --log-max 5 --seeds 10 --epochs 5 \
+"${PYTHON:-.venv/bin/python}" visualization/benchmark_evaluation_time.py --models "$@" \
+    --n-grid "${N_GRID:-50}" --log-min 2 --log-max 5 --seeds 10 --epochs 5 \
     --jax-batch 64 --max-batch-points 1e5 \
     --teob-cache "$OUT_DIR/teob.npz" --out "$OUT_DIR/$NAME"
