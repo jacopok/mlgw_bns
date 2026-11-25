@@ -54,7 +54,7 @@ def own_phase(run, target):
         return np.angle(hp[at] * np.exp(-2j * np.pi * run.merger_time(0.0) * grid[at]))
 
     # (2,2) alone: plus polarization of the surrogate at the same frequency
-    reference = np.angle(own_phase.surrogate(np.array([top[1]]))[0])
+    reference = np.angle(own_phase.surrogate(np.array([top[1] * (1 - 1e-9)]))[0])  # (at the edge itself it may be zero)
     start = phase(0.0)
     sign = np.sign(np.angle(np.exp(1j * (phase(0.2) - start))))  # each mode turns by sign m delta
     delta = sign * np.angle(np.exp(1j * (reference - start))) / 2  # modulo pi: the odd modes choose
