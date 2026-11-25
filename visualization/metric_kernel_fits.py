@@ -619,23 +619,40 @@ class SelectedRows(ShardedModesDataset):
         return tuple(None if v is None else v[self.rows] for v in super().reduced(model, mode, n))
 
 
+def constant_map(spec, metric_data, pool, n, seed=0):
+    """Of a ``constant`` spec: ``n`` farthest points (their rows in the
+    ``pool``), the scaler of their coordinates and the linear map."""
+    kind, coord, metric_kind, scope, beta = split(spec)
+    assert kind == "constant" and scope == "sum"
+    points, _ = mapped(spec, None, metric_data, None, pool, pool[:1], {})
+    rows = farthest_points(points, n, seed) if n < len(pool) else np.arange(len(pool))
+    scaler, z, _ = standardized(coord, pool[rows], pool[:1])
+    lower = linear_map(Metric(metric_data, scaler, coord, metric_kind, scope, float(beta), None).g.mean(axis=0))
+    return rows, scaler, lower * np.sqrt(5 / (z @ lower).var(axis=0).sum())
+
+
+def save_maps(args):
+    """The maps of some specs, for ``plot_metric_map.py``: their Gram matrices."""
+    metric_data = dict(np.load(args.metric))
+    pool = ShardedModesDataset(args.dataset + "/train").load(args.pool, ("parameters",))["parameters"]
+    out = {}
+    for spec in args.specs:
+        _, scaler, lower = constant_map(spec, metric_data, np.asarray(pool, dtype=float), args.n)
+        name = split(spec)[1]
+        out.update({f"{name}/gram": lower @ lower.T, f"{name}/mean": scaler.mean_, f"{name}/scale": scaler.scale_})
+        print(spec, np.round(lower @ lower.T, 3), np.linalg.eigvalsh(lower @ lower.T), sep="\n", flush=True)
+    np.savez(args.out, **out)
+
+
 def model(args):
     """A model of the library of which every mode regresses in the inputs of
     a ``constant`` spec, with one width, trained on ``--n`` farthest points."""
     from mlgw_bns.neural_network import Hyperparameters
 
-    metric_data = dict(np.load(args.metric))
     train = SelectedRows(args.dataset + "/train")
     pool = np.load(args.cache)["x_train"]
-    kind, coord, metric_kind, scope, beta = split(args.spec)
-    assert kind == "constant" and scope == "sum"
-    points, _ = mapped(args.spec, None, metric_data, None, pool, pool[:1], {})
-    if args.n < len(pool):
-        train.rows = farthest_points(points, args.n, args.seed)
-    x = pool[train.rows]
-    scaler, z, _ = standardized(coord, x, x[:1])
-    lower = linear_map(Metric(metric_data, scaler, coord, metric_kind, scope, float(beta), None).g.mean(axis=0))
-    lower *= np.sqrt(5 / (z @ lower).var(axis=0).sum())
+    train.rows, _, lower = constant_map(args.spec, dict(np.load(args.metric)), pool, args.n, args.seed)
+    coord, x = split(args.spec)[1], pool[train.rows]
 
     def hyperparameters(mode, n):
         hyper = Hyperparameters.default_kernel_ridge(
@@ -728,6 +745,14 @@ def main():
     c.add_argument("--pca-size", type=int, default=32768)
     c.add_argument("--components", type=int, default=60)
     c.set_defaults(run=model)
+    c = commands.add_parser("maps", help=save_maps.__doc__)
+    c.add_argument("out")
+    c.add_argument("--dataset", required=True)
+    c.add_argument("--metric", required=True)
+    c.add_argument("--specs", nargs="+", required=True)
+    c.add_argument("--pool", type=int, default=32768)
+    c.add_argument("--n", type=int, default=8192)
+    c.set_defaults(run=save_maps)
     c = commands.add_parser("table")
     c.add_argument("out")
     c.set_defaults(run=table)
