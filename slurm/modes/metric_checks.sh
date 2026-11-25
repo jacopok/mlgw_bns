@@ -12,8 +12,8 @@
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
 ROOT="$PWD" L="$1"; shift
-export PYTHONPATH="$PWD" PYTHONUNBUFFERED=1 MPLBACKEND=Agg JAX_PLATFORMS=cpu OMP_NUM_THREADS=2 TQDM_DISABLE=1
-OUT="visualization/metric_study/release/lambda$L/checks"
+export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" PYTHONUNBUFFERED=1 MPLBACKEND=Agg JAX_PLATFORMS=cpu OMP_NUM_THREADS=2 TQDM_DISABLE=1
+OUT="${RELEASE:-visualization/metric_study/release}/lambda$L/checks"
 mkdir -p "$OUT"; cd "$OUT"
 echo "box: large Lambda_1, small Lambda_2"
 "$PYTHON" "$ROOT/visualization/corner_scan.py" 400 1.8 3.0 $((L * 6 / 10)) "$L" 2 $((L / 20)) "$@"
