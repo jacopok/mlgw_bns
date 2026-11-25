@@ -93,7 +93,8 @@ def test_single_rows_match_predict_modes_dict(default_model):
             )
 
 
-def test_other_input_coordinates_match_predict_modes_dict(default_model, monkeypatch):
+@pytest.mark.parametrize("input_map", [None, np.eye(5) + 0.1 * np.tri(5, k=-1)], ids=["no map", "map"])
+def test_other_input_coordinates_match_predict_modes_dict(default_model, monkeypatch, input_map):
     """A model whose kernel ridge regresses in either input coordinates
     predicts the same in a batch as row by row. The shipped regressors are
     set to the coordinates they were not trained in (linear Lambda for the
@@ -109,6 +110,7 @@ def test_other_input_coordinates_match_predict_modes_dict(default_model, monkeyp
     for mode_model in default_model.mode_models.values():
         other = "linear" if mode_model.nn.input_coordinates == "log_lambda" else "log_lambda"
         monkeypatch.setattr(mode_model.nn.hyper, "input_coordinates", other, raising=False)
+        monkeypatch.setattr(mode_model.nn.hyper, "input_map", input_map, raising=False)
     surrogate = BatchedSurrogate(default_model, ALL_MODES)
     for i in range(len(intrinsic)):
         amp, phase = surrogate(intrinsic[i : i + 1], total_mass[i], FREQUENCIES, distance[i])

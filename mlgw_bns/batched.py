@@ -388,6 +388,8 @@ class _ModeArrays:
     trained_fmax_hz: float
     # kernel ridge: the coordinates of its inputs (neural_network.regression_inputs)
     input_coordinates: str = "linear"
+    # ... and the linear map of the standardized ones, or None
+    input_map: Any = None
 
 
 @dataclass
@@ -548,6 +550,7 @@ def _freeze(model: "Model", modes: Sequence[Mode]) -> _Frozen:
                     target_mean=np.asarray(nn.target_scaler.mean_, dtype=float),
                     target_scale=np.asarray(nn.target_scaler.scale_, dtype=float),
                     input_coordinates=nn.input_coordinates,
+                    input_map=None if nn.input_map is None else _shared(nn.input_map, scaler_cache),
                     **common,
                 )
             )
@@ -812,7 +815,7 @@ class BatchedSurrogate:
         kernel_groups: dict = {}
         for i, ma in enumerate(modes_arrays):
             if ma.regressor_kind == "kernel_ridge":
-                key = (id(ma.kernel.x_fit), id(ma.param_mean), id(ma.param_scale), ma.input_coordinates)
+                key = (id(ma.kernel.x_fit), id(ma.param_mean), id(ma.param_scale), ma.input_coordinates, id(ma.input_map))
                 kernel_groups.setdefault(key, []).append(i)
             else:
                 activation = (x - ma.param_mean) / ma.param_scale
@@ -828,6 +831,8 @@ class BatchedSurrogate:
             first = modes_arrays[indices[0]]
             inputs = regression_inputs(x, first.input_coordinates, xp)
             scaled = (inputs - first.param_mean) / first.param_scale
+            if first.input_map is not None:
+                scaled = scaled @ first.input_map
             predictions = _kernel_ridge(
                 xp, scaled, [modes_arrays[i].kernel for i in indices]
             )

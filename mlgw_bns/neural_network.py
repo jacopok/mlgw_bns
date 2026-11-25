@@ -132,8 +132,9 @@ KERNEL_ALPHA_GRID = np.logspace(-13.0, 0.0, 53)
 #: The coordinates :class:`KernelRidgeNetwork` can regress in
 #: (:attr:`Hyperparameters.input_coordinates`): ``"linear"``, the parameters
 #: as they are; ``"log_lambda"``, with each tidal deformability replaced by
-#: :math:`\log(1 + \Lambda)`.
-INPUT_COORDINATES = ("linear", "log_lambda")
+#: :math:`\log(1 + \Lambda)`; ``"cbrt_lambda"``, by :math:`\Lambda^{1/3}`;
+#: ``"cbrt_lambda_log_q"``, the same, and :math:`\log q` for :math:`q`.
+INPUT_COORDINATES = ("linear", "log_lambda", "cbrt_lambda", "cbrt_lambda_log_q")
 
 
 def regression_inputs(x, coordinates: str = "linear", xp=np):
@@ -152,6 +153,9 @@ def regression_inputs(x, coordinates: str = "linear", xp=np):
         return x
     if coordinates == "log_lambda":
         return xp.concatenate([x[..., :1], xp.log1p(x[..., 1:3]), x[..., 3:]], axis=-1)
+    if coordinates in ("cbrt_lambda", "cbrt_lambda_log_q"):
+        q = xp.log(x[..., :1]) if coordinates.endswith("log_q") else x[..., :1]
+        return xp.concatenate([q, xp.cbrt(x[..., 1:3]), x[..., 3:]], axis=-1)
     raise ValueError(f"Unknown input_coordinates {coordinates!r}: expected one of {INPUT_COORDINATES}.")
 
 
@@ -420,6 +424,10 @@ class Hyperparameters:
     #: :func:`regression_inputs`; models from before this field existed
     #: pick up ``"linear"``, which is how they were trained.
     input_coordinates: str = field(default="linear")
+    #: A linear map (an array, ``(5, 5)``) of the standardized inputs of
+    #: :class:`KernelRidgeNetwork` (rows ``z`` become ``z @ input_map``), whose
+    #: Gram matrix is thus the metric of its kernel; ``None`` for the identity.
+    input_map: Optional[np.ndarray] = field(default=None)
 
     mlp: Optional[MLPConfig] = field(default=None)
     mlp_loss: str = field(default="natural")
@@ -1020,6 +1028,18 @@ class KernelRidgeNetwork(NeuralNetwork):
         models from before it existed)."""
         return getattr(self.hyper, "input_coordinates", "linear")
 
+    @property
+    def input_map(self) -> Optional[np.ndarray]:
+        """The linear map of the standardized inputs
+        (:attr:`Hyperparameters.input_map`), or ``None``."""
+        return getattr(self.hyper, "input_map", None)
+
+    def _kernel_inputs(self, x_data: np.ndarray) -> np.ndarray:
+        """What the kernel takes distances of: ``x_data`` (already in
+        :attr:`input_coordinates`) standardized, and mapped."""
+        scaled = (x_data - self.param_scaler.mean_) / self.param_scaler.scale_
+        return scaled if self.input_map is None else scaled @ self.input_map
+
     def fit(
         self,
         x_data: np.ndarray,
@@ -1073,7 +1093,7 @@ class KernelRidgeNetwork(NeuralNetwork):
                 {} if sample_weight is None else {"sample_weight": sample_weight}
             )
             self.regressor.fit(
-                self.param_scaler.transform(x_data),
+                self._kernel_inputs(x_data),
                 self.target_scaler.transform(y_data),
                 **weight_kwargs,
             )
@@ -1098,7 +1118,7 @@ class KernelRidgeNetwork(NeuralNetwork):
         from sklearn.metrics.pairwise import rbf_kernel  # type: ignore
 
         gamma = float(self.hyper.kernel_gamma)
-        scaled_x = self.param_scaler.transform(x_data)
+        scaled_x = self._kernel_inputs(x_data)
         scaled_y = self.target_scaler.transform(y_data)
         n_samples = len(scaled_x)
 
@@ -1156,7 +1176,7 @@ class KernelRidgeNetwork(NeuralNetwork):
         regressor = self.regressor
         x_fit = regressor.X_fit_
         params = regression_inputs(np.asarray(x_data, dtype=float), self.input_coordinates)
-        scaled_x = (params - self.param_scaler.mean_) / self.param_scaler.scale_
+        scaled_x = self._kernel_inputs(params)
 
         sq_norm = self._xfit_sqnorm
         if sq_norm is None or sq_norm.shape[0] != x_fit.shape[0]:

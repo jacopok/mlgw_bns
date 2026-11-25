@@ -396,6 +396,30 @@ def test_log_lambda_coordinates_regress_log_one_plus_lambda(tmp_path):
     np.testing.assert_array_equal(KernelRidgeNetwork.from_file(path).predict(x_test), network.predict(x_test))
 
 
+def test_mapped_inputs_regress_the_mapped_coordinates(tmp_path):
+    """``input_map`` is kernel ridge on the standardized inputs times the map,
+    in fit and predict, and it is kept when saved."""
+    x_train, x_test = lambda_rows(300, 1), lambda_rows(40, 2)
+    y_train = np.column_stack([np.cbrt(x_train[:, 1]), x_train[:, 0] * x_train[:, 3]])
+    lower = np.eye(5) + 0.3 * np.tri(5, k=-1)
+    for coordinates in ("cbrt_lambda", "cbrt_lambda_log_q"):
+        hyper = Hyperparameters.default_kernel_ridge(len(x_train), input_coordinates=coordinates)
+        hyper.input_map = lower
+        network = KernelRidgeNetwork(hyper)
+        network.fit(x_train, y_train)
+        u = regression_inputs(x_train, coordinates)
+        np.testing.assert_allclose(u[:, 1], np.cbrt(x_train[:, 1]), rtol=1e-15)
+        z = (u - u.mean(0)) / u.std(0)
+        np.testing.assert_allclose(network.regressor.X_fit_, z @ lower, rtol=1e-10, atol=1e-12)
+        kernel = network.regressor
+        np.testing.assert_allclose(
+            network.predict(x_train),
+            network.target_scaler.inverse_transform(kernel.predict(z @ lower)), rtol=1e-8)
+        path = str(tmp_path / "kernel.pkl")
+        network.save(path)
+        np.testing.assert_array_equal(KernelRidgeNetwork.from_file(path).predict(x_test), network.predict(x_test))
+
+
 def test_input_coordinates_default_to_linear_and_are_checked():
     hyper = Hyperparameters.default_kernel_ridge(10)
     assert KernelRidgeNetwork(hyper).input_coordinates == "linear"

@@ -607,6 +607,46 @@ def full(args):
         report(stem.replace("__l2_m2", ""), result, file)
 
 
+COORDINATES = {"cbrt": "cbrt_lambda", "cbrt+logq": "cbrt_lambda_log_q"}
+
+
+class SelectedRows(ShardedModesDataset):
+    """A training set of which the regressors are fitted on ``rows`` only."""
+
+    rows = slice(None)
+
+    def reduced(self, model, mode, n):
+        return tuple(None if v is None else v[self.rows] for v in super().reduced(model, mode, n))
+
+
+def model(args):
+    """A model of the library of which every mode regresses in the inputs of
+    a ``constant`` spec, with one width, trained on ``--n`` farthest points."""
+    from mlgw_bns.neural_network import Hyperparameters
+
+    metric_data = dict(np.load(args.metric))
+    train = SelectedRows(args.dataset + "/train")
+    pool = np.load(args.cache)["x_train"]
+    kind, coord, metric_kind, scope, beta = split(args.spec)
+    assert kind == "constant" and scope == "sum"
+    points, _ = mapped(args.spec, None, metric_data, None, pool, pool[:1], {})
+    if args.n < len(pool):
+        train.rows = farthest_points(points, args.n, args.seed)
+    x = pool[train.rows]
+    scaler, z, _ = standardized(coord, x, x[:1])
+    lower = linear_map(Metric(metric_data, scaler, coord, metric_kind, scope, float(beta), None).g.mean(axis=0))
+    lower *= np.sqrt(5 / (z @ lower).var(axis=0).sum())
+
+    def hyperparameters(mode, n):
+        hyper = Hyperparameters.default_kernel_ridge(
+            len(x), mode=mode, kernel_gamma=args.gamma, input_coordinates=COORDINATES[coord])
+        hyper.input_map = lower
+        return hyper
+
+    train.train(len(pool), args.out, hyperparameters=hyperparameters, pca_size=args.pca_size, n_components=args.components)
+    print(f"{args.out}: {len(x)} points, gamma {args.gamma}", flush=True)
+
+
 def truncate(args):
     """Copies of a shipped model with its kernel ridge cut to the first N
     training points, and nothing else changed: their predictions are garbage,
@@ -676,6 +716,18 @@ def main():
     c.add_argument("--model", default="default_hom_lambda2000")
     c.add_argument("--n", type=int, nargs="+", default=[1024, 2048, 4096, 8192, 16384])
     c.set_defaults(run=truncate)
+    c = commands.add_parser("model", help=model.__doc__)
+    c.add_argument("cache")
+    c.add_argument("--dataset", required=True)
+    c.add_argument("--metric", required=True)
+    c.add_argument("--spec", required=True)
+    c.add_argument("--n", type=int, required=True)
+    c.add_argument("--gamma", type=float, default=0.3)
+    c.add_argument("--seed", type=int, default=0)
+    c.add_argument("--out", required=True)
+    c.add_argument("--pca-size", type=int, default=32768)
+    c.add_argument("--components", type=int, default=60)
+    c.set_defaults(run=model)
     c = commands.add_parser("table")
     c.add_argument("out")
     c.set_defaults(run=table)
