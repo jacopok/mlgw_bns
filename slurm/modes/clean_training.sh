@@ -19,7 +19,7 @@ declare -A COMMITS=([jittery]=85ead73a [clean]=fd-merger-subsample)
 for name in jittery clean; do
     if [ ! -d "$OUT/build-$name" ]; then
         rm -rf "$OUT/src-$name"; mkdir -p "$OUT/src-$name"
-        git -C "$TEOB" archive "${COMMITS[$name]}" | tar -x -C "$OUT/src-$name"
+        git -C "$TEOB" archive "${COMMITS[$name]}" C Python README.md | tar -x -C "$OUT/src-$name"
         (cd "$OUT/src-$name/Python" && uv run --no-project --with setuptools --with numpy \
             --python "$PYTHON" python setup.py -q build_ext --build-lib "$PWD/../../build-$name" > ../build.log 2>&1)
     fi
