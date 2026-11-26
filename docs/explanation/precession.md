@@ -37,7 +37,8 @@ LALSuite's `f_ref`). At $f_{\rm ref}$:
 - `chi_1`, `chi_2` are the two dimensionless spin vectors, in that frame;
 - `reference_phase` is the orbital phase (see [below](precession-reference-phase));
 - the line of sight has polar angle `inclination` $\iota$ and azimuth
-  `azimuth` $\varphi$, also in that frame.
+  `azimuth`, also in that frame, in LALSuite's or TEOBResumS' convention
+  ({ref}`conventions`).
 
 Precession rotates both the in-plane spins and $\hat{L}$ between any two
 frequencies, so the same vectors given at two different reference frequencies
@@ -102,8 +103,11 @@ $$
 
 with the angles at time $t$ ({func}`~mlgw_bns.twist_waveform.twist_modes`).
 
-`mlgw_bns` works in the frequency domain, with $\tilde{h}(f) = \int h(t)
-e^{2 \pi i f t} \mathrm{d}t$, under the stationary-phase approximation: the
+`mlgw_bns` works in the frequency domain under the stationary-phase
+approximation. In this section the transform is TEOBResumS', $\tilde{h}(f) =
+\int h(t) e^{2 \pi i f t} \mathrm{d}t$, and $\varphi$ is the internal azimuth
+({func}`~mlgw_bns.conventions.internal_azimuth`); the polarizations are
+returned in the convention asked for ({ref}`conventions`): the
 co-precessing multipole $n$ at frequency $f$ comes from the time at which
 its own frequency is $f$, which is when the orbital frequency is
 $M\Omega = 2 \pi f M / n$. So
@@ -181,14 +185,13 @@ and the spins are given where the PN integration starts.
 
 TEOBResumS' precessing waveforms are twisted in the same way, so the two
 agree up to the accuracy of the aligned-spin surrogate once the conventions
-are matched. For TEOBResumS called in the frequency domain (`domain=1`,
-`use_spins=2`):
+are matched: with `convention="teob"` ({ref}`conventions`), the Fourier
+convention and the azimuth are TEOBResumS'. For TEOBResumS called in the
+frequency domain (`domain=1`, `use_spins=2`):
 
-| | TEOBResumS | `mlgw_bns` |
+| | TEOBResumS | `mlgw_bns`, `convention="teob"` |
 |---|---|---|
-| Fourier transform | $\tilde{h}$ | $\tilde{h}^*$ |
-| cross polarization | $h_\times$ | $-h_\times$ |
-| azimuth of the line of sight | `coalescence_angle` | `azimuth` $= $ `coalescence_angle` $- \pi / 2$ |
+| azimuth of the line of sight | `coalescence_angle` | `azimuth` |
 | where the spins are given | $0.95\,$`initial_frequency` | `reference_frequency_hz` |
 | orbital phase | zero at the start of the integration | `reference_phase`, from {meth}`~mlgw_bns.precessing_model.PrecessingModel.teob_reference_phase` |
 | multipoles | `use_mode_lm`, `use_mode_lm_inertial` | all those of the model, into every inertial one |

@@ -23,7 +23,7 @@ params = PrecessingParametersWithExtrinsic(
     chi_2=(0.0, -0.3, 0.02),
     distance_mpc=100.0,
     inclination=1.0,
-    azimuth=0.3,
+    azimuth=np.pi / 2 + 0.3,  # TEOBResumS' coalescence_angle: convention="teob"
     total_mass=2.8,
     # TEOBResumS imposes the spins at 0.95 initial_frequency
     reference_frequency_hz=0.95 * initial_frequency,
@@ -39,7 +39,7 @@ f, hp_re, hp_im, hc_re, hc_im, _, hlm, dynamics = eobrun(dict(
     chi2x=params.chi_2[0], chi2y=params.chi_2[1], chi2z=params.chi_2[2],
     distance=params.distance_mpc,
     inclination=params.inclination,
-    coalescence_angle=np.pi / 2 + params.azimuth,
+    coalescence_angle=params.azimuth,
     use_spins=2,
     domain=1,
     initial_frequency=initial_frequency,
@@ -57,10 +57,10 @@ f, hp_re, hp_im, hc_re, hc_im, _, hlm, dynamics = eobrun(dict(
     use_mode_lm=sorted(mode_to_k(mode) for mode in model.modes),
     use_mode_lm_inertial=list(range(mode_to_k(Mode(largest_l, largest_l)) + 1)),
 ))
-# mlgw_bns' Fourier transform is the complex conjugate of TEOBResumS'
+# TEOBResumS' own polarizations, in its Fourier convention
 f = np.asarray(f)
-hp_teob = np.conj(np.asarray(hp_re) + 1j * np.asarray(hp_im))
-hc_teob = np.conj(np.asarray(hc_re) + 1j * np.asarray(hc_im))
+hp_teob = np.asarray(hp_re) + 1j * np.asarray(hp_im)
+hc_teob = np.asarray(hc_re) + 1j * np.asarray(hc_im)
 
 # TEOBResumS' orbital phase is zero where its integration starts
 params.reference_phase = precessing.teob_reference_phase(
@@ -72,7 +72,7 @@ params.reference_phase = precessing.teob_reference_phase(
 
 # compare on (a subset of) TEOBResumS' own grid
 nodes = np.flatnonzero((f >= 20.0) & (f <= 2000.0))[::64]
-predict = jax.jit(precessing.jax_predict())
+predict = jax.jit(precessing.jax_predict(convention="teob"))
 hp, hc = (np.asarray(h[0]) for h in predict(*batch_arguments([params], f[nodes])))
 
 # Einstein Telescope PSD, time shift and constant phase optimised

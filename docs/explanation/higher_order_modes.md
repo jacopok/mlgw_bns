@@ -288,6 +288,8 @@ $$ \widetilde{h}_+ + i \widetilde{h}_\times = \frac{M}{d_L}
 \sum _{\ell \geq 2} \sum _{0<m \leq \ell} \widetilde{h}_{\ell m}(f) \, {}^{(-2)}Y_{\ell m}\,.
 $$
 
-This is what `Model.predict` computes. Since 2.0 it agrees with TEOBResumS'
+This is what `Model.predict` computes, with $\varphi$ the internal azimuth
+({func}`~mlgw_bns.conventions.aligned_internal_phase`; {ref}`conventions`
+gives the angles of LALSuite and TEOBResumS). Since 2.0 it agrees with TEOBResumS'
 time-domain $h_+$, $h_\times$ (Fourier transformed with numpy), to the sign of
 $h_\times / h_+$; until then $h_\times$ had the opposite sign.

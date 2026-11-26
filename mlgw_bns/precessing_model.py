@@ -98,6 +98,14 @@ from typing import Callable, Dict, Optional, Sequence, Tuple
 import numpy as np
 from scipy.interpolate import PchipInterpolator
 
+from .conventions import (
+    DEFAULT_CONVENTION,
+    LAL_AZIMUTH,
+    check_convention,
+    fourier,
+    internal_azimuth,
+    third_euler_angle,
+)
 from .higher_order_modes import Mode
 from .model import Model
 from .mode_model import ParametersWithExtrinsic
@@ -221,8 +229,12 @@ class PrecessingParametersWithExtrinsic:
         Polar angle :math:`\iota` of the line of sight, in radians,
         measured from :math:`\hat{L}_0`.
     azimuth : float
-        Azimuthal angle :math:`\varphi` of the line of sight, in radians.
-        Defaults to 0.
+        Azimuthal angle of the line of sight, in radians, in the
+        convention of the predictor it is passed to
+        (:mod:`mlgw_bns.conventions`): LALSuite's :math:`\Phi`, in
+        :math:`{}_{-2}Y_{\ell m}(\iota, \Phi - \phi_{\rm ref})`, or
+        TEOBResumS' ``coalescence_angle``. Defaults to :math:`\pi / 2`,
+        LALSuite's (:func:`~mlgw_bns.spin_conversion.lvk_to_precessing`).
     total_mass : float
         Total mass of the binary, in solar masses.
     reference_phase : float
@@ -257,7 +269,7 @@ class PrecessingParametersWithExtrinsic:
     distance_mpc: float
     inclination: float
     total_mass: float
-    azimuth: float = 0.0
+    azimuth: float = LAL_AZIMUTH
     reference_phase: float = 0.0
     merger_time: float = 0.0
     reference_frequency_hz: Optional[float] = None
@@ -381,6 +393,16 @@ class EulerAngles:
     alpha: np.ndarray
     beta: np.ndarray
     gamma: np.ndarray
+
+    def in_convention(
+        self, convention: str = DEFAULT_CONVENTION
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        r"""``(alpha, beta, third)``: the third angle is :attr:`gamma`
+        (TEOBResumS', which the twist uses, and IMRPhenomXPHM's
+        :math:`\epsilon`) for ``"teob"``, and LALSuite's :math:`-\gamma`, of
+        the minimal rotation :math:`\dot\gamma = -\dot\alpha\cos\beta`,
+        for ``"lal"``; see :mod:`mlgw_bns.conventions`."""
+        return self.alpha, self.beta, third_euler_angle(self.gamma, convention)
 
     def at_momega(
         self, momega: np.ndarray
@@ -880,7 +902,7 @@ class PrecessingModel:
 
     def __init__(self, model: Model) -> None:
         self.model = model
-        self._jitted_predict: Optional[Callable] = None
+        self._jitted_predict: Dict[str, Callable] = {}
 
     @property
     def largest_mode_m(self) -> int:
@@ -948,6 +970,7 @@ class PrecessingModel:
         self,
         modes: Optional[Sequence] = None,
         n_steps: Optional[int] = None,
+        convention: str = DEFAULT_CONVENTION,
     ) -> Callable:
         r"""A pure JAX function computing :meth:`predict` for a batch of binaries.
 
@@ -962,11 +985,15 @@ class PrecessingModel:
         n_steps : int, optional
             Steps of each leg of the precession integration; defaults to
             :data:`mlgw_bns.batched_precession.N_STEPS`.
+        convention : str
+            As in :meth:`predict`: the meaning of the ``azimuth`` argument
+            and the Fourier convention of the output.
         """
         from .batched_precession import N_STEPS, precessing_waveform
 
         return precessing_waveform(
-            self.model, modes, N_STEPS if n_steps is None else n_steps
+            self.model, modes, N_STEPS if n_steps is None else n_steps,
+            convention=convention,
         )
 
     def jax_predict_modes(
@@ -974,6 +1001,7 @@ class PrecessingModel:
         modes: Optional[Sequence] = None,
         n_steps: Optional[int] = None,
         return_tf: bool = False,
+        convention: str = DEFAULT_CONVENTION,
     ) -> Callable:
         r"""A pure JAX function giving each co-precessing multipole and its
         twist, for a batch of binaries.
@@ -985,7 +1013,8 @@ class PrecessingModel:
         from .batched_precession import N_STEPS, precessing_mode_components
 
         return precessing_mode_components(
-            self.model, modes, N_STEPS if n_steps is None else n_steps, return_tf
+            self.model, modes, N_STEPS if n_steps is None else n_steps, return_tf,
+            convention=convention,
         )
 
     def mode_components(
@@ -994,6 +1023,7 @@ class PrecessingModel:
         params: PrecessingParametersWithExtrinsic,
         source: str = "surrogate",
         angles: Optional[EulerAngles] = None,
+        convention: str = DEFAULT_CONVENTION,
     ) -> Dict[ModeKey, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         r"""Each co-precessing multipole and its twist coefficients.
 
@@ -1012,6 +1042,8 @@ class PrecessingModel:
             :meth:`predict_modes_dict`.
         angles : EulerAngles, optional
             Precomputed Euler angles; see :meth:`predict_modes_dict`.
+        convention : str
+            As in :meth:`predict`.
 
         Returns
         -------
@@ -1029,10 +1061,13 @@ class PrecessingModel:
             angles,
             params.aligned().mass_sum_seconds,
             params.inclination,
-            params.azimuth,
+            internal_azimuth(params.azimuth, convention),
         )
         return {
-            key: (amplitude * np.exp(1j * phase), *coefficients[key])
+            key: tuple(
+                fourier(h, convention)
+                for h in (amplitude * np.exp(1j * phase), *coefficients[key])
+            )
             for key, (amplitude, phase) in amplitudes_and_phases.items()
         }
 
@@ -1237,6 +1272,7 @@ class PrecessingModel:
         self,
         frequencies: np.ndarray,
         params: PrecessingParametersWithExtrinsic,
+        convention: str = DEFAULT_CONVENTION,
     ) -> Tuple[np.ndarray, np.ndarray]:
         r"""Predict the two polarizations of a precessing waveform.
 
@@ -1251,12 +1287,15 @@ class PrecessingModel:
             Frequencies at which to evaluate the waveform, in Hz.
         params : PrecessingParametersWithExtrinsic
             Source parameters; ``reference_frequency_hz`` must be set.
+        convention : str
+            ``"lal"`` (default) or ``"teob"``: the meaning of
+            ``params.azimuth`` and the Fourier convention of the
+            polarizations; see :mod:`mlgw_bns.conventions`.
 
         Returns
         -------
         tuple[np.ndarray, np.ndarray]
-            The complex polarizations ``(h_plus, h_cross)``, in the same
-            convention as :meth:`~mlgw_bns.model.Model.predict`.
+            The complex polarizations ``(h_plus, h_cross)``.
         """
         if params.reference_frequency_hz is None:
             raise ValueError(
@@ -1265,11 +1304,12 @@ class PrecessingModel:
             )
         from .batched_precession import batch_arguments
 
-        if self._jitted_predict is None:
+        if convention not in self._jitted_predict:
             import jax
 
-            self._jitted_predict = jax.jit(self.jax_predict())
-        h_plus, h_cross = self._jitted_predict(
+            self._jitted_predict[convention] = jax.jit(
+                self.jax_predict(convention=check_convention(convention)))
+        h_plus, h_cross = self._jitted_predict[convention](
             *batch_arguments([params], frequencies),
             time_reference_frequency_hz=params.time_reference_frequency_hz,
         )
@@ -1281,6 +1321,7 @@ class PrecessingModel:
         params: PrecessingParametersWithExtrinsic,
         source: str = "surrogate",
         angles: Optional[EulerAngles] = None,
+        convention: str = DEFAULT_CONVENTION,
     ) -> Tuple[np.ndarray, np.ndarray]:
         r"""The numpy reference implementation of :meth:`predict`.
 
@@ -1302,22 +1343,25 @@ class PrecessingModel:
             :meth:`predict_modes_dict`.
         angles : EulerAngles, optional
             Precomputed Euler angles; see :meth:`predict_modes_dict`.
+        convention : str
+            As in :meth:`predict`.
 
         Returns
         -------
         tuple[np.ndarray, np.ndarray]
-            The complex polarizations ``(h_plus, h_cross)``, in the same
-            convention as :meth:`~mlgw_bns.model.Model.predict`.
+            The complex polarizations ``(h_plus, h_cross)``, as those of
+            :meth:`predict`.
         """
         modes_positive_f, modes_negative_f = self.predict_modes_dict(
             frequencies, params, source=source, angles=angles
         )
-        return polarizations_from_inertial_modes(
+        h_plus, h_cross = polarizations_from_inertial_modes(
             modes_positive_f,
             modes_negative_f,
             inclination=params.inclination,
-            azimuth=params.azimuth,
+            azimuth=internal_azimuth(params.azimuth, convention),
         )
+        return fourier(h_plus, convention), fourier(h_cross, convention)
 
 
 def check_aligned_spin_limit(
@@ -1364,7 +1408,7 @@ def check_aligned_spin_limit(
         distance_mpc=params.distance_mpc,
         inclination=params.inclination,
         total_mass=params.total_mass,
-        azimuth=0.0,
+        azimuth=LAL_AZIMUTH,  # Model.predict's line of sight
     )
 
     reference = aligned_params.aligned()

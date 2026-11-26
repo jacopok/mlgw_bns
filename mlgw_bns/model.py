@@ -63,6 +63,7 @@ from .higher_order_modes import (
     _post_newtonian_amplitudes_by_mode,
     _post_newtonian_phases_by_mode,
 )
+from .conventions import DEFAULT_CONVENTION, aligned_internal_phase, fourier
 from .mode_model import ModeModel, ParametersWithExtrinsic, _with_single_row_config
 from .neural_network import Hyperparameters
 from .special_func import spinsphericalharm
@@ -1232,6 +1233,7 @@ class Model:
         self,
         frequencies: np.ndarray,
         params: ParametersWithExtrinsic,
+        convention: str = DEFAULT_CONVENTION,
     ) -> tuple[np.ndarray, np.ndarray]:
         r"""Predict the full frequency-domain waveform from all modes.
 
@@ -1248,19 +1250,28 @@ class Model:
             Frequencies at which to evaluate the waveform, in Hz.
         params : ParametersWithExtrinsic
             Source parameters (intrinsic + extrinsic).
+        convention : str
+            ``"lal"`` (default) or ``"teob"``: ``params.coalescence_phase``
+            is LALSuite's :math:`\phi_{\rm ref}` or TEOBResumS'
+            ``coalescence_angle``, and the polarizations are in that code's
+            Fourier convention; see :mod:`mlgw_bns.conventions`.
 
         Returns
         -------
         tuple[np.ndarray, np.ndarray]
-            The complex polarizations ``(h_plus, h_cross)``, in the same
-            convention as :meth:`ModeModel.predict`. The combination
-            appearing in the mode decomposition is ``h_plus + 1j * h_cross``.
+            The complex polarizations ``(h_plus, h_cross)``. With
+            ``"lal"``, the combination appearing in the mode decomposition
+            is ``h_plus + 1j * h_cross``.
 
         References
         ----------
         See Appendix E of `arXiv:2004.06503
         <https://arxiv.org/pdf/2004.06503.pdf>`_.
         """
+        params = dataclasses.replace(
+            params,
+            coalescence_phase=aligned_internal_phase(params.coalescence_phase, convention),
+        )
         h_plus_real, h_plus_imag, h_cross_real, h_cross_imag = self._hpc_waveform(
             frequencies=frequencies,
             params=params,
@@ -1273,13 +1284,14 @@ class Model:
         hp_pred = (h_plus_real + 1j * h_plus_imag) / eta / 2
         hc_pred = (h_cross_real + 1j * h_cross_imag) / eta / 2
 
-        return hp_pred, hc_pred
+        return fourier(hp_pred, convention), fourier(hc_pred, convention)
 
     @_with_single_row_config
     def predict_modes_dict(
         self,
         frequencies: np.ndarray,
         params: ParametersWithExtrinsic,
+        convention: str = DEFAULT_CONVENTION,
     ) -> dict[tuple[int, int], np.ndarray]:
         r"""Return the per-mode complex Cartesian contributions.
 
@@ -1294,13 +1306,19 @@ class Model:
             Frequencies at which to evaluate the waveform, in Hz.
         params : ParametersWithExtrinsic
             Source parameters.
+        convention : str
+            As in :meth:`predict`.
 
         Returns
         -------
         dict[tuple[int, int], np.ndarray]
             Mapping ``(l, m) -> h_lm = h_+ + i h_x`` (one complex array
-            per mode).
+            per mode), the polarizations those of :meth:`predict`.
         """
+        params = dataclasses.replace(
+            params,
+            coalescence_phase=aligned_internal_phase(params.coalescence_phase, convention),
+        )
         modes_dict = self._hpc_waveform_per_mode(
             frequencies=frequencies,
             params=params,
@@ -1310,8 +1328,8 @@ class Model:
         eta = params.intrinsic(self.dataset).eta
         result: dict[tuple[int, int], np.ndarray] = {}
         for (l, m), (hp_real, hp_imag, hc_real, hc_imag) in modes_dict.items():
-            hp = (hp_real + 1j * hp_imag) / eta / 2
-            hc = (hc_real + 1j * hc_imag) / eta / 2
+            hp = fourier((hp_real + 1j * hp_imag) / eta / 2, convention)
+            hc = fourier((hc_real + 1j * hc_imag) / eta / 2, convention)
             result[(l, m)] = hp + 1j * hc
         return result
 
@@ -1625,6 +1643,7 @@ class Model:
         frequencies: np.ndarray,
         params: ParametersWithExtrinsic,
         inclination: Optional[float] = None,
+        convention: str = DEFAULT_CONVENTION,
     ) -> dict[tuple[int, int], np.ndarray]:
         r"""Per-mode complex contributions from the underlying EOB code.
 
@@ -1641,6 +1660,9 @@ class Model:
         inclination : float, optional
             Inclination angle, in radians. Defaults to ``params.inclination``.
 
+        convention : str
+            As in :meth:`predict`.
+
         Returns
         -------
         dict[tuple[int, int], np.ndarray]
@@ -1648,6 +1670,10 @@ class Model:
         """
         if inclination is None:
             inclination = params.inclination
+        params = dataclasses.replace(
+            params,
+            coalescence_phase=aligned_internal_phase(params.coalescence_phase, convention),
+        )
 
         Ylm_real, Ylm_imag, Ylm_real_mneg, Ylm_imag_mneg = self._compute_Ylm_modes(
             modes=self.modes,
@@ -1678,8 +1704,8 @@ class Model:
             h_plus_imag = amp_arr[i] * (cosphi_arr[i] * c[2] + sinphi_arr[i] * c[3])
             h_cross_real = amp_arr[i] * (cosphi_arr[i] * c[4] + sinphi_arr[i] * c[5])
             h_cross_imag = amp_arr[i] * (cosphi_arr[i] * c[6] + sinphi_arr[i] * c[7])
-            hp = (h_plus_real + 1j * h_plus_imag) / eta / 2
-            hc = (h_cross_real + 1j * h_cross_imag) / eta / 2
+            hp = fourier((h_plus_real + 1j * h_plus_imag) / eta / 2, convention)
+            hc = fourier((h_cross_real + 1j * h_cross_imag) / eta / 2, convention)
             result[(mode.l, mode.m)] = hp + 1j * hc
         return result
 

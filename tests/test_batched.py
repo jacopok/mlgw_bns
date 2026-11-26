@@ -8,6 +8,7 @@ import pytest
 from threadpoolctl import threadpool_limits
 
 from mlgw_bns.batched import BatchedSurrogate, mode_polarizations
+from mlgw_bns.conventions import aligned_internal_phase
 from mlgw_bns.higher_order_modes import Mode
 from mlgw_bns.mode_model import ParametersWithExtrinsic
 from mlgw_bns.model import DEFAULT_MODES, Model
@@ -78,7 +79,9 @@ def test_single_rows_match_predict_modes_dict(default_model):
                 modes=ALL_MODES,
                 distance_mpc=distance[i],
             )
-        h_plus, h_cross = mode_polarizations(amp, phase, ALL_MODES, inclination[i])
+        # predict_modes_dict's LALSuite phase 0, in the internal angle
+        h_plus, h_cross = mode_polarizations(
+            amp, phase, ALL_MODES, inclination[i], aligned_internal_phase(0.0))
         expected = default_model.predict_modes_dict(
             FREQUENCIES,
             ParametersWithExtrinsic(
@@ -114,7 +117,8 @@ def test_other_input_coordinates_match_predict_modes_dict(default_model, monkeyp
     surrogate = BatchedSurrogate(default_model, ALL_MODES)
     for i in range(len(intrinsic)):
         amp, phase = surrogate(intrinsic[i : i + 1], total_mass[i], FREQUENCIES, distance[i])
-        h_plus, h_cross = mode_polarizations(amp, phase, ALL_MODES, 0.7)
+        h_plus, h_cross = mode_polarizations(
+            amp, phase, ALL_MODES, 0.7, aligned_internal_phase(0.0))
         expected = default_model.predict_modes_dict(FREQUENCIES, params(i))
         for j, mode in enumerate(ALL_MODES):
             scale = np.max(np.abs(expected[mode]))
@@ -132,7 +136,8 @@ def test_polarizations_sum_to_predict(default_model):
         amp, phase = default_model.predict_modes_amp_phase(
             intrinsic, total_mass, FREQUENCIES, distance_mpc=distance
         )
-    h_plus, h_cross = mode_polarizations(amp, phase, default_model.modes, 0.7)
+    h_plus, h_cross = mode_polarizations(
+        amp, phase, default_model.modes, 0.7, aligned_internal_phase(0.0))
     expected_plus, expected_cross = default_model.predict(FREQUENCIES, params)
     scale = np.max(np.abs(expected_plus))
     np.testing.assert_allclose(

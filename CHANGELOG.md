@@ -16,6 +16,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     of `Model.predict_modes_amp_phase` and of the JAX functions.
 - `precessing_mode_components` and `PrecessingModel.jax_predict_modes`:
     `return_tf`, the time-frequency map of each co-precessing multipole.
+- **A `convention` switch, `"lal"` (default) or `"teob"`** (`mlgw_bns.conventions`,
+    `docs/explanation/conventions.md`), for `Model.predict`,
+    `Model.predict_modes_dict`, `jax_predict.model_to_jax_waveform`,
+    `PrecessingModel.predict`, `predict_numpy`, `mode_components`,
+    `jax_predict`, `jax_predict_modes`, `batched_precession.precessing_waveform`,
+    `precessing_mode_components` and `spin_conversion.lvk_to_precessing`. It
+    sets the Fourier convention of the output (TEOBResumS': the complex
+    conjugate), the meaning of the azimuth (LALSuite's $\Phi$ in
+    ${}_{-2}Y_{\ell m}(\iota, \Phi - \phi_{\rm ref})$, or TEOBResumS'
+    `coalescence_angle`) and of `coalescence_phase` (LALSuite's
+    $\phi_{\rm ref}$, or `coalescence_angle`), and, through
+    `EulerAngles.in_convention`, the sign of the third Euler angle
+    (LALSuite's $\gamma$, of $\dot\gamma = -\dot\alpha\cos\beta$, is minus
+    TEOBResumS', which is IMRPhenomXPHM's $\epsilon$). `tests/test_conventions.py`
+    checks both against the reference codes with a joint overlap of the two
+    polarizations over a time shift only.
+
+### Changed
+
+- **The azimuth and the aligned-spin phase are now LALSuite's by default.**
+    Before, `PrecessingParametersWithExtrinsic.azimuth` and
+    `ParametersWithExtrinsic.coalescence_phase` were the internal angle
+    $a$ (TEOBResumS' `coalescence_angle` minus $\pi / 2$). With the default
+    `"lal"`, $a = \pi - $ `azimuth` and $a = \pi / 2 + $ `coalescence_phase`;
+    `convention="teob"` takes `coalescence_angle`. The default `azimuth` is
+    now $\pi / 2$, LALSuite's, which `lvk_to_precessing` also returns, so
+    binaries from LVK angles are unchanged. The low-level functions
+    (`batched.mode_polarizations`, the `azimuth` of the internal twist) keep
+    the internal angle. The polarizations' Fourier convention and sign of
+    $h_\times$ are unchanged under `"lal"`.
+
+### Fixed
+
+- `docs/explanation/precession.md`: the table of TEOBResumS' conventions
+    gave its frequency-domain $h_\times$ the opposite sign to `mlgw_bns'`
+    besides the complex conjugate; it has the same (the comparison it rested
+    on optimised each polarization separately, which absorbs the sign).
 
 ## [2.1.0] - 2026-11-23
 

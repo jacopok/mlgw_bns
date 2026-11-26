@@ -58,6 +58,7 @@ from .precessing_model import (
     reference_phase_keys,
     twist_coefficients,
 )
+from .conventions import DEFAULT_CONVENTION, fourier, internal_azimuth
 from .taylorf2 import SUN_MASS_SECONDS
 from .twist_waveform import (
     _pn_precession_derivatives,
@@ -441,6 +442,7 @@ def precessing_mode_components(
     modes: Optional[Sequence] = None,
     n_steps: int = N_STEPS,
     return_tf: bool = False,
+    convention: str = DEFAULT_CONVENTION,
 ) -> Callable:
     r"""A JAX function giving each co-precessing multipole and its twist,
     batched.
@@ -485,6 +487,11 @@ def precessing_mode_components(
         (:func:`integrate_angles`).
     return_tf : bool
         Also return the times of the multipoles.
+    convention : str
+        ``"lal"`` (default) or ``"teob"``: the meaning of the ``azimuth``
+        argument and the Fourier convention of the three arrays (the
+        ``"teob"`` ones are the complex conjugates); see
+        :mod:`mlgw_bns.conventions`.
     """
     jax, jnp = _jnp()
     modes = [tuple(int(i) for i in lm) for lm in (model.modes if modes is None else modes)]
@@ -527,6 +534,7 @@ def precessing_mode_components(
         total_mass, distance_mpc, inclination, azimuth = map(
             per_row, (total_mass, distance_mpc, inclination, azimuth)
         )
+        azimuth = internal_azimuth(azimuth, convention)
         reference_phase, reference_frequency_hz, merger_time = map(
             per_row, (reference_phase, reference_frequency_hz, merger_time)
         )
@@ -557,7 +565,8 @@ def precessing_mode_components(
         c_plus, c_cross = jax.vmap(one_binary)(
             angles, frequencies, total_mass * SUN_MASS_SECONDS, inclination, azimuth,
         )
-        return (amp * jnp.exp(1j * phase), c_plus, c_cross, *times)
+        return (*(fourier(h, convention, xp=jnp)
+                  for h in (amp * jnp.exp(1j * phase), c_plus, c_cross)), *times)
 
     return predict
 
@@ -566,6 +575,7 @@ def precessing_waveform(
     model: "Model",
     modes: Optional[Sequence] = None,
     n_steps: int = N_STEPS,
+    convention: str = DEFAULT_CONVENTION,
 ) -> Callable:
     r"""A JAX function reproducing :meth:`PrecessingModel.predict_numpy
     <mlgw_bns.precessing_model.PrecessingModel.predict_numpy>`, batched.
@@ -591,9 +601,11 @@ def precessing_waveform(
     n_steps : int
         Steps of each leg of the precession integration
         (:func:`integrate_angles`).
+    convention : str
+        As in :func:`precessing_mode_components`.
     """
     _, jnp = _jnp()
-    components = precessing_mode_components(model, modes, n_steps)
+    components = precessing_mode_components(model, modes, n_steps, convention=convention)
 
     def predict(*args, **kwargs):
         coprecessing, c_plus, c_cross = components(*args, **kwargs)
