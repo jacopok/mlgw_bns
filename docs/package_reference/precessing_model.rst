@@ -79,3 +79,9 @@ Special functions
 .. autofunction:: mlgw_bns.special_func.wigner_d_function
 
 .. autofunction:: mlgw_bns.special_func.spinsphericalharm
+
+Conventions
+-----------
+
+.. automodule:: mlgw_bns.conventions
+    :members:

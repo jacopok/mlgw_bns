@@ -21,6 +21,7 @@ Welcome to ``mlgw_bns``'s documentation!
    :caption: Explanation
    :name: explanation
 
+   explanation/conventions.md
    explanation/higher_order_modes.md
    explanation/precession.md
 

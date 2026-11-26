@@ -38,6 +38,7 @@ from typing import NamedTuple
 
 import numpy as np
 
+from .conventions import DEFAULT_CONVENTION, LAL_AZIMUTH, external_azimuth, internal_azimuth
 from .taylorf2 import SUN_MASS_SECONDS
 
 
@@ -177,12 +178,16 @@ def lvk_to_precessing(
     reference_frequency_hz,
     phase,
     xp=np,
+    convention: str = DEFAULT_CONVENTION,
 ) -> PrecessingOrientation:
     r"""The orientation of a precessing binary given its LVK spin angles.
 
     Masses in solar masses, the heavier first (``a_1``, ``tilt_1`` are its
     spin's); all angles in radians, at ``reference_frequency_hz``. See the
-    module docstring.
+    module docstring. ``azimuth`` is in ``convention``, that of the
+    predictor it is passed to (:mod:`mlgw_bns.conventions`): LALSuite's
+    :math:`\pi / 2` for ``"lal"``, or the ``coalescence_angle`` TEOBResumS
+    needs for the same binary, :math:`\pi`, for ``"teob"``.
 
     Returns
     -------
@@ -198,7 +203,8 @@ def lvk_to_precessing(
     phase = xp.asarray(phase, dtype=float)
     return PrecessingOrientation(
         inclination=inclination,
-        azimuth=xp.full_like(inclination, np.pi / 2.0),
+        azimuth=xp.full_like(inclination, external_azimuth(
+            internal_azimuth(LAL_AZIMUTH, "lal"), convention)),
         reference_phase=xp.broadcast_to(phase, xp.shape(inclination)),
         chi_1=xp.stack(spins[:3], axis=-1),
         chi_2=xp.stack(spins[3:], axis=-1),

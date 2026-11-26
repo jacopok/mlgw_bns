@@ -324,7 +324,9 @@ def test_twist_reproduces_teobresums_frequency_domain_polarizations():
     precessing = PrecessingModel(model)
     initial_frequency = 30.0
     chi_1, chi_2 = (0.4, 0.3, 0.05), (-0.2, 0.3, 0.0)
-    inclination, azimuth = 0.9, 0.4
+    # in TEOBResumS' convention: azimuth is its coalescence_angle, and the
+    # polarizations are its own, in its Fourier convention
+    inclination, azimuth = 0.9, np.pi / 2.0 + 0.4
     params = PrecessingParametersWithExtrinsic(
         mass_ratio=1.3, lambda_1=400.0, lambda_2=600.0, chi_1=chi_1, chi_2=chi_2,
         distance_mpc=100.0, inclination=inclination, azimuth=azimuth,
@@ -336,9 +338,7 @@ def test_twist_reproduces_teobresums_frequency_domain_polarizations():
         M=params.total_mass, distance=params.distance_mpc,
         initial_frequency=initial_frequency, srate_interp=4096.0,
         use_geometric_units="no", interp_uniform_grid="yes", domain=1, df=1.0 / 128.0,
-        # mirror of compute_hpc's pi/2 - azimuth, see
-        # visualization/teob_precessing.teob_run
-        inclination=inclination, coalescence_angle=np.pi / 2.0 + azimuth,
+        inclination=inclination, coalescence_angle=azimuth,
         output_hpc="no", arg_out="no", use_spins=2,
         chi1x=chi_1[0], chi1y=chi_1[1], chi1z=chi_1[2],
         chi2x=chi_2[0], chi2y=chi_2[1], chi2z=chi_2[2],
@@ -348,11 +348,11 @@ def test_twist_reproduces_teobresums_frequency_domain_polarizations():
 
     def resampled(real, imag, grid):
         # through amplitude and phase (TEOBResumS' own grid is fine enough
-        # to unwrap), conjugated into the mlgw_bns Fourier convention
+        # to unwrap)
         series = np.asarray(real) + 1j * np.asarray(imag)
         amplitude = np.interp(grid, frequencies, np.abs(series))
         phase = np.interp(grid, frequencies, np.unwrap(np.angle(series)))
-        return amplitude * np.exp(-1j * phase)
+        return amplitude * np.exp(1j * phase)
 
     validator = ValidateModel(model.mode_models[Mode(2, 2)])
     grid = validator.frequencies
@@ -360,7 +360,8 @@ def test_twist_reproduces_teobresums_frequency_domain_polarizations():
     angles = precessing.euler_angles(params, float(grid[0]))
     assert angles.beta.max() > 0.2
 
-    hp, hc = precessing.predict_numpy(grid, params, source="eob", angles=angles)
+    hp, hc = precessing.predict_numpy(
+        grid, params, source="eob", angles=angles, convention="teob")
     for ours, (real, imag) in ((hp, (real_hp, imag_hp)), (hc, (real_hc, imag_hc))):
         mismatch = validator.full_waveform_mismatch(
             {(2, 2): resampled(real, imag, grid)}, {(2, 2): ours}, frequencies=grid

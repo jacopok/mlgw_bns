@@ -16,12 +16,15 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 import jax.numpy as jnp
 
 from .batched import mode_polarizations
+from .conventions import DEFAULT_CONVENTION, aligned_internal_phase, fourier
 
 if TYPE_CHECKING:
     from .model import Model
 
 
-def model_to_jax_waveform(model: "Model", modes: Optional[Sequence] = None) -> Callable:
+def model_to_jax_waveform(
+    model: "Model", modes: Optional[Sequence] = None, convention: str = DEFAULT_CONVENTION
+) -> Callable:
     r"""A JAX function reproducing :meth:`Model.predict <mlgw_bns.model.Model.predict>`.
 
     Returns ``predict(params, frequencies_hz, total_mass, distance_mpc,
@@ -54,6 +57,8 @@ def model_to_jax_waveform(model: "Model", modes: Optional[Sequence] = None) -> C
         coalescence_phase=0.0,
         merger_time=0.0,
     ):
+        coalescence_phase = aligned_internal_phase(
+            jnp.asarray(coalescence_phase, jnp.float64), convention)
         params = jnp.atleast_2d(jnp.asarray(params, jnp.float64))
         n_rows = params.shape[0]
         amp, phase = predict_modes(
@@ -78,7 +83,8 @@ def model_to_jax_waveform(model: "Model", modes: Optional[Sequence] = None) -> C
         h_plus, h_cross = mode_polarizations(
             amp, phase, modes, inclination, 0.0, xp=jnp
         )
-        h_plus, h_cross = h_plus.sum(axis=1), h_cross.sum(axis=1)
+        h_plus = fourier(h_plus.sum(axis=1), convention, xp=jnp)
+        h_cross = fourier(h_cross.sum(axis=1), convention, xp=jnp)
         if n_rows == 1:
             return h_plus[0], h_cross[0]
         return h_plus, h_cross
